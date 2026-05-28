@@ -1,0 +1,56 @@
+{
+  "note": "현재 DB/UI는 table field_type을 지원하지 않으므로 바로 등록용이 아닙니다. 나중에 반복행 UI를 만들 때 쓰는 권장 구조입니다.",
+  "title": "2026 학교폭력 예방교육 학급운영 물품 구입 목록",
+  "description": "학급당 10만원 이내로 학교폭력 예방교육 학급운영 물품 구입 목록을 입력합니다. 학년별 취합이 가능하도록 학년/반 정보를 정확히 입력합니다.",
+  "year": 2026,
+  "fields": [
+    {
+      "label": "물품 목록",
+      "fieldType": "table",
+      "required": false,
+      "order": 0,
+      "options": {
+        "maxRows": 30,
+        "budgetLimit": 100000,
+        "columns": [
+          {
+            "key": "itemName",
+            "label": "물품명",
+            "type": "text"
+          },
+          {
+            "key": "unitPrice",
+            "label": "예상단가",
+            "type": "number"
+          },
+          {
+            "key": "quantity",
+            "label": "수량",
+            "type": "number"
+          },
+          {
+            "key": "estimatedAmount",
+            "label": "예상금액",
+            "type": "number",
+            "formula": "unitPrice * quantity"
+          },
+          {
+            "key": "discountPrice",
+            "label": "할인가",
+            "type": "number"
+          },
+          {
+            "key": "store",
+            "label": "사는 곳",
+            "type": "text"
+          },
+          {
+            "key": "productLinkOrNumber",
+            "label": "상품번호/링크",
+            "type": "textarea"
+          }
+        ]
+      }
+    }
+  ]
+}

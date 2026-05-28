@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>School Collect 디자인 시안 C · 월중계획 전체 열람</title>
+  <style>
+    :root{
+      --bg:#f4f7fb;
+      --paper:#ffffff;
+      --ink:#172033;
+      --muted:#667085;
+      --line:#d8e1ed;
+      --brand:#2563eb;
+      --brand-dark:#1d4ed8;
+      --brand-soft:#eaf1ff;
+      --green:#16a34a;
+      --green-soft:#eaf8ef;
+      --amber:#d97706;
+      --amber-soft:#fff7e6;
+      --violet:#7c3aed;
+      --violet-soft:#f3ecff;
+      --red:#dc2626;
+      --red-soft:#fff1f1;
+      --shadow:0 18px 40px rgba(15,23,42,.08);
+      --radius:24px;
+    }
+    *{box-sizing:border-box}
+    html{scroll-behavior:smooth}
+    body{
+      margin:0;
+      background:
+        radial-gradient(circle at top left, rgba(37,99,235,.14), transparent 32rem),
+        linear-gradient(180deg,#eef5ff 0,#f4f7fb 18rem,var(--bg) 100%);
+      color:var(--ink);
+      font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans KR","Apple SD Gothic Neo",sans-serif;
+      line-height:1.55;
+      word-break:keep-all;
+      overflow-wrap:break-word;
+    }
+    button,select{font:inherit}
+    button{cursor:pointer}
+    .page{width:min(1220px,100%);margin:0 auto;padding:24px 18px 44px}
+    .topbar{
+      display:flex;align-items:flex-start;justify-content:space-between;gap:20px;
+      padding:24px;border:1px solid rgba(255,255,255,.82);border-radius:30px;
+      background:rgba(255,255,255,.82);box-shadow:var(--shadow);backdrop-filter:blur(12px)
+    }
+    .eyebrow{margin:0 0 8px;color:var(--brand-dark);font-weight:900;font-size:.92rem;display:flex;gap:8px;align-items:center}
+    .dot{width:10px;height:10px;border-radius:999px;background:var(--green);box-shadow:0 0 0 6px var(--green-soft)}
+    h1{margin:0;font-size:clamp(1.7rem,4vw,3.15rem);letter-spacing:-.05em;line-height:1.12}
+    .lead{margin:12px 0 0;color:var(--muted);max-width:760px;font-size:1rem}
+    .status-card{min-width:230px;border:1px solid var(--line);border-radius:22px;background:#fff;padding:16px}
+    .status-card strong{display:block;font-size:1.05rem;margin-bottom:4px}
+    .status-card span{color:var(--muted);font-size:.92rem}
+
+    .toolbar{
+      position:sticky;top:0;z-index:10;margin:16px 0;padding:14px;
+      display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;
+      border:1px solid var(--line);border-radius:24px;background:rgba(255,255,255,.92);box-shadow:0 12px 26px rgba(15,23,42,.07);backdrop-filter:blur(10px)
+    }
+    .cluster{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .btn,.select{
+      border:1px solid var(--line);background:#fff;color:var(--ink);border-radius:999px;
+      min-height:42px;padding:9px 14px;font-weight:850;letter-spacing:-.02em
+    }
+    .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;transition:.15s ease}
+    .btn:hover{transform:translateY(-1px);box-shadow:0 9px 20px rgba(15,23,42,.1)}
+    .btn.primary,.btn.active{background:var(--brand);border-color:var(--brand);color:#fff}
+    .btn.subtle{background:#f8fafc}
+    .select{padding-right:32px;color:#344054}
+
+    .filters{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:16px}
+    .filter{
+      display:flex;align-items:center;justify-content:space-between;gap:10px;
+      min-height:54px;padding:10px 14px;border:1px solid var(--line);border-radius:18px;background:#fff
+    }
+    .filter b{font-size:.86rem;color:#475467}.filter span{font-weight:900;color:var(--ink)}
+
+    .panel{display:none;border:1px solid var(--line);border-radius:var(--radius);background:var(--paper);box-shadow:0 10px 26px rgba(15,23,42,.06);padding:20px}
+    .panel.active{display:block}
+    .panel-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;margin-bottom:14px}
+    h2{margin:0;font-size:1.35rem;letter-spacing:-.035em}
+    .desc{margin:4px 0 0;color:var(--muted)}
+    .badge{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:6px 10px;font-size:.82rem;font-weight:900;background:var(--brand-soft);color:#1e40af;white-space:nowrap}
+    .badge.green{background:var(--green-soft);color:#15803d}.badge.amber{background:var(--amber-soft);color:#b45309}.badge.violet{background:var(--violet-soft);color:#6d28d9}.badge.red{background:var(--red-soft);color:#b91c1c}
+
+    .week-list{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}
+    .day-column{border:1px solid var(--line);border-radius:18px;background:#fff;overflow:hidden}
+    .day-title{display:flex;justify-content:space-between;gap:8px;align-items:center;padding:12px 13px;background:#f8fafc;border-bottom:1px solid var(--line)}
+    .day-title strong{font-size:1rem}.day-title span{color:var(--muted);font-size:.88rem;font-weight:800}
+    .day-column.today{border-color:var(--brand);box-shadow:0 0 0 4px var(--brand-soft)}
+    .items{display:grid;gap:10px;padding:12px}
+    .empty{color:var(--muted);padding:18px 4px;text-align:center;font-size:.92rem}
+    .event{border-left:4px solid var(--brand);padding:1px 0 1px 10px}
+    .event.green{border-color:var(--green)}.event.amber{border-color:var(--amber)}.event.violet{border-color:var(--violet)}.event.red{border-color:var(--red)}
+    .event-time{font-size:.82rem;font-weight:900;color:#475467;margin-bottom:2px}
+    .event-title{font-weight:950;letter-spacing:-.025em}
+    .event-meta{margin-top:4px;color:var(--muted);font-size:.86rem;display:flex;gap:6px;flex-wrap:wrap}
+
+    .month-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px}
+    .weekday{text-align:center;color:#475467;font-weight:900;font-size:.84rem;padding:5px}
+    .date-cell{min-height:126px;border:1px solid var(--line);border-radius:16px;background:#fff;padding:10px;display:flex;flex-direction:column;gap:6px}
+    .date-cell.off{background:#f8fafc;color:#98a2b3}.date-cell.week-now{border-color:var(--brand);background:#fbfdff}
+    .date-num{font-weight:950}.chip{display:block;border-radius:10px;padding:5px 7px;background:var(--brand-soft);color:#1e40af;font-size:.78rem;font-weight:850;line-height:1.35}
+    .chip.green{background:var(--green-soft);color:#15803d}.chip.amber{background:var(--amber-soft);color:#b45309}.chip.violet{background:var(--violet-soft);color:#6d28d9}.chip.red{background:var(--red-soft);color:#b91c1c}.more{font-size:.78rem;color:var(--muted);font-weight:900}
+
+    .day-detail{display:grid;grid-template-columns:minmax(220px,.34fr) minmax(0,1fr);gap:18px;align-items:start}
+    .date-big{border-radius:22px;background:linear-gradient(135deg,var(--brand),#60a5fa);color:#fff;padding:22px}
+    .date-big .month{font-weight:900;opacity:.92}.date-big .number{font-size:4.2rem;line-height:1;font-weight:1000;letter-spacing:-.06em}.date-big .text{font-weight:900;margin-top:6px}
+    .detail-list{display:grid;gap:12px}
+    .detail-card{display:grid;grid-template-columns:110px minmax(0,1fr);gap:14px;padding:15px;border:1px solid var(--line);border-radius:18px;background:#fff}
+    .detail-card time{font-weight:950;color:var(--brand-dark)}
+    .detail-card h3{margin:0 0 6px;font-size:1.06rem;letter-spacing:-.025em}
+    .detail-info{display:flex;gap:8px;flex-wrap:wrap;color:var(--muted);font-size:.9rem}
+    .note{margin-top:16px;border:1px dashed var(--line);border-radius:18px;background:#f8fafc;padding:13px 14px;color:#475467}
+    .toast{position:fixed;right:18px;bottom:18px;z-index:30;display:grid;gap:8px}.toast div{background:#101828;color:#fff;border-radius:14px;padding:12px 14px;box-shadow:var(--shadow);max-width:340px}
+
+    @media(max-width:980px){.topbar{flex-direction:column}.status-card{min-width:0;width:100%}.filters{grid-template-columns:repeat(2,minmax(0,1fr))}.week-list{grid-template-columns:repeat(2,minmax(0,1fr))}.day-detail{grid-template-columns:1fr}}
+    @media(max-width:680px){.page{padding:12px 10px 34px}.topbar{padding:18px;border-radius:24px}.toolbar{position:static;align-items:stretch}.cluster,.btn,.select{width:100%}.btn,.select{flex:1}.filters{grid-template-columns:1fr}.panel{padding:14px}.week-list,.month-grid{grid-template-columns:1fr}.weekday{display:none}.date-cell{min-height:auto}.detail-card{grid-template-columns:1fr;gap:6px}}
+    @media print{body{background:#fff}.topbar,.toolbar,.filters,.toast{display:none!important}.page{width:100%;padding:0}.panel{display:none!important;border:0;box-shadow:none;padding:0}.panel.active{display:block!important}.day-column,.date-cell,.detail-card{break-inside:avoid}.week-list{grid-template-columns:repeat(5,1fr)}}
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow"><span class="dot"></span>School Collect 디자인 시안 C · 전체 열람형</p>
+        <h1>확정된 월중계획을 월·주·일로 읽기 쉽게 봅니다.</h1>
+        <p class="lead">교직원이 제출과 취합 과정을 다시 볼 필요 없이, 최종 월중계획만 게시판처럼 확인하는 화면입니다. 기본 진입은 실무 확인에 가장 자주 쓰는 이번 주 보기입니다.</p>
+      </div>
+      <aside class="status-card" aria-label="문서 상태">
+        <strong>2026년 6월 월중계획</strong>
+        <span id="statusText">최종본 · 6월 24일 09:10 반영</span>
+      </aside>
+    </header>
+
+    <nav class="toolbar" aria-label="월중계획 보기 도구">
+      <div class="cluster">
+        <select class="select" aria-label="월 선택">
+          <option selected>2026년 6월</option>
+          <option>2026년 7월</option>
+          <option>2026년 8월</option>
+        </select>
+        <button class="btn view-tab" data-view="month">월 보기</button>
+        <button class="btn view-tab active" data-view="week">주 보기</button>
+        <button class="btn view-tab" data-view="day">일 보기</button>
+        <button class="btn primary" id="thisWeekBtn">이번 주</button>
+      </div>
+      <div class="cluster">
+        <button class="btn subtle" id="printBtn">인쇄</button>
+        <button class="btn subtle" id="pdfBtn">PDF</button>
+      </div>
+    </nav>
+
+    <section class="filters" aria-label="간단 필터">
+      <div class="filter"><b>부서</b><span>전체</span></div>
+      <div class="filter"><b>학년</b><span>전체 학년</span></div>
+      <div class="filter"><b>업무분류</b><span>교육활동 포함</span></div>
+      <div class="filter"><b>공개범위</b><span>교직원 전체</span></div>
+    </section>
+
+    <main>
+      <section id="weekPanel" class="panel active" aria-labelledby="weekTitle">
+        <div class="panel-head">
+          <div>
+            <h2 id="weekTitle">이번 주 일정 · 6월 22일~6월 26일</h2>
+            <p class="desc">월요일부터 금요일까지 주요 행사를 한 줄 흐름으로 확인합니다.</p>
+          </div>
+          <span class="badge green">기본 화면</span>
+        </div>
+        <div class="week-list" id="weekList"></div>
+        <div class="note">안내: 일정이 많은 날짜는 제목과 시간만 먼저 보이고, 자세한 대상·장소·담당은 일 보기에서 확인하는 구성입니다.</div>
+      </section>
+
+      <section id="monthPanel" class="panel" aria-labelledby="monthTitle">
+        <div class="panel-head">
+          <div>
+            <h2 id="monthTitle">월 보기 · 2026년 6월</h2>
+            <p class="desc">한 달 전체 흐름을 달력으로 훑어봅니다. 날짜 칸에는 핵심 일정만 표시합니다.</p>
+          </div>
+          <span class="badge">전체 흐름</span>
+        </div>
+        <div class="month-grid" id="monthGrid"></div>
+      </section>
+
+      <section id="dayPanel" class="panel" aria-labelledby="dayTitle">
+        <div class="panel-head">
+          <div>
+            <h2 id="dayTitle">일 보기 · 6월 24일 수요일</h2>
+            <p class="desc">선택한 날짜의 시간, 행사명, 대상, 장소, 담당, 비고를 카드로 확인합니다.</p>
+          </div>
+          <span class="badge violet">상세 카드</span>
+        </div>
+        <div class="day-detail">
+          <aside class="date-big" aria-label="선택 날짜">
+            <div class="month">2026년 6월</div>
+            <div class="number">24</div>
+            <div class="text">수요일 · 이번 주</div>
+          </aside>
+          <div class="detail-list" id="dayList"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <div class="toast" id="toast" aria-live="polite"></div>
+
+  <script>
+    (function(){
+      'use strict';
+      const events = [
+        {date:'2026-06-01', end:'2026-06-05', time:'종일', title:'생태전환교육 및 환경교육 주간', target:'전교생', place:'각 교실', owner:'환경교육 담당', note:'학급별 실천 활동 운영', type:'green'},
+        {date:'2026-06-03', time:'종일', title:'지방선거일', target:'전교생', place:'휴업', owner:'교무기획부', note:'등교하지 않음', type:'amber'},
+        {date:'2026-06-11', time:'08:20~08:50', title:'장량 꿈끼 나눔 버스킹', target:'전교생', place:'강당', owner:'문화예술 담당', note:'학년별 관람 동선 안내', type:'violet'},
+        {date:'2026-06-17', time:'13:50~16:50', title:'교직원 심폐소생술교육', target:'전교직원', place:'꿈빛마루', owner:'보건교사', note:'실습 편한 복장 권장', type:'green'},
+        {date:'2026-06-22', end:'2026-06-26', time:'종일', title:'7월 교육계획 수합', target:'전교직원', place:'School Collect', owner:'교무기획부', note:'금요일 16:00 마감', type:'amber'},
+        {date:'2026-06-22', time:'2교시', title:'수업공개 · 1학년', target:'1학년', place:'1-1 교실', owner:'1학년부', note:'참관록 온라인 제출', type:'violet'},
+        {date:'2026-06-22', time:'4교시', title:'학년교육과정 협의회', target:'학년부장', place:'교무실', owner:'연구부', note:'공통 양식 지참', type:'green'},
+        {date:'2026-06-23', time:'10:30~11:10', title:'흡연예방교육', target:'5~6학년', place:'강당', owner:'보건교육 담당', note:'학급별 지정 좌석', type:'green'},
+        {date:'2026-06-24', time:'09:00~09:40', title:'학교폭력예방 캠페인', target:'전교생', place:'중앙현관', owner:'생활안전부', note:'학급 임원 08:50 집결', type:'red'},
+        {date:'2026-06-24', time:'13:50~14:30', title:'전교어린이회의', target:'전교임원 및 4~6학년 학급임원', place:'6-2 교실', owner:'학생자치 담당', note:'건의사항 사전 취합', type:'green'},
+        {date:'2026-06-25', time:'2교시', title:'수업공개 · 6학년', target:'6학년', place:'6-4 교실', owner:'6학년부', note:'참관 동선 확인', type:'violet'},
+        {date:'2026-06-25', time:'4교시', title:'수업공개 · 5학년', target:'5학년', place:'5-3 교실', owner:'5학년부', note:'수업 후 협의 15분', type:'violet'},
+        {date:'2026-06-26', time:'15:00~16:00', title:'월말 업무 정리', target:'부장교사', place:'회의실', owner:'교무기획부', note:'7월 주요 업무 확인', type:'amber'}
+      ];
+      const $ = (selector) => document.querySelector(selector);
+      const $$ = (selector) => Array.from(document.querySelectorAll(selector));
+      const dayNames = ['일','월','화','수','목','금','토'];
+      function toast(message){
+        const box = $('#toast');
+        const item = document.createElement('div');
+        item.textContent = message;
+        box.appendChild(item);
+        setTimeout(()=>{ item.style.opacity = '0'; item.style.transform = 'translateY(8px)'; }, 2200);
+        setTimeout(()=> item.remove(), 2700);
+      }
+      function addDays(dateText, count){
+        const d = new Date(dateText + 'T00:00:00');
+        d.setDate(d.getDate() + count);
+        return d.toISOString().slice(0,10);
+      }
+      function labelDate(dateText){
+        const d = new Date(dateText + 'T00:00:00');
+        return `${d.getMonth()+1}.${d.getDate()}(${dayNames[d.getDay()]})`;
+      }
+      function eventsOn(dateText){
+        return events.filter(event => event.end ? dateText >= event.date && dateText <= event.end : event.date === dateText);
+      }
+      function eventBlock(event){
+        return `<article class="event ${event.type}"><div class="event-time">${event.time}</div><div class="event-title">${event.title}</div><div class="event-meta"><span>${event.target}</span><span>·</span><span>${event.place}</span><span>·</span><span>${event.owner}</span></div></article>`;
+      }
+      function renderWeek(){
+        const dates = ['2026-06-22','2026-06-23','2026-06-24','2026-06-25','2026-06-26'];
+        $('#weekList').innerHTML = dates.map(dateText => {
+          const list = eventsOn(dateText);
+          const date = new Date(dateText + 'T00:00:00');
+          return `<section class="day-column ${dateText==='2026-06-24'?'today':''}"><div class="day-title"><strong>${dayNames[date.getDay()]}요일</strong><span>${date.getMonth()+1}.${date.getDate()}</span></div><div class="items">${list.length ? list.map(eventBlock).join('') : '<div class="empty">등록 일정 없음</div>'}</div></section>`;
+        }).join('');
+      }
+      function renderMonth(){
+        const week = ['월','화','수','목','금','토','일'];
+        let html = week.map(day => `<div class="weekday">${day}</div>`).join('');
+        for(let day = 1; day <= 30; day += 1){
+          const dateText = `2026-06-${String(day).padStart(2,'0')}`;
+          const list = eventsOn(dateText);
+          const inCurrentWeek = dateText >= '2026-06-22' && dateText <= '2026-06-26';
+          html += `<div class="date-cell ${inCurrentWeek?'week-now':''}"><div><span class="date-num">${day}</span>${list.length > 2 ? `<span class="more"> · +${list.length-2}개</span>` : ''}</div>${list.slice(0,2).map(event => `<span class="chip ${event.type}">${event.title}</span>`).join('')}</div>`;
+        }
+        for(let i=0;i<5;i+=1){ html += '<div class="date-cell off"></div>'; }
+        $('#monthGrid').innerHTML = html;
+      }
+      function renderDay(dateText){
+        const list = eventsOn(dateText);
+        $('#dayTitle').textContent = `일 보기 · ${labelDate(dateText)}`;
+        $('#dayList').innerHTML = list.length ? list.map(event => `<article class="detail-card"><time>${event.time}</time><div><h3>${event.title}</h3><div class="detail-info"><span>대상: ${event.target}</span><span>장소: ${event.place}</span><span>담당: ${event.owner}</span></div><div class="desc">비고: ${event.note}</div></div></article>`).join('') : '<div class="note">선택한 날짜에 등록된 일정이 없습니다.</div>';
+      }
+      function setView(view, announce=true){
+        $$('.view-tab').forEach(button => button.classList.toggle('active', button.dataset.view === view));
+        $('#monthPanel').classList.toggle('active', view === 'month');
+        $('#weekPanel').classList.toggle('active', view === 'week');
+        $('#dayPanel').classList.toggle('active', view === 'day');
+        if(announce) toast(`${view === 'month' ? '월' : view === 'week' ? '주' : '일'} 보기로 전환했습니다.`);
+      }
+      $$('.view-tab').forEach(button => button.addEventListener('click', () => setView(button.dataset.view)));
+      $('#thisWeekBtn').addEventListener('click', () => { setView('week', false); toast('이번 주 보기로 이동했습니다.'); });
+      $('#printBtn').addEventListener('click', () => { $('#statusText').textContent = '인쇄 준비 완료 · 현재 화면 기준'; toast('인쇄할 화면을 준비했습니다.'); });
+      $('#pdfBtn').addEventListener('click', () => { $('#statusText').textContent = 'PDF 내보내기 준비 완료'; toast('PDF로 저장할 수 있는 상태로 표시했습니다.'); });
+      renderWeek();
+      renderMonth();
+      renderDay('2026-06-24');
+    })();
+  </script>
+</body>
+</html>

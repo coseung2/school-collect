@@ -1,0 +1,32 @@
+{
+  "title": "2026학년도 1차 도서관 보관 도서구입 신청 목록(장량초등학교)",
+  "description": "도서구입 신청 목록을 한 번에 붙여넣어 제출하는 임시 양식입니다. 정식 구현은 반복행 테이블 입력 방식이 권장됩니다.",
+  "year": 2026,
+  "fields": [
+    {
+      "label": "도서구입목록_CSV붙여넣기",
+      "fieldType": "textarea",
+      "required": true,
+      "order": 0
+    },
+    {
+      "label": "총권수",
+      "fieldType": "number",
+      "required": false,
+      "order": 1
+    },
+    {
+      "label": "총금액",
+      "fieldType": "number",
+      "required": false,
+      "order": 2
+    },
+    {
+      "label": "특이사항",
+      "fieldType": "textarea",
+      "required": false,
+      "order": 3
+    }
+  ],
+  "copy_paste_header": "순서\t도서명\t저자\t출판사\t정가\t수량\t금액\t비고"
+}

@@ -1,0 +1,117 @@
+{
+  "source": "google_sheet",
+  "spreadsheet_id": "1vrJZ-P7_1bRs7Wp4PODnY-SygipOXSySqBWU7zSdG4o",
+  "gid": "0",
+  "url": "https://docs.google.com/spreadsheets/d/1vrJZ-P7_1bRs7Wp4PODnY-SygipOXSySqBWU7zSdG4o/edit?gid=0#gid=0",
+  "csv_export_url": "https://docs.google.com/spreadsheets/d/1vrJZ-P7_1bRs7Wp4PODnY-SygipOXSySqBWU7zSdG4o/export?format=csv&gid=0",
+  "xlsx_export_url": "https://docs.google.com/spreadsheets/d/1vrJZ-P7_1bRs7Wp4PODnY-SygipOXSySqBWU7zSdG4o/export?format=xlsx",
+  "downloaded_at": "2026-05-20T09:16:09.856299+09:00",
+  "csv_status": 200,
+  "csv_content_type": "text/csv",
+  "xlsx_status": 200,
+  "xlsx_content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "title": "2026학년도 1차 도서관 보관 도서구입 신청 목록(장량초등학교)",
+  "headers": [
+    "순서",
+    "도서명",
+    "저자",
+    "출판사",
+    "정가",
+    "수량",
+    "금액",
+    "비고"
+  ],
+  "row_count_in_csv": 122,
+  "max_columns_in_csv": 8,
+  "book_row_count": 43,
+  "total_quantity": 44,
+  "total_amount": 829700,
+  "note_counts": {
+    "성인용": 1,
+    "(빈칸)": 42
+  },
+  "top_publishers": [
+    [
+      "문학동네",
+      5
+    ],
+    [
+      "알에이치코리아",
+      2
+    ],
+    [
+      "창비",
+      2
+    ],
+    [
+      "21세기북스",
+      1
+    ],
+    [
+      "Harmony",
+      1
+    ],
+    [
+      "교육을 바꾸는 사람들",
+      1
+    ],
+    [
+      "다산북스",
+      1
+    ],
+    [
+      "동아시아",
+      1
+    ],
+    [
+      "떠오름",
+      1
+    ],
+    [
+      "래빗홀",
+      1
+    ],
+    [
+      "리프",
+      1
+    ],
+    [
+      "문학과 지성사",
+      1
+    ],
+    [
+      "문학과지성사",
+      1
+    ],
+    [
+      "문학사상",
+      1
+    ],
+    [
+      "미래앤",
+      1
+    ],
+    [
+      "미스터제이",
+      1
+    ],
+    [
+      "북로망스",
+      1
+    ],
+    [
+      "삼호뮤직",
+      1
+    ],
+    [
+      "새움",
+      1
+    ],
+    [
+      "생각지도",
+      1
+    ]
+  ],
+  "input_slot_count": 120,
+  "notes_for_counts": "row_count_in_csv 122는 제목/헤더 포함 전체 행 수입니다. 입력 가능 슬롯은 120행, 실제 도서명이 있는 행은 43개입니다."
+}

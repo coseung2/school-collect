@@ -1,0 +1,121 @@
+{
+  "title": "월중 교육 계획 수합",
+  "year": 2026,
+  "description": "각 교직원이 다음 달 교육 계획/학교 행사/연수/협의회/수업공개 일정을 입력하면 담당자가 검토·확정하고, 학교 구성원 모두가 읽기전용 월중계획으로 확인하는 템플릿",
+  "targetType": "custom",
+  "targetValue": {
+    "targetMode": "staff_or_department",
+    "defaultMonth": 6,
+    "reportLayout": "monthly_weekday_calendar",
+    "sourceDocId": "15HeWnTlPU7DRABfDxITW9wqtSxaFvIiFlj1fzy_jPMc",
+    "visibility": "school_public_after_publish",
+    "workflow": "staff_submit_items -> manager_review_and_publish -> school_members_read_only",
+    "publicViewLayout": "weekly_monthly_plan_read_only",
+    "publicViewPurpose": "학교 구성원이 월중 일정을 파악하기 위한 최종 공개 문서/페이지"
+  },
+  "fields": [
+    {
+      "label": "제출자",
+      "fieldType": "text",
+      "required": true,
+      "order": 1,
+      "options": null
+    },
+    {
+      "label": "소속/부서",
+      "fieldType": "text",
+      "required": false,
+      "order": 2,
+      "options": null
+    },
+    {
+      "label": "교육계획 항목",
+      "fieldType": "table",
+      "required": true,
+      "order": 3,
+      "options": {
+        "minRows": 1,
+        "addButtonLabel": "일정 추가",
+        "summary": [
+          "총 항목 수",
+          "날짜별 항목 수"
+        ],
+        "columns": [
+          {
+            "key": "date",
+            "label": "날짜",
+            "type": "date",
+            "required": true
+          },
+          {
+            "key": "category",
+            "label": "구분",
+            "type": "select",
+            "required": true,
+            "options": [
+              "교육주간/주간업무",
+              "행사",
+              "회의",
+              "협의회",
+              "교육/연수",
+              "수업공개",
+              "마음쉼표",
+              "업무",
+              "휴업/공휴",
+              "기타"
+            ]
+          },
+          {
+            "key": "title",
+            "label": "추진 내용",
+            "type": "text",
+            "required": true
+          },
+          {
+            "key": "timeOrPeriod",
+            "label": "시간/기간",
+            "type": "text",
+            "required": false
+          },
+          {
+            "key": "place",
+            "label": "장소",
+            "type": "text",
+            "required": false
+          },
+          {
+            "key": "targetOrParticipants",
+            "label": "대상/참석자",
+            "type": "text",
+            "required": false
+          },
+          {
+            "key": "owner",
+            "label": "담당자",
+            "type": "text",
+            "required": false
+          },
+          {
+            "key": "displayText",
+            "label": "표시 문구",
+            "type": "textarea",
+            "required": false,
+            "autoGenerateFrom": [
+              "title",
+              "timeOrPeriod",
+              "place",
+              "targetOrParticipants",
+              "owner"
+            ]
+          },
+          {
+            "key": "note",
+            "label": "비고",
+            "type": "text",
+            "required": false
+          }
+        ]
+      }
+    }
+  ]
+}

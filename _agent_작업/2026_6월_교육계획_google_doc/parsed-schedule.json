@@ -1,0 +1,611 @@
+{
+  "titles": [
+    "2026학년도 4월 교육 계획",
+    "2026학년도 6월 교육 계획",
+    "탭 2",
+    "탭 3"
+  ],
+  "header": [
+    "주차",
+    "날짜",
+    "추진 내용"
+  ],
+  "comments": [
+    "<입력 요령>\n1. 00교육주간(기간, 담당자)\n- 예)생명존중교육주간(~9/13, 최교사)\n2. 학교행사명(시간 또는 기간, 장소, 담당자)\n- 예) 안전교육캠페인(8:00~8:40, 운동장, 김교사)\n3. 출장 또는 연수명(시간 또는 기간, 장소, 참석자)\n-예) 생성교육과정연수(15:00~, 포항교육지원청, 이교사)\n4. 0학년 마음 쉼표의 날(13:50~, 북구 일원)"
+  ],
+  "rows": [
+    {
+      "week": "1",
+      "dateText": "6.1.(월)",
+      "month": 6,
+      "day": 1,
+      "weekday": "월",
+      "isoDate": "2026-06-01",
+      "rawContent": "▪ 생태전환교육 및 환경교육 주간(~6.5, 전교생, 정민주)",
+      "itemCount": 1,
+      "items": [
+        "생태전환교육 및 환경교육 주간(~6.5, 전교생, 정민주)"
+      ]
+    },
+    {
+      "week": "1",
+      "dateText": "6.2.(화)",
+      "month": 6,
+      "day": 2,
+      "weekday": "화",
+      "isoDate": "2026-06-02",
+      "rawContent": "▪",
+      "itemCount": 0,
+      "items": []
+    },
+    {
+      "week": "1",
+      "dateText": "6.3.(수)",
+      "month": 6,
+      "day": 3,
+      "weekday": "수",
+      "isoDate": "2026-06-03",
+      "rawContent": "지방선거",
+      "itemCount": 1,
+      "items": [
+        "지방선거"
+      ]
+    },
+    {
+      "week": "1",
+      "dateText": "6.4.(목)",
+      "month": 6,
+      "day": 4,
+      "weekday": "목",
+      "isoDate": "2026-06-04",
+      "rawContent": "▪ 학생 자치 운영 우수 사례 학교 견학(13:50~, 청하초등학교, 관련 교직원)",
+      "itemCount": 1,
+      "items": [
+        "학생 자치 운영 우수 사례 학교 견학(13:50~, 청하초등학교, 관련 교직원)"
+      ]
+    },
+    {
+      "week": "1",
+      "dateText": "6.5.(금)",
+      "month": 6,
+      "day": 5,
+      "weekday": "금",
+      "isoDate": "2026-06-05",
+      "rawContent": "▪",
+      "itemCount": 0,
+      "items": []
+    },
+    {
+      "week": "2",
+      "dateText": "6.8.(월)",
+      "month": 6,
+      "day": 8,
+      "weekday": "월",
+      "isoDate": "2026-06-08",
+      "rawContent": "▪",
+      "itemCount": 0,
+      "items": []
+    },
+    {
+      "week": "2",
+      "dateText": "6.9.(화)",
+      "month": 6,
+      "day": 9,
+      "weekday": "화",
+      "isoDate": "2026-06-09",
+      "rawContent": "▪",
+      "itemCount": 0,
+      "items": []
+    },
+    {
+      "week": "2",
+      "dateText": "6.10.(수)",
+      "month": 6,
+      "day": 10,
+      "weekday": "수",
+      "isoDate": "2026-06-10",
+      "rawContent": "▪ 6학년 마음쉼표의 날",
+      "itemCount": 1,
+      "items": [
+        "6학년 마음쉼표의 날"
+      ]
+    },
+    {
+      "week": "2",
+      "dateText": "6.11.(목)",
+      "month": 6,
+      "day": 11,
+      "weekday": "목",
+      "isoDate": "2026-06-11",
+      "rawContent": "▪ 6월 1회 장량 꿈끼 나눔 버스킹 (8:20~8:50, 강당, 송윤아)",
+      "itemCount": 1,
+      "items": [
+        "6월 1회 장량 꿈끼 나눔 버스킹 (8:20~8:50, 강당, 송윤아)"
+      ]
+    },
+    {
+      "week": "2",
+      "dateText": "6.12.(금)",
+      "month": 6,
+      "day": 12,
+      "weekday": "금",
+      "isoDate": "2026-06-12",
+      "rawContent": "▪",
+      "itemCount": 0,
+      "items": []
+    },
+    {
+      "week": "3",
+      "dateText": "6.15.(월)",
+      "month": 6,
+      "day": 15,
+      "weekday": "월",
+      "isoDate": "2026-06-15",
+      "rawContent": "▪ 동료 장학 주간(~6/26, 전교원, 이승미)\n▪ 1학년 마음쉼표의 날",
+      "itemCount": 2,
+      "items": [
+        "동료 장학 주간(~6/26, 전교원, 이승미)",
+        "1학년 마음쉼표의 날"
+      ]
+    },
+    {
+      "week": "3",
+      "dateText": "6.16.(화)",
+      "month": 6,
+      "day": 16,
+      "weekday": "화",
+      "isoDate": "2026-06-16",
+      "rawContent": "▪",
+      "itemCount": 0,
+      "items": []
+    },
+    {
+      "week": "3",
+      "dateText": "6.17.(수)",
+      "month": 6,
+      "day": 17,
+      "weekday": "수",
+      "isoDate": "2026-06-17",
+      "rawContent": "▪ 교직원 심폐소생술교육(13:50~16:50, 전교직원, 꿈빛마루, 양정인)\n▪ 6월 사이버보안 진단의 날",
+      "itemCount": 2,
+      "items": [
+        "교직원 심폐소생술교육(13:50~16:50, 전교직원, 꿈빛마루, 양정인)",
+        "6월 사이버보안 진단의 날"
+      ]
+    },
+    {
+      "week": "3",
+      "dateText": "6.18.(목)",
+      "month": 6,
+      "day": 18,
+      "weekday": "목",
+      "isoDate": "2026-06-18",
+      "rawContent": "▪",
+      "itemCount": 0,
+      "items": []
+    },
+    {
+      "week": "3",
+      "dateText": "6.19.(금)",
+      "month": 6,
+      "day": 19,
+      "weekday": "금",
+      "isoDate": "2026-06-19",
+      "rawContent": "▪",
+      "itemCount": 0,
+      "items": []
+    },
+    {
+      "week": "4",
+      "dateText": "6.22.(월)",
+      "month": 6,
+      "day": 22,
+      "weekday": "월",
+      "isoDate": "2026-06-22",
+      "rawContent": "▪ 7월 교육 계획 수합(~6/26, 전교직원, 교무기획부)\n▪ 수업공개: 1학년(2교시, 1-1, 박모라),  보건(3교시, 보건교육실, 양정인), 체육(4교시, 꿈빛마루, 권혁철)\n▪ 사후협의회: 1학년(14:00~, 1-1)",
+      "itemCount": 3,
+      "items": [
+        "7월 교육 계획 수합(~6/26, 전교직원, 교무기획부)",
+        "수업공개: 1학년(2교시, 1-1, 박모라),  보건(3교시, 보건교육실, 양정인), 체육(4교시, 꿈빛마루, 권혁철)",
+        "사후협의회: 1학년(14:00~, 1-1)"
+      ]
+    },
+    {
+      "week": "4",
+      "dateText": "6.23.(화)",
+      "month": 6,
+      "day": 23,
+      "weekday": "화",
+      "isoDate": "2026-06-23",
+      "rawContent": "▪ 수업공개: 과학(2교시, 과학실2, 이승미),영양(1교시,6-5,권수현)",
+      "itemCount": 1,
+      "items": [
+        "수업공개: 과학(2교시, 과학실2, 이승미),영양(1교시,6-5,권수현)"
+      ]
+    },
+    {
+      "week": "4",
+      "dateText": "6.24.(수)",
+      "month": 6,
+      "day": 24,
+      "weekday": "수",
+      "isoDate": "2026-06-24",
+      "rawContent": "▪ 수업공개: 특수(1교시, 도움반, 김민성), 2학년(2교시, 2-1, 이하늬), 영어(4교시, 영어전담실, 정채린)\n▪ 사후협의회: 2학년(14:00~, 2-1), 전담(14:30~, 과학실2), 특수/비교과(15:00~, 2층 교무회의실)\n▪ 전교어린이회의(13:50~, 6-2, 전교임원 및 4-6학년 학급임원)",
+      "itemCount": 3,
+      "items": [
+        "수업공개: 특수(1교시, 도움반, 김민성), 2학년(2교시, 2-1, 이하늬), 영어(4교시, 영어전담실, 정채린)",
+        "사후협의회: 2학년(14:00~, 2-1), 전담(14:30~, 과학실2), 특수/비교과(15:00~, 2층 교무회의실)",
+        "전교어린이회의(13:50~, 6-2, 전교임원 및 4-6학년 학급임원)"
+      ]
+    },
+    {
+      "week": "4",
+      "dateText": "6.25.(목)",
+      "month": 6,
+      "day": 25,
+      "weekday": "목",
+      "isoDate": "2026-06-25",
+      "rawContent": "▪ 6월 2회 장량 꿈끼 나눔 버스킹 (8:20~8:50, 강당, 송윤아)\n▪ 수업공개: 6학년(2교시, 6-4, 김재민), 5학년(4교시, 5-3, 심보승)\n▪ 사후협의회: 5학년(15:00~, 5-3), 6학년(15:30~, 6-4)",
+      "itemCount": 3,
+      "items": [
+        "6월 2회 장량 꿈끼 나눔 버스킹 (8:20~8:50, 강당, 송윤아)",
+        "수업공개: 6학년(2교시, 6-4, 김재민), 5학년(4교시, 5-3, 심보승)",
+        "사후협의회: 5학년(15:00~, 5-3), 6학년(15:30~, 6-4)"
+      ]
+    },
+    {
+      "week": "4",
+      "dateText": "6.26.(금)",
+      "month": 6,
+      "day": 26,
+      "weekday": "금",
+      "isoDate": "2026-06-26",
+      "rawContent": "▪ 수업공개: 4학년(1교시, 4-1, 송준석), 3학년(2교시, 3-1, 조익현)\n▪ 사후협의회: 3학년(15:00~, 3-1), 4학년(15:30~, 4-1)\n▪ 식생활관  마음쉼표의 날",
+      "itemCount": 3,
+      "items": [
+        "수업공개: 4학년(1교시, 4-1, 송준석), 3학년(2교시, 3-1, 조익현)",
+        "사후협의회: 3학년(15:00~, 3-1), 4학년(15:30~, 4-1)",
+        "식생활관  마음쉼표의 날"
+      ]
+    },
+    {
+      "week": "5",
+      "dateText": "6.29.(월)",
+      "month": 6,
+      "day": 29,
+      "weekday": "월",
+      "isoDate": "2026-06-29",
+      "rawContent": "▪ 여름 방학 계획 수립(~7/3, 전교원, 이가을)\n▪ 7월 부장 협의회(15:00~, 학년 부장 및 업무 부장·행정실장·늘봄실장, 교장실)",
+      "itemCount": 2,
+      "items": [
+        "여름 방학 계획 수립(~7/3, 전교원, 이가을)",
+        "7월 부장 협의회(15:00~, 학년 부장 및 업무 부장·행정실장·늘봄실장, 교장실)"
+      ]
+    },
+    {
+      "week": "5",
+      "dateText": "6.30.(화)",
+      "month": 6,
+      "day": 30,
+      "weekday": "화",
+      "isoDate": "2026-06-30",
+      "rawContent": "▪",
+      "itemCount": 0,
+      "items": []
+    }
+  ],
+  "events": [
+    {
+      "week": "1",
+      "dateText": "6.1.(월)",
+      "month": 6,
+      "day": 1,
+      "weekday": "월",
+      "isoDate": "2026-06-01",
+      "itemOrderOnDate": 1,
+      "category": "교육주간/주간업무",
+      "titleOrDisplayText": "생태전환교육 및 환경교육 주간(~6.5, 전교생, 정민주)",
+      "parenthesesDetail": "~6.5, 전교생, 정민주",
+      "sourceRow": 2
+    },
+    {
+      "week": "1",
+      "dateText": "6.3.(수)",
+      "month": 6,
+      "day": 3,
+      "weekday": "수",
+      "isoDate": "2026-06-03",
+      "itemOrderOnDate": 1,
+      "category": "휴업/공휴",
+      "titleOrDisplayText": "지방선거",
+      "parenthesesDetail": "",
+      "sourceRow": 4
+    },
+    {
+      "week": "1",
+      "dateText": "6.4.(목)",
+      "month": 6,
+      "day": 4,
+      "weekday": "목",
+      "isoDate": "2026-06-04",
+      "itemOrderOnDate": 1,
+      "category": "행사",
+      "titleOrDisplayText": "학생 자치 운영 우수 사례 학교 견학(13:50~, 청하초등학교, 관련 교직원)",
+      "parenthesesDetail": "13:50~, 청하초등학교, 관련 교직원",
+      "sourceRow": 5
+    },
+    {
+      "week": "2",
+      "dateText": "6.10.(수)",
+      "month": 6,
+      "day": 10,
+      "weekday": "수",
+      "isoDate": "2026-06-10",
+      "itemOrderOnDate": 1,
+      "category": "마음쉼표",
+      "titleOrDisplayText": "6학년 마음쉼표의 날",
+      "parenthesesDetail": "",
+      "sourceRow": 9
+    },
+    {
+      "week": "2",
+      "dateText": "6.11.(목)",
+      "month": 6,
+      "day": 11,
+      "weekday": "목",
+      "isoDate": "2026-06-11",
+      "itemOrderOnDate": 1,
+      "category": "행사",
+      "titleOrDisplayText": "6월 1회 장량 꿈끼 나눔 버스킹 (8:20~8:50, 강당, 송윤아)",
+      "parenthesesDetail": "8:20~8:50, 강당, 송윤아",
+      "sourceRow": 10
+    },
+    {
+      "week": "3",
+      "dateText": "6.15.(월)",
+      "month": 6,
+      "day": 15,
+      "weekday": "월",
+      "isoDate": "2026-06-15",
+      "itemOrderOnDate": 1,
+      "category": "교육주간/주간업무",
+      "titleOrDisplayText": "동료 장학 주간(~6/26, 전교원, 이승미)",
+      "parenthesesDetail": "~6/26, 전교원, 이승미",
+      "sourceRow": 12
+    },
+    {
+      "week": "3",
+      "dateText": "6.15.(월)",
+      "month": 6,
+      "day": 15,
+      "weekday": "월",
+      "isoDate": "2026-06-15",
+      "itemOrderOnDate": 2,
+      "category": "마음쉼표",
+      "titleOrDisplayText": "1학년 마음쉼표의 날",
+      "parenthesesDetail": "",
+      "sourceRow": 12
+    },
+    {
+      "week": "3",
+      "dateText": "6.17.(수)",
+      "month": 6,
+      "day": 17,
+      "weekday": "수",
+      "isoDate": "2026-06-17",
+      "itemOrderOnDate": 1,
+      "category": "교육/연수",
+      "titleOrDisplayText": "교직원 심폐소생술교육(13:50~16:50, 전교직원, 꿈빛마루, 양정인)",
+      "parenthesesDetail": "13:50~16:50, 전교직원, 꿈빛마루, 양정인",
+      "sourceRow": 14
+    },
+    {
+      "week": "3",
+      "dateText": "6.17.(수)",
+      "month": 6,
+      "day": 17,
+      "weekday": "수",
+      "isoDate": "2026-06-17",
+      "itemOrderOnDate": 2,
+      "category": "업무",
+      "titleOrDisplayText": "6월 사이버보안 진단의 날",
+      "parenthesesDetail": "",
+      "sourceRow": 14
+    },
+    {
+      "week": "4",
+      "dateText": "6.22.(월)",
+      "month": 6,
+      "day": 22,
+      "weekday": "월",
+      "isoDate": "2026-06-22",
+      "itemOrderOnDate": 1,
+      "category": "교육/연수",
+      "titleOrDisplayText": "7월 교육 계획 수합(~6/26, 전교직원, 교무기획부)",
+      "parenthesesDetail": "~6/26, 전교직원, 교무기획부",
+      "sourceRow": 17
+    },
+    {
+      "week": "4",
+      "dateText": "6.22.(월)",
+      "month": 6,
+      "day": 22,
+      "weekday": "월",
+      "isoDate": "2026-06-22",
+      "itemOrderOnDate": 2,
+      "category": "수업공개",
+      "titleOrDisplayText": "수업공개: 1학년(2교시, 1-1, 박모라),  보건(3교시, 보건교육실, 양정인), 체육(4교시, 꿈빛마루, 권혁철)",
+      "parenthesesDetail": "4교시, 꿈빛마루, 권혁철",
+      "sourceRow": 17
+    },
+    {
+      "week": "4",
+      "dateText": "6.22.(월)",
+      "month": 6,
+      "day": 22,
+      "weekday": "월",
+      "isoDate": "2026-06-22",
+      "itemOrderOnDate": 3,
+      "category": "협의회",
+      "titleOrDisplayText": "사후협의회: 1학년(14:00~, 1-1)",
+      "parenthesesDetail": "14:00~, 1-1",
+      "sourceRow": 17
+    },
+    {
+      "week": "4",
+      "dateText": "6.23.(화)",
+      "month": 6,
+      "day": 23,
+      "weekday": "화",
+      "isoDate": "2026-06-23",
+      "itemOrderOnDate": 1,
+      "category": "수업공개",
+      "titleOrDisplayText": "수업공개: 과학(2교시, 과학실2, 이승미),영양(1교시,6-5,권수현)",
+      "parenthesesDetail": "1교시,6-5,권수현",
+      "sourceRow": 18
+    },
+    {
+      "week": "4",
+      "dateText": "6.24.(수)",
+      "month": 6,
+      "day": 24,
+      "weekday": "수",
+      "isoDate": "2026-06-24",
+      "itemOrderOnDate": 1,
+      "category": "수업공개",
+      "titleOrDisplayText": "수업공개: 특수(1교시, 도움반, 김민성), 2학년(2교시, 2-1, 이하늬), 영어(4교시, 영어전담실, 정채린)",
+      "parenthesesDetail": "4교시, 영어전담실, 정채린",
+      "sourceRow": 19
+    },
+    {
+      "week": "4",
+      "dateText": "6.24.(수)",
+      "month": 6,
+      "day": 24,
+      "weekday": "수",
+      "isoDate": "2026-06-24",
+      "itemOrderOnDate": 2,
+      "category": "협의회",
+      "titleOrDisplayText": "사후협의회: 2학년(14:00~, 2-1), 전담(14:30~, 과학실2), 특수/비교과(15:00~, 2층 교무회의실)",
+      "parenthesesDetail": "15:00~, 2층 교무회의실",
+      "sourceRow": 19
+    },
+    {
+      "week": "4",
+      "dateText": "6.24.(수)",
+      "month": 6,
+      "day": 24,
+      "weekday": "수",
+      "isoDate": "2026-06-24",
+      "itemOrderOnDate": 3,
+      "category": "회의",
+      "titleOrDisplayText": "전교어린이회의(13:50~, 6-2, 전교임원 및 4-6학년 학급임원)",
+      "parenthesesDetail": "13:50~, 6-2, 전교임원 및 4-6학년 학급임원",
+      "sourceRow": 19
+    },
+    {
+      "week": "4",
+      "dateText": "6.25.(목)",
+      "month": 6,
+      "day": 25,
+      "weekday": "목",
+      "isoDate": "2026-06-25",
+      "itemOrderOnDate": 1,
+      "category": "행사",
+      "titleOrDisplayText": "6월 2회 장량 꿈끼 나눔 버스킹 (8:20~8:50, 강당, 송윤아)",
+      "parenthesesDetail": "8:20~8:50, 강당, 송윤아",
+      "sourceRow": 20
+    },
+    {
+      "week": "4",
+      "dateText": "6.25.(목)",
+      "month": 6,
+      "day": 25,
+      "weekday": "목",
+      "isoDate": "2026-06-25",
+      "itemOrderOnDate": 2,
+      "category": "수업공개",
+      "titleOrDisplayText": "수업공개: 6학년(2교시, 6-4, 김재민), 5학년(4교시, 5-3, 심보승)",
+      "parenthesesDetail": "4교시, 5-3, 심보승",
+      "sourceRow": 20
+    },
+    {
+      "week": "4",
+      "dateText": "6.25.(목)",
+      "month": 6,
+      "day": 25,
+      "weekday": "목",
+      "isoDate": "2026-06-25",
+      "itemOrderOnDate": 3,
+      "category": "협의회",
+      "titleOrDisplayText": "사후협의회: 5학년(15:00~, 5-3), 6학년(15:30~, 6-4)",
+      "parenthesesDetail": "15:30~, 6-4",
+      "sourceRow": 20
+    },
+    {
+      "week": "4",
+      "dateText": "6.26.(금)",
+      "month": 6,
+      "day": 26,
+      "weekday": "금",
+      "isoDate": "2026-06-26",
+      "itemOrderOnDate": 1,
+      "category": "수업공개",
+      "titleOrDisplayText": "수업공개: 4학년(1교시, 4-1, 송준석), 3학년(2교시, 3-1, 조익현)",
+      "parenthesesDetail": "2교시, 3-1, 조익현",
+      "sourceRow": 21
+    },
+    {
+      "week": "4",
+      "dateText": "6.26.(금)",
+      "month": 6,
+      "day": 26,
+      "weekday": "금",
+      "isoDate": "2026-06-26",
+      "itemOrderOnDate": 2,
+      "category": "협의회",
+      "titleOrDisplayText": "사후협의회: 3학년(15:00~, 3-1), 4학년(15:30~, 4-1)",
+      "parenthesesDetail": "15:30~, 4-1",
+      "sourceRow": 21
+    },
+    {
+      "week": "4",
+      "dateText": "6.26.(금)",
+      "month": 6,
+      "day": 26,
+      "weekday": "금",
+      "isoDate": "2026-06-26",
+      "itemOrderOnDate": 3,
+      "category": "마음쉼표",
+      "titleOrDisplayText": "식생활관  마음쉼표의 날",
+      "parenthesesDetail": "",
+      "sourceRow": 21
+    },
+    {
+      "week": "5",
+      "dateText": "6.29.(월)",
+      "month": 6,
+      "day": 29,
+      "weekday": "월",
+      "isoDate": "2026-06-29",
+      "itemOrderOnDate": 1,
+      "category": "업무",
+      "titleOrDisplayText": "여름 방학 계획 수립(~7/3, 전교원, 이가을)",
+      "parenthesesDetail": "~7/3, 전교원, 이가을",
+      "sourceRow": 22
+    },
+    {
+      "week": "5",
+      "dateText": "6.29.(월)",
+      "month": 6,
+      "day": 29,
+      "weekday": "월",
+      "isoDate": "2026-06-29",
+      "itemOrderOnDate": 2,
+      "category": "회의",
+      "titleOrDisplayText": "7월 부장 협의회(15:00~, 학년 부장 및 업무 부장·행정실장·늘봄실장, 교장실)",
+      "parenthesesDetail": "15:00~, 학년 부장 및 업무 부장·행정실장·늘봄실장, 교장실",
+      "sourceRow": 22
+    }
+  ]
+}

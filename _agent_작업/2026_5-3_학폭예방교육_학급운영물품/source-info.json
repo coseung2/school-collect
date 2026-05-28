@@ -1,0 +1,116 @@
+{
+  "source_file": "/home/coseung2/.hermes/cache/documents/doc_f2497bc4ba56_2026_5-3.xlsx",
+  "copied_source_file": "/mnt/c/Users/심보승/Desktop/Obsidian Vault/school-collect/_agent_작업/2026_5-3_학폭예방교육_학급운영물품/source_2026_5-3.xlsx",
+  "google_sheet_url": "https://docs.google.com/spreadsheets/d/1vrJZ-P7_1bRs7Wp4PODnY-SygipOXSySqBWU7zSdG4o/edit?gid=0#gid=0",
+  "sheet_name": "2026 학폭예방교육 학급운영 물품",
+  "dimension": "A1:I33",
+  "merged_cells": [
+    "A1:H1",
+    "A2:H2"
+  ],
+  "hidden_columns": [
+    {
+      "min": "6",
+      "max": "6",
+      "width": "16.5"
+    }
+  ],
+  "title": "2026 학교폭력 예방교육 학급운영 물품 구입 목록",
+  "instruction": "* 학급당 10만원 학년별로 수합하여 하나의 파일로 부탁드려요^^                                                             (   )학년",
+  "headers": [
+    "순번",
+    "물품명",
+    "예상단가",
+    "수량",
+    "예상금액",
+    "할인가",
+    "사는 곳",
+    "상품번호"
+  ],
+  "input_rows": 30,
+  "non_empty_item_rows": 6,
+  "formulas": [
+    {
+      "cell": "E4",
+      "formula": "C4*D4",
+      "cached_value": "21000"
+    },
+    {
+      "cell": "E5",
+      "formula": "C5*D5",
+      "cached_value": "13400"
+    },
+    {
+      "cell": "E6",
+      "formula": "C6*D6",
+      "cached_value": "15500"
+    },
+    {
+      "cell": "E10",
+      "formula": "SUM(E4:F9)",
+      "cached_value": "99500"
+    }
+  ],
+  "sample_rows": [
+    {
+      "순번": "1",
+      "물품명": "후르츠텔라",
+      "예상단가": "7000",
+      "수량": "3",
+      "예상금액": "21000",
+      "할인가": "",
+      "사는 곳": "쿠팡",
+      "상품번호": "https://www.coupang.com/vp/products/4941210865?itemId=19421765182&vendorItemId=86533230382&q=%ED%9B%84%EB%A5%B4%EC%B8%A0%ED%85%94%EB%9D%BC&searchId=65e5402a7315131&sourceType=search&itemsCount=36&searchRank=6&rank=6&traceId=mpc86wd9"
+    },
+    {
+      "순번": "2",
+      "물품명": "원예용 식물 그물망",
+      "예상단가": "13400",
+      "수량": "1",
+      "예상금액": "13400",
+      "할인가": "",
+      "사는 곳": "쿠팡",
+      "상품번호": "https://www.coupang.com/vp/products/8109180592?itemId=25254557250&searchId=feed-a0224b204d04465597ed010637903b23-3.3.37%3Aview_together_ads-P7397862322&vendorItemId=89998741575&sourceType=SDP_ADS&clickEventId=c3ecaff0-534a-11f1-8e9e-978ce3ffd8a1"
+    },
+    {
+      "순번": "3",
+      "물품명": "도화지 130g A4 500매",
+      "예상단가": "15500",
+      "수량": "1",
+      "예상금액": "15500",
+      "할인가": "",
+      "사는 곳": "쿠팡",
+      "상품번호": "탐사 스케치북 도화지 130g A4, A4, 500매 - 켄트지/도화지 | 쿠팡"
+    },
+    {
+      "순번": "4",
+      "물품명": "플레이트 캔트스탑 L Board 보드게임",
+      "예상단가": "15000",
+      "수량": "1",
+      "예상금액": "15000",
+      "할인가": "",
+      "사는 곳": "쿠팡",
+      "상품번호": "플레이트 캔트스탑 L Board 보드게임 - 기타보드게임 | 쿠팡"
+    },
+    {
+      "순번": "5",
+      "물품명": "퍼레이드 보드 카드 전략 트릭 카드게임",
+      "예상단가": "29300",
+      "수량": "1",
+      "예상금액": "29300",
+      "할인가": "",
+      "사는 곳": "쿠팡",
+      "상품번호": "퍼레이드 보드 카드 전략 트릭 카드게임 3인 4인 커플 패밀리게임 중국어 버전 1개, 1개, 1개 - 기타보드게임 | 쿠팡"
+    },
+    {
+      "순번": "6",
+      "물품명": "화분받침대(PH-01) - A03",
+      "예상단가": "5300",
+      "수량": "1",
+      "예상금액": "5300",
+      "할인가": "",
+      "사는 곳": "쿠팡",
+      "상품번호": "화분받침대(PH-01) 화분정리 직사각 물받침대 대형받침대 - 화분받침/스탠드 | 쿠팡"
+    }
+  ]
+}

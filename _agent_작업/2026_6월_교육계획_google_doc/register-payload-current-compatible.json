@@ -1,0 +1,28 @@
+{
+  "title": "월중 교육 계획 수합(임시 textarea 방식)",
+  "year": 2026,
+  "description": "table 필드 구현 전 임시안. 교직원이 날짜별 추진 내용을 긴 텍스트로 붙여넣고 담당자가 수동 정리해야 하므로 정식 운영용으로는 비추천.",
+  "fields": [
+    {
+      "label": "제출자",
+      "fieldType": "text",
+      "required": true,
+      "order": 1,
+      "options": null
+    },
+    {
+      "label": "소속/부서",
+      "fieldType": "text",
+      "required": false,
+      "order": 2,
+      "options": null
+    },
+    {
+      "label": "월중 교육 계획 내용",
+      "fieldType": "textarea",
+      "required": true,
+      "order": 3,
+      "options": "예: 6.22.(월) 수업공개: 5학년(4교시, 5-3, 심보승)"
+    }
+  ]
+}

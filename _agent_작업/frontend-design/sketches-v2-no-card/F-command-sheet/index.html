@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>School Collect 시안 F · 상황판 스프레드시트형</title>
+  <style>
+    :root{
+      --bg:#eef1f4;
+      --paper:#ffffff;
+      --ink:#111827;
+      --muted:#52606d;
+      --line:#9aa7b3;
+      --line2:#c9d1d9;
+      --head:#dfe6ee;
+      --head2:#f3f6f9;
+      --blue:#0b5cab;
+      --blue2:#dcecff;
+      --green:#0f7a3a;
+      --green2:#e4f5e9;
+      --amber:#a15c00;
+      --amber2:#fff1d6;
+      --red:#b42318;
+      --red2:#ffe3e0;
+      --violet:#5b3ab6;
+      --violet2:#eee8ff;
+      --black:#111827;
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;min-height:100%;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans KR",sans-serif;line-height:1.42;word-break: keep-all;overflow-wrap:break-word}
+    button,input,select{font:inherit;color:inherit}
+    button{cursor:pointer}
+    .mono{font-variant-numeric:tabular-nums}
+    .app{width:100%;max-width:1680px;margin:0 auto;padding:10px}
+    .command{border:1px solid var(--black);background:var(--paper)}
+    .command-top{display:grid;grid-template-columns:minmax(320px,1fr) auto;gap:0;border-bottom:1px solid var(--black)}
+    .brand{padding:12px 14px;background:#172033;color:#fff;border-right:1px solid var(--black)}
+    .brand .label{display:flex;gap:8px;align-items:center;margin-bottom:5px;font-size:.78rem;font-weight:900;letter-spacing:.08em;color:#b9d6ff}
+    .live-dot{width:8px;height:8px;background:#22c55e;border:1px solid #b8f7c8;display:inline-block}
+    h1{margin:0;font-size:clamp(1.35rem,2.3vw,2.35rem);line-height:1.1;letter-spacing:-.05em}
+    .command-note{padding:12px 14px;display:grid;align-content:center;gap:5px;background:#f8fafc;min-width:360px}
+    .command-note b{font-size:.93rem}
+    .command-note span{font-size:.82rem;color:var(--muted)}
+    .control-line{display:grid;grid-template-columns:1fr auto;gap:0;border-bottom:1px solid var(--black);background:var(--head)}
+    .filters{display:flex;align-items:center;gap:0;flex-wrap:wrap}
+    .field{display:flex;align-items:center;min-height:42px;border-right:1px solid var(--line);background:#fff}
+    .field label{padding:0 8px;font-size:.76rem;font-weight:900;color:#334155;background:var(--head2);align-self:stretch;display:flex;align-items:center;border-right:1px solid var(--line2);white-space:nowrap}
+    .field select,.field input{height:40px;border:0;background:#fff;outline:0;padding:0 9px;min-width:116px;font-weight:700}
+    .field input{min-width:210px}
+    .view-tabs{display:flex;align-items:stretch;border-left:1px solid var(--black)}
+    .tab,.cmd-btn{border:0;border-right:1px solid var(--line);background:#fff;padding:0 13px;min-height:42px;font-weight:900;white-space:nowrap}
+    .tab.active{background:#111827;color:#fff}
+    .cmd-btn.primary{background:var(--blue);color:#fff}
+    .cmd-btn.danger{color:var(--red)}
+    .status-strip{display:grid;grid-template-columns:repeat(6,minmax(120px,1fr));border-bottom:1px solid var(--black);background:#fff}
+    .metric{padding:9px 10px;border-right:1px solid var(--line2);min-height:64px}
+    .metric .k{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--muted);font-weight:900;font-size:.78rem}
+    .metric .v{font-size:1.35rem;font-weight:950;letter-spacing:-.04em;margin-top:2px}
+    .metric .s{font-size:.75rem;color:var(--muted)}
+    .rail{height:5px;background:#e5e7eb;border:1px solid var(--line2);margin-top:6px}
+    .rail span{display:block;height:100%;background:var(--blue)}
+    .workspace{display:grid;grid-template-columns:minmax(0,1fr) 340px;background:#fff}
+    .main{min-width:0;border-right:1px solid var(--black)}
+    .section-title{display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--head);border-bottom:1px solid var(--black);padding:8px 10px}
+    .section-title h2,.section-title h3{margin:0;font-size:1rem;letter-spacing:-.03em}
+    .section-title p{margin:2px 0 0;color:#485563;font-size:.8rem}
+    .tag{display:inline-flex;align-items:center;gap:5px;border:1px solid currentColor;padding:2px 6px;font-size:.72rem;font-weight:950;background:#fff;white-space:nowrap}
+    .tag.blue{color:var(--blue);background:var(--blue2)}
+    .tag.green{color:var(--green);background:var(--green2)}
+    .tag.amber{color:var(--amber);background:var(--amber2)}
+    .tag.red{color:var(--red);background:var(--red2)}
+    .tag.violet{color:var(--violet);background:var(--violet2)}
+    .panel{display:none}
+    .panel.active{display:block}
+    .board-grid{display:grid;grid-template-columns:repeat(7,minmax(148px,1fr));overflow:auto;background:#fff}
+    .day{min-height:318px;border-right:1px solid var(--line2);border-bottom:1px solid var(--black);background:#fff}
+    .day.today{background:#f8fbff}
+    .day-head{display:flex;justify-content:space-between;gap:6px;background:#f3f6f9;border-bottom:1px solid var(--line2);padding:7px 8px;font-weight:950;font-size:.84rem}
+    .day-head .cnt{color:var(--muted);font-weight:850}
+    .work{border-bottom:1px solid var(--line2);padding:8px;display:grid;gap:4px}
+    .work.conflict{background:var(--red2)}
+    .work.wait{background:var(--amber2)}
+    .work.done{background:var(--green2)}
+    .work .time{font-size:.73rem;font-weight:950;color:var(--blue)}
+    .work .name{font-weight:950;font-size:.88rem}
+    .work .meta{font-size:.74rem;color:#4b5563}
+    .work .ops{display:flex;gap:4px;flex-wrap:wrap}
+    .mini-btn{border:1px solid var(--line);background:#fff;padding:2px 5px;font-size:.7rem;font-weight:900}
+    .month-grid{display:grid;grid-template-columns:repeat(7,minmax(126px,1fr));overflow:auto;border-bottom:1px solid var(--black)}
+    .mday{min-height:118px;border-right:1px solid var(--line2);border-bottom:1px solid var(--line2);padding:7px;background:#fff}
+    .mday.off{background:#f6f7f9;color:#8b96a3}
+    .mday b{display:block;margin-bottom:5px}
+    .mitem{display:block;border-left:3px solid var(--blue);padding:3px 4px;margin:3px 0;background:#eef6ff;font-size:.72rem;font-weight:850;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .mitem.red{border-left-color:var(--red);background:var(--red2)}
+    .mitem.amber{border-left-color:var(--amber);background:var(--amber2)}
+    .day-detail{display:grid;grid-template-columns:1fr 360px;border-bottom:1px solid var(--black)}
+    .timeline{border-right:1px solid var(--black)}
+    .timeline-row{display:grid;grid-template-columns:86px 1fr 95px;gap:0;border-bottom:1px solid var(--line2)}
+    .timeline-row > div{padding:9px;border-right:1px solid var(--line2)}
+    .checklist{background:#fff}
+    .check-row{display:grid;grid-template-columns:1fr auto;border-bottom:1px solid var(--line2);padding:9px;gap:8px}
+    .sheet-wrap{overflow:auto;background:#fff}
+    table{width:100%;border-collapse:collapse;min-width:1180px}
+    th,td{border-right:1px solid var(--line2);border-bottom:1px solid var(--line2);padding:7px 8px;text-align:left;vertical-align:middle;font-size:.82rem}
+    th{position:sticky;top:0;background:#e9eef4;color:#263241;font-size:.75rem;font-weight:950;z-index:2;white-space:nowrap}
+    tr:hover td{background:#f8fbff}
+    td.num{text-align:right;font-variant-numeric:tabular-nums}
+    .cell-main{font-weight:950}
+    .right-queue{background:#fff;min-width:0}
+    .queue-body{max-height:calc(100vh - 252px);overflow:auto}
+    .queue-item{border-bottom:1px solid var(--line2);padding:10px;background:#fff}
+    .queue-item.urgent{background:var(--red2)}
+    .queue-item.warn{background:var(--amber2)}
+    .queue-top{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}
+    .queue-title{font-weight:950;font-size:.9rem}
+    .queue-meta{margin:4px 0 8px;color:#4b5563;font-size:.77rem}
+    .queue-actions{display:flex;gap:4px;flex-wrap:wrap}
+    .bottom-log{display:grid;grid-template-columns:170px 1fr auto;border-top:1px solid var(--black);background:#172033;color:#fff;align-items:center}
+    .bottom-log div{padding:8px 10px;border-right:1px solid #526176;font-size:.78rem}
+    .toast{position:fixed;right:10px;bottom:10px;display:grid;gap:6px;z-index:20}
+    .toast div{background:#111827;color:#fff;border:1px solid #fff;padding:9px 10px;font-weight:850;max-width:360px}
+    @media(max-width:1180px){.workspace{grid-template-columns:1fr}.main{border-right:0}.right-queue{border-top:1px solid var(--black)}.queue-body{max-height:none}.status-strip{grid-template-columns:repeat(3,1fr)}.command-top,.control-line{grid-template-columns:1fr}.command-note{min-width:0}.view-tabs{border-left:0;border-top:1px solid var(--black);overflow:auto}.day-detail{grid-template-columns:1fr}}
+    @media(max-width:760px){.app{padding:0}.status-strip{grid-template-columns:repeat(2,1fr)}.field,.field select,.field input{width:100%;min-width:0}.filters{display:grid;grid-template-columns:1fr}.view-tabs{display:grid;grid-template-columns:repeat(3,1fr)}.cmd-btn{border-top:1px solid var(--line2)}.board-grid{grid-template-columns:1fr}.day{min-height:auto}.bottom-log{grid-template-columns:1fr}.bottom-log div{border-bottom:1px solid #526176}.command-top{display:block}}
+    @media print{body{background:#fff}.control-line,.right-queue,.bottom-log,.toast{display:none!important}.app{padding:0;max-width:none}.command,.main{border:0}.panel:not(.active){display:none!important}th{position:static}}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="command" aria-label="School Collect 담당자 운영 상황판">
+      <header class="command-top">
+        <div class="brand">
+          <div class="label"><span class="live-dot"></span> SCHOOL COLLECT / F안 / COMMAND SHEET</div>
+          <h1>교무실 업무 상황판처럼 빠르게 훑고 바로 확정하는 스프레드시트형 운영 화면</h1>
+        </div>
+        <div class="command-note">
+          <b>기본값: 2026년 6월 3주차 · 주 보기 · 전체 부서</b>
+          <span>둥근 카드박스 없이 선, 표, 상태 막대, 확정 큐로 구성한 담당자 검토 화면입니다.</span>
+        </div>
+      </header>
+
+      <section class="control-line" aria-label="명령줄과 필터">
+        <div class="filters">
+          <span class="field"><label>기간</label><select id="monthSelect"><option>2026년 6월</option><option>2026년 7월</option></select></span>
+          <span class="field"><label>주차</label><select id="weekSelect"><option>1주차</option><option>2주차</option><option selected>3주차</option><option>4주차</option><option>5주차</option></select></span>
+          <span class="field"><label>부서</label><select id="deptFilter"><option value="all">전체</option><option>교무기획부</option><option>연구부</option><option>생활안전부</option><option>정보부</option><option>학년부</option></select></span>
+          <span class="field"><label>상태</label><select id="statusFilter"><option value="all">전체</option><option value="wait">검토 필요</option><option value="conflict">충돌</option><option value="done">확정</option><option value="missing">미제출</option></select></span>
+          <span class="field"><label>검색</label><input id="searchInput" placeholder="업무명·장소·담당자 입력" /></span>
+        </div>
+        <div class="view-tabs" role="tablist" aria-label="월 주 일 전환">
+          <button class="tab active" data-view="week">주 보기</button>
+          <button class="tab" data-view="month">월 보기</button>
+          <button class="tab" data-view="day">일 보기</button>
+          <button class="cmd-btn" id="btnMissing">미제출만</button>
+          <button class="cmd-btn" id="btnExport">CSV</button>
+          <button class="cmd-btn primary" id="btnConfirmAll">선택 확정</button>
+        </div>
+      </section>
+
+      <section class="status-strip" aria-label="운영 지표">
+        <div class="metric"><div class="k"><span>제출률</span><span class="tag green">실시간</span></div><div class="v mono">84%</div><div class="s">31명 중 26명 제출</div><div class="rail"><span style="width:84%;background:var(--green)"></span></div></div>
+        <div class="metric"><div class="k"><span>미제출</span><span class="tag red">독촉</span></div><div class="v mono">5명</div><div class="s">오늘 16:30 자동 알림</div><div class="rail"><span style="width:16%;background:var(--red)"></span></div></div>
+        <div class="metric"><div class="k"><span>검토 필요</span><span class="tag amber">대기</span></div><div class="v mono">9건</div><div class="s">담당자 확인 필요</div><div class="rail"><span style="width:48%;background:var(--amber)"></span></div></div>
+        <div class="metric"><div class="k"><span>충돌</span><span class="tag red">장소/시간</span></div><div class="v mono">3건</div><div class="s">꿈빛마루 2 · 강당 1</div><div class="rail"><span style="width:30%;background:var(--red)"></span></div></div>
+        <div class="metric"><div class="k"><span>확정 큐</span><span class="tag violet">우측</span></div><div class="v mono">7건</div><div class="s">우선 처리 3건</div><div class="rail"><span style="width:58%;background:var(--violet)"></span></div></div>
+        <div class="metric"><div class="k"><span>최종 공지</span><span class="tag blue">열람</span></div><div class="v mono">D-2</div><div class="s">금요일 10:00 배포</div><div class="rail"><span style="width:70%;background:var(--blue)"></span></div></div>
+      </section>
+
+      <main class="workspace">
+        <section class="main">
+          <div class="section-title">
+            <div><h2 id="mainTitle">주간 운영 상황판 · 2026년 6월 3주차</h2><p id="mainDesc">월중계획을 요일별 열로 스캔하고, 하단 전체 표에서 제출·검토·확정 상태를 동시에 확인합니다.</p></div>
+            <span class="tag blue" id="viewTag">주 보기</span>
+          </div>
+
+          <section id="weekPanel" class="panel active" aria-label="주 보기 상황판">
+            <div class="board-grid" id="weekBoard"></div>
+          </section>
+
+          <section id="monthPanel" class="panel" aria-label="월 보기 상황판">
+            <div class="month-grid" id="monthGrid"></div>
+          </section>
+
+          <section id="dayPanel" class="panel" aria-label="일 보기 상세">
+            <div class="day-detail">
+              <div class="timeline" id="timeline"></div>
+              <div class="checklist">
+                <div class="section-title"><div><h3>일별 확인 사항</h3><p>6월 17일 수요일 확정 전 점검</p></div><span class="tag amber">확인</span></div>
+                <div class="check-row"><b>장소 중복</b><span class="tag red">2건</span></div>
+                <div class="check-row"><b>대상 표기 통일</b><span class="tag amber">필요</span></div>
+                <div class="check-row"><b>미제출 담당자</b><span class="tag red">1명</span></div>
+                <div class="check-row"><b>가정통신문 연동</b><span class="tag green">완료</span></div>
+              </div>
+            </div>
+          </section>
+
+          <div class="section-title">
+            <div><h3>전체 수합표</h3><p>전체 열람과 담당자 검토가 동시에 가능한 원장표입니다. 상태 필터와 검색 결과가 즉시 반영됩니다.</p></div>
+            <span class="tag" id="rowCount">12행 표시</span>
+          </div>
+          <div class="sheet-wrap">
+            <table aria-label="School Collect 전체 수합표">
+              <thead>
+                <tr><th>선택</th><th>일자</th><th>요일</th><th>시간</th><th>업무명</th><th>대상</th><th>장소</th><th>담당</th><th>부서</th><th>제출</th><th>검토</th><th>확정</th><th>운영 메모</th></tr>
+              </thead>
+              <tbody id="sheetRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <aside class="right-queue" aria-label="우측 고정 확정 목록">
+          <div class="section-title"><div><h2>확정 목록</h2><p>우선순위 높은 건부터 처리</p></div><span class="tag violet">7건</span></div>
+          <div class="queue-body" id="queueList"></div>
+        </aside>
+      </main>
+
+      <footer class="bottom-log" aria-label="하단 상태 바">
+        <div class="mono">SYNC 23:13:08</div>
+        <div id="logText">현재 화면: 주 보기 / 전체 부서 / 검토 필요·충돌·확정 항목을 함께 표시 중</div>
+        <div class="mono">권한: 월중계획 담당자</div>
+      </footer>
+    </div>
+  </div>
+  <div class="toast" id="toast" aria-live="polite"></div>
+
+  <script>
+    const works = [
+      {date:'6/15',day:'월',time:'08:40',name:'방송조회',target:'전교생',place:'각 교실',owner:'김민정',dept:'교무기획부',submit:'완료',review:'정상',confirm:'확정',status:'done',memo:'최종 공지 반영'},
+      {date:'6/15',day:'월',time:'14:40',name:'동아리 활동 운영 계획 제출',target:'담당 교사',place:'교무실',owner:'박은호',dept:'연구부',submit:'완료',review:'검토 필요',confirm:'대기',status:'wait',memo:'대상 학년 보완'},
+      {date:'6/16',day:'화',time:'10:30',name:'학부모 공개수업 리허설',target:'수업 공개 교사',place:'꿈빛마루',owner:'이서연',dept:'교무기획부',submit:'완료',review:'장소 충돌',confirm:'보류',status:'conflict',memo:'심폐소생술교육과 장소 중복'},
+      {date:'6/16',day:'화',time:'13:20',name:'정보보안 자체 점검',target:'전교직원',place:'각 부서',owner:'최도윤',dept:'정보부',submit:'완료',review:'정상',confirm:'확정',status:'done',memo:'체크리스트 배포 완료'},
+      {date:'6/17',day:'수',time:'09:00',name:'심폐소생술교육',target:'5학년',place:'꿈빛마루',owner:'정하늘',dept:'생활안전부',submit:'완료',review:'장소 충돌',confirm:'보류',status:'conflict',memo:'꿈빛마루 중복'},
+      {date:'6/17',day:'수',time:'10:40',name:'기초학력 협의회',target:'학년 연구 담당',place:'2층 협의실',owner:'강지우',dept:'연구부',submit:'완료',review:'검토 필요',confirm:'대기',status:'wait',memo:'참석 대상 표기 확인'},
+      {date:'6/18',day:'목',time:'08:50',name:'학교폭력 예방 캠페인',target:'전교생',place:'중앙현관',owner:'문소라',dept:'생활안전부',submit:'완료',review:'정상',confirm:'확정',status:'done',memo:'우천 시 현관 유지'},
+      {date:'6/18',day:'목',time:'15:00',name:'교육과정 평가회 자료 취합',target:'부장교사',place:'교무실',owner:'오현준',dept:'교무기획부',submit:'미제출',review:'검토 불가',confirm:'대기',status:'missing',memo:'자료 미도착'},
+      {date:'6/19',day:'금',time:'09:50',name:'진로체험 안전교육',target:'6학년',place:'강당',owner:'한유진',dept:'학년부',submit:'완료',review:'시간 충돌',confirm:'보류',status:'conflict',memo:'강당 사용 시간 재조정'},
+      {date:'6/19',day:'금',time:'13:30',name:'도서관 구입 희망 도서 마감',target:'전교직원',place:'온라인',owner:'서지훈',dept:'연구부',submit:'완료',review:'정상',confirm:'확정',status:'done',memo:'수합 완료'},
+      {date:'6/20',day:'토',time:'10:00',name:'토요 스포츠클럽',target:'신청 학생',place:'운동장',owner:'배수빈',dept:'학년부',submit:'완료',review:'검토 필요',confirm:'대기',status:'wait',memo:'우천 대체 장소 필요'},
+      {date:'6/21',day:'일',time:'09:00',name:'시설 안전 점검',target:'행정실 협조',place:'교내 전체',owner:'윤태민',dept:'생활안전부',submit:'완료',review:'정상',confirm:'확정',status:'done',memo:'담당자 동행'}
+    ];
+    const queue = works.filter(w => ['wait','conflict','missing'].includes(w.status));
+    const statusMap = {
+      done:['green','정상'], wait:['amber','검토'], conflict:['red','충돌'], missing:['red','미제출']
+    };
+    const $ = s => document.querySelector(s);
+    function tag(status, text){ const m=statusMap[status] || ['blue','확인']; return `<span class="tag ${m[0]}">${text || m[1]}</span>`; }
+    function toast(msg){ const t=$('#toast'); const d=document.createElement('div'); d.textContent=msg; t.appendChild(d); setTimeout(()=>d.remove(),2600); }
+    function filtered(){
+      const dept=$('#deptFilter').value, st=$('#statusFilter').value, q=$('#searchInput').value.trim().toLowerCase();
+      return works.filter(w => (dept==='all'||w.dept===dept) && (st==='all'||w.status===st) && (!q || [w.name,w.place,w.owner,w.dept,w.target].join(' ').toLowerCase().includes(q)));
+    }
+    function renderSheet(){
+      const rows=filtered();
+      $('#rowCount').textContent=`${rows.length}행 표시`;
+      $('#sheetRows').innerHTML = rows.map((w,i)=>`<tr>
+        <td><input type="checkbox" ${i<3?'checked':''} aria-label="${w.name} 선택"></td><td class="mono">${w.date}</td><td>${w.day}</td><td class="mono">${w.time}</td><td class="cell-main">${w.name}</td><td>${w.target}</td><td>${w.place}</td><td>${w.owner}</td><td>${w.dept}</td><td>${w.submit}</td><td>${tag(w.status,w.review)}</td><td>${w.confirm}</td><td>${w.memo}</td>
+      </tr>`).join('');
+    }
+    function renderWeek(){
+      const days=['6/15 월','6/16 화','6/17 수','6/18 목','6/19 금','6/20 토','6/21 일'];
+      $('#weekBoard').innerHTML = days.map(d=>{
+        const [date,day]=d.split(' '); const list=works.filter(w=>w.date===date);
+        return `<div class="day ${date==='6/17'?'today':''}"><div class="day-head"><span>${date} ${day}</span><span class="cnt">${list.length}건</span></div>${list.map(w=>`<div class="work ${w.status}"><div class="time mono">${w.time}</div><div class="name">${w.name}</div><div class="meta">${w.place} · ${w.owner} · ${w.dept}</div><div class="ops">${tag(w.status)}<button class="mini-btn" onclick="toast('${w.name} 검토 화면으로 이동')">검토</button><button class="mini-btn" onclick="toast('${w.name} 확정 처리')">확정</button></div></div>`).join('')}</div>`;
+      }).join('');
+    }
+    function renderMonth(){
+      const dates=Array.from({length:35},(_,i)=>i+1);
+      $('#monthGrid').innerHTML = dates.map(n=>{
+        const date='6/'+n; const list=works.filter(w=>w.date===date);
+        return `<div class="mday ${n<1?'off':''}"><b>${n}</b>${list.map(w=>`<span class="mitem ${w.status==='conflict'?'red':w.status==='wait'?'amber':''}">${w.name}</span>`).join('')}${list.length>2?'<div class="meta">추가 일정 있음</div>':''}</div>`;
+      }).join('');
+    }
+    function renderDay(){
+      const list=works.filter(w=>w.date==='6/17');
+      $('#timeline').innerHTML = `<div class="section-title"><div><h3>6월 17일 수요일 시간표</h3><p>일 보기에서는 시간·장소 충돌과 확정 판단 근거를 한 줄씩 확인합니다.</p></div>${tag('conflict','충돌 포함')}</div>` +
+        list.map(w=>`<div class="timeline-row"><div class="mono"><b>${w.time}</b></div><div><b>${w.name}</b><br><span class="meta">${w.target} · ${w.place} · ${w.owner}</span></div><div>${tag(w.status,w.review)}</div></div>`).join('');
+    }
+    function renderQueue(){
+      $('#queueList').innerHTML = queue.map((w,i)=>`<div class="queue-item ${w.status==='conflict'?'urgent':w.status==='wait'?'warn':''}"><div class="queue-top"><div class="queue-title">${i+1}. ${w.name}</div>${tag(w.status)}</div><div class="queue-meta mono">${w.date} ${w.day} ${w.time} / ${w.place} / ${w.owner}</div><div class="queue-actions"><button class="mini-btn" onclick="toast('${w.name} 확정')">확정</button><button class="mini-btn" onclick="toast('${w.name} 보류')">보류</button><button class="mini-btn" onclick="toast('${w.owner}에게 보완 요청')">보완 요청</button></div></div>`).join('');
+    }
+    document.querySelectorAll('.tab').forEach(btn=>btn.addEventListener('click',()=>{
+      document.querySelectorAll('.tab').forEach(b=>b.classList.remove('active')); btn.classList.add('active');
+      document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active')); $('#'+btn.dataset.view+'Panel').classList.add('active');
+      const name=btn.textContent; $('#viewTag').textContent=name;
+      $('#mainTitle').textContent = name==='주 보기'?'주간 운영 상황판 · 2026년 6월 3주차':name==='월 보기'?'월간 전체 열람 상황판 · 2026년 6월':'일일 담당자 검토 화면 · 6월 17일';
+      $('#logText').textContent=`현재 화면: ${name} / ${$('#deptFilter').value==='all'?'전체 부서':$('#deptFilter').value} / 담당자 운영 모드`;
+    }));
+    ['deptFilter','statusFilter','searchInput'].forEach(id=>$('#'+id).addEventListener('input',renderSheet));
+    $('#btnMissing').addEventListener('click',()=>{$('#statusFilter').value='missing';renderSheet();toast('미제출 항목만 표시합니다.');});
+    $('#btnExport').addEventListener('click',()=>toast('현재 필터 기준 CSV 내보내기 동작 예시입니다.'));
+    $('#btnConfirmAll').addEventListener('click',()=>toast('충돌 3건이 남아 있어 전체 확정 전 확인이 필요합니다.'));
+    renderWeek(); renderMonth(); renderDay(); renderSheet(); renderQueue();
+  </script>
+</body>
+</html>

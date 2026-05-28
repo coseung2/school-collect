@@ -1,0 +1,90 @@
+{
+  "title": "2026학년도 1차 도서관 보관 도서구입 신청 목록(장량초등학교)",
+  "description": "도서명/저자/출판사/정가/수량/금액/비고를 행 단위로 입력하는 도서구입 신청 목록 양식입니다.",
+  "year": 2026,
+  "fields": [
+    {
+      "label": "도서 목록",
+      "fieldType": "table",
+      "required": true,
+      "order": 0,
+      "options": {
+        "minRows": 1,
+        "defaultRows": 20,
+        "maxRows": 150,
+        "pasteFromSpreadsheet": true,
+        "columns": [
+          {
+            "key": "order",
+            "label": "순서",
+            "type": "number",
+            "readonly": true,
+            "autoNumber": true,
+            "width": 72
+          },
+          {
+            "key": "title",
+            "label": "도서명",
+            "type": "text",
+            "required": true,
+            "width": 240
+          },
+          {
+            "key": "author",
+            "label": "저자",
+            "type": "text",
+            "required": false,
+            "width": 160
+          },
+          {
+            "key": "publisher",
+            "label": "출판사",
+            "type": "text",
+            "required": false,
+            "width": 140
+          },
+          {
+            "key": "listPrice",
+            "label": "정가",
+            "type": "money",
+            "required": false,
+            "width": 110
+          },
+          {
+            "key": "quantity",
+            "label": "수량",
+            "type": "number",
+            "required": true,
+            "defaultValue": 1,
+            "width": 80
+          },
+          {
+            "key": "amount",
+            "label": "금액",
+            "type": "money",
+            "formula": "listPrice * quantity",
+            "readonly": false,
+            "width": 110
+          },
+          {
+            "key": "note",
+            "label": "비고",
+            "type": "text",
+            "required": false,
+            "width": 140
+          }
+        ],
+        "summary": [
+          {
+            "label": "총권수",
+            "formula": "sum(quantity)"
+          },
+          {
+            "label": "총금액",
+            "formula": "sum(amount)"
+          }
+        ]
+      }
+    }
+  ]
+}
