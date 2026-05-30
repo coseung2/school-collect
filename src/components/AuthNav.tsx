@@ -40,7 +40,13 @@ export default function AuthNav() {
     return (
       <nav className="bg-white border-b border-gray-200 sticky top-0 z-10">
         <div className="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
-          <Link href="/login" className="text-lg font-bold text-gray-800">📋 수합</Link>
+          <div className="flex items-center gap-1 text-sm">
+            <Link href="/" className="text-lg font-bold text-gray-800 tracking-tight mr-3">📋 수합</Link>
+            <Link href="/cards" className="px-3 py-1.5 text-gray-600 hover:bg-gray-100">💳 카드지출</Link>
+            <Link href="/trips" className="px-3 py-1.5 text-gray-600 hover:bg-gray-100">🚗 출장여비</Link>
+            <Link href="/purchase" className="px-3 py-1.5 text-gray-600 hover:bg-gray-100">구입신청</Link>
+            <Link href="/mailmerge" className="px-3 py-1.5 text-gray-600 hover:bg-gray-100">메일머지</Link>
+          </div>
           <Link href="/login" className="text-sm text-blue-600 hover:underline">로그인</Link>
         </div>
       </nav>
@@ -67,6 +73,14 @@ export default function AuthNav() {
             <Link href={`/privacy/submit?dept=${encodeURIComponent(depts[0])}`} className="px-3 py-1.5 text-gray-600 hover:bg-gray-100">
               개인정보 입력
             </Link>
+          )}
+          <Link href="/cards" className="px-3 py-1.5 text-gray-600 hover:bg-gray-100">💳 카드지출</Link>
+          {isAdmin && (
+            <Link href="/cards/admin" className="px-3 py-1.5 text-gray-600 hover:bg-gray-100">⚙️</Link>
+          )}
+          <Link href="/trips" className="px-3 py-1.5 text-gray-600 hover:bg-gray-100">🚗 출장여비</Link>
+          {isAdmin && (
+            <Link href="/trips/admin" className="px-3 py-1.5 text-gray-600 hover:bg-gray-100">⚙️</Link>
           )}
           <Link href="/purchase" className="px-3 py-1.5 text-gray-600 hover:bg-gray-100">구입신청</Link>
           {isAdmin && (

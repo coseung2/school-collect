@@ -433,3 +433,119 @@ export function roleLabel(role: TeacherRole): string {
   }
   return map[role]
 }
+
+
+// ─── 카드 지출 관리 타입 ───
+
+export interface CardExpenseCard {
+  id: string
+  cardName: string
+  cardNumber: string
+  cardHolder: string
+  issuingBank: string
+  isActive: boolean
+  createdAt: string
+  updatedAt: string
+  currentHolder?: string  // join: 현재 수령자
+  expenseCount?: number
+  totalAmount?: number
+}
+
+export interface CardAssignment {
+  id: string
+  cardId: string
+  teacherName: string
+  takenAt: string
+  returnedAt: string | null
+  note: string
+  createdAt: string
+  card?: CardExpenseCard
+}
+
+export interface CardExpense {
+  id: string
+  cardId: string
+  assignmentId: string | null
+  teacherName: string
+  amount: number
+  merchant: string
+  merchantCategory: string
+  expenseDate: string
+  receiptImageUrl: string
+  memo: string
+  source: 'manual' | 'sms_webhook' | 'card_statement'
+  createdAt: string
+  updatedAt: string
+  card?: CardExpenseCard
+  assignment?: CardAssignment
+}
+
+export function expenseSourceLabel(s: string): string {
+  const map: Record<string, string> = {
+    manual: '수동',
+    sms_webhook: '문자',
+    card_statement: '명세서',
+  }
+  return map[s] || s
+}
+
+
+// ─── 출장여비 신청 타입 ───
+
+export interface TripDistanceStd {
+  id: string
+  region: string
+  baseDistance: number
+  roundTrip: boolean
+  createdAt: string
+}
+
+export interface TripExpenseRequest {
+  id: string
+  teacherName: string
+  department: string
+  destination: string
+  purpose: string
+  transport: 'car' | 'bus' | 'train' | 'etc'
+  tripDate: string
+  distance: number
+  fuelUnitPrice: number
+  fuelEfficiency: number
+  fuelCost: number
+  tollCost: number
+  parkingCost: number
+  otherCost: number
+  totalCost: number
+  receiptImageUrl: string
+  note: string
+  status: 'draft' | 'submitted' | 'approved' | 'rejected'
+  submittedAt: string | null
+  reviewedBy: string
+  reviewNote: string
+  createdAt: string
+  updatedAt: string
+}
+
+export function tripStatusLabel(s: string): string {
+  const map: Record<string, string> = {
+    draft: '작성중',
+    submitted: '제출',
+    approved: '승인',
+    rejected: '반려',
+  }
+  return map[s] || s
+}
+
+export function transportLabel(s: string): string {
+  const map: Record<string, string> = {
+    car: '자가용',
+    bus: '버스',
+    train: '기차',
+    etc: '기타',
+  }
+  return map[s] || s
+}
+
+export function fmtMoney(n: number): string {
+  return n.toLocaleString('ko-KR') + '원'
+}
