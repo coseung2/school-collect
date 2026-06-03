@@ -549,3 +549,183 @@ export function transportLabel(s: string): string {
 export function fmtMoney(n: number): string {
   return n.toLocaleString('ko-KR') + '원'
 }
+
+
+
+// ─── 교육과정 작성 모듈 타입 (v2) ───
+
+export interface CurriculumYear {
+  id: string
+  schoolId: string
+  year: number
+  status: 'draft' | 'editing' | 'validated' | 'confirmed' | 'archived'
+  isActive: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CurriculumClass {
+  id: string
+  curriculumYearId: string
+  grade: number
+  classNo: number
+  homeroomTeacherId: string | null
+  studentCount: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface TeacherSubjectAssignment {
+  id: string
+  curriculumYearId: string
+  teacherId: string
+  subjectId: string
+  grade: number | null
+  classNo: number | null
+  createdAt: string
+}
+
+export interface SchoolYear {
+  id: string
+  year: number
+  term: number
+  active: boolean
+  schoolId: string | null
+  createdAt: string
+}
+
+export interface Subject {
+  id: string
+  code: string
+  name: string
+  category: 'general' | 'creative' | 'discretionary' | 'elective'
+  createdAt: string
+}
+
+export interface CurriculumHour {
+  id: string
+  yearId: string
+  grade: number
+  subjectId: string
+  totalHours: number
+  term1Hours: number | null
+  term2Hours: number | null
+  requiredHours: number | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CalendarEvent {
+  id: string
+  yearId: string
+  date: string
+  type: 'holiday' | 'event' | 'break' | 'exam' | 'etc'
+  title: string
+  description: string | null
+  isSchoolDay: boolean
+  affectsTimetable: boolean
+  affectedPeriods: number[] | null
+  gradeScope: number[] | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface TimetableEntry {
+  id: string
+  yearId: string
+  sourceType: 'base' | 'semester'
+  term: number | null
+  grade: number
+  classNo: number
+  weekday: number
+  period: number
+  subjectId: string | null
+  teacherId: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface Lesson {
+  id: string
+  yearId: string
+  term: number
+  grade: number
+  classNo: number
+  subjectId: string
+  unit: string
+  lessonNo: number
+  content: string
+  startDate: string | null
+  endDate: string | null
+  period: number | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CurriculumProject {
+  id: string
+  yearId: string
+  term: number
+  grade: number
+  classNo: number
+  title: string
+  description: string | null
+  startDate: string | null
+  endDate: string | null
+  createdAt: string
+  updatedAt: string
+  subjects?: CurriculumProjectSubject[]
+}
+
+export interface CurriculumProjectSubject {
+  id: string
+  projectId: string
+  subjectId: string
+  lessonId: string | null
+  createdAt: string
+  subject?: Subject
+  lesson?: Lesson
+}
+
+export interface CrossTopic {
+  id: string
+  yearId: string
+  name: string
+  category: string
+  defaultHours: number
+  createdAt: string
+}
+
+export interface CrossTopicLog {
+  id: string
+  yearId: string
+  lessonId: string
+  topicId: string
+  hours: number
+  note: string | null
+  createdAt: string
+  topic?: CrossTopic
+  lesson?: Lesson
+}
+
+export interface ElectiveSubject {
+  id: string
+  yearId: string
+  name: string
+  grade: number | null
+  totalHours: number
+  subjectId: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ElectiveTimetable {
+  id: string
+  electiveId: string
+  grade: number
+  classNo: number
+  weekday: number
+  period: number
+  teacherId: string | null
+  createdAt: string
+}
