@@ -30,14 +30,113 @@
   --red-weak: #fce8e8;
   --yellow: #fff7d6;
   --white: #fff;
+
+  /* ─── 세리프 폰트 & 타이포그래피 강조 시스템 ─── */
+  /* 세리프: 인용문, 메시지, 발췌문용 (Noto Serif KR - Google Fonts 권장) */
+  --font-serif: "Noto Serif KR", "Nanum Myeongjo", "Batang", "Malgun Gothic", serif;
+  --font-sans: "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif;
+
+  /* font-weight 토큰: 대비 기반 강조용 */
+  --fw-normal: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;       /* 액센트/강조용 */
+  --fw-extrabold: 800;  /* 헤딩/숫자용 */
 }
 
 body {
   background: var(--warm-50);
   color: var(--ink);
-  font-family: "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif;
+  font-family: var(--font-sans);
   word-break: keep-all;
 }
+
+/* ─── 세리프 폰트 & 강조 유틸리티 ─── */
+
+/* 인용문, 메시지, 발췌문: 세리프 폰트 적용 */
+.quote,
+.message,
+.excerpt,
+blockquote,
+.q {
+  font-family: var(--font-serif);
+  font-weight: var(--fw-normal);
+  line-height: 1.7;
+  font-size: 1.05em;
+}
+
+/* 인용문 부호 스타일 */
+.quote::before,
+blockquote::before {
+  content: "「";
+  font-weight: var(--fw-bold);
+  color: var(--muted);
+  margin-right: 0.25em;
+}
+.quote::after,
+blockquote::after {
+  content: "」";
+  font-weight: var(--fw-bold);
+  color: var(--muted);
+  margin-left: 0.25em;
+}
+
+/* 메시지 버블 스타일 */
+.message {
+  display: inline-block;
+  padding: 0.75rem 1rem;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--blue);
+  border-radius: 0;
+}
+
+/* 액센트: font-weight 700 강조 */
+.accent,
+.strong,
+.em-phasis,
+b,
+strong {
+  font-weight: var(--fw-bold);
+  color: inherit;
+}
+
+/* 본문 내 강조된 단어/구문 (inline) */
+.em-inline {
+  font-weight: var(--fw-bold);
+}
+
+/* 대비 강조: 굵은 글씨 + 색상 조합 */
+.contrast-high {
+  font-weight: var(--fw-bold);
+  color: var(--ink);
+}
+.contrast-med {
+  font-weight: var(--fw-semibold);
+  color: var(--muted);
+}
+.contrast-low {
+  font-weight: var(--fw-normal);
+  color: var(--muted);
+}
+
+/* 숫자/통계 강조 */
+.num-emphasis,
+.stat-num {
+  font-family: var(--font-sans);
+  font-weight: var(--fw-extrabold);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+/* 헤딩 계층에 weight 대비 적용 */
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-sans);
+}
+h1 { font-weight: var(--fw-extrabold); }
+h2 { font-weight: var(--fw-bold); }
+h3 { font-weight: var(--fw-semibold); }
+h4 { font-weight: var(--fw-semibold); }
 
 /* ─── 문서형 디자인 시스템 (D안 문서장부형) ─── */
 
