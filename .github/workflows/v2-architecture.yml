@@ -68,11 +68,11 @@ jobs:
         shell: bash
         run: |
           echo "PNPM_LOCK_B64_BEGIN"
-          base64 -w 0 pnpm-lock.yaml
+          base64 -w 4000 pnpm-lock.yaml
           echo
           echo "PNPM_LOCK_B64_END"
           echo "CARGO_LOCK_B64_BEGIN"
-          base64 -w 0 Cargo.lock
+          base64 -w 4000 Cargo.lock
           echo
           echo "CARGO_LOCK_B64_END"
 
