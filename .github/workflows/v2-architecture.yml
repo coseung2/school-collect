@@ -1,0 +1,109 @@
+name: V2 Architecture
+
+on:
+  pull_request:
+    branches: [develop]
+    paths:
+      - "apps/app/**"
+      - "services/**"
+      - "crates/**"
+      - "migrations/**"
+      - "infra/**"
+      - "Cargo.toml"
+      - "rust-toolchain.toml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/v2-architecture.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust-and-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.13.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install JS dependencies
+        run: pnpm install --no-frozen-lockfile
+      - name: Typecheck v2 app
+        run: pnpm --filter @school-collect/app typecheck
+      - name: Build v2 web assets
+        run: pnpm --filter @school-collect/app build
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Rust format
+        run: cargo fmt --all -- --check
+      - name: Rust clippy
+        run: cargo clippy --workspace --exclude school-collect-app --all-targets -- -D warnings
+      - name: Rust tests
+        run: cargo test --workspace --exclude school-collect-app
+
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: school_collect
+          POSTGRES_USER: school_collect
+          POSTGRES_PASSWORD: school_collect_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U school_collect -d school_collect"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://school_collect:school_collect_ci@127.0.0.1:5432/school_collect
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run migrations
+        run: cargo run -p school-collect-migrator
+      - name: Verify API readiness
+        shell: bash
+        run: |
+          cargo run -p school-collect-api > /tmp/school-collect-api.log 2>&1 &
+          api_pid=$!
+          trap 'kill "$api_pid" || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:3000/ready >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/school-collect-api.log
+          exit 1
+
+  tauri-windows-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.13.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install JS dependencies
+        run: pnpm install --no-frozen-lockfile
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build native app without bundling
+        working-directory: apps/app
+        run: pnpm tauri build --no-bundle

@@ -1,0 +1,26 @@
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: school_collect
+      POSTGRES_USER: school_collect
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-school_collect_local_only}
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U school_collect -d school_collect"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - school_collect_pg:/var/lib/postgresql/data
+
+  nats:
+    image: nats:2.11-alpine
+    command: ["-js", "-m", "8222"]
+    ports:
+      - "127.0.0.1:4222:4222"
+      - "127.0.0.1:8222:8222"
+
+volumes:
+  school_collect_pg:
