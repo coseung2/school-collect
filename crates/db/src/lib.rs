@@ -1,7 +1,7 @@
 use anyhow::Context;
 use sqlx::{PgPool, postgres::PgPoolOptions};
 
-pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
+pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations/v2");
 
 pub async fn connect(database_url: &str) -> anyhow::Result<PgPool> {
     PgPoolOptions::new()
