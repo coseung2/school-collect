@@ -2,7 +2,7 @@ use std::{env, net::SocketAddr};
 
 use anyhow::Context;
 use axum::http::HeaderValue;
-use school_collect_api::{router, AppState};
+use school_collect_api::{AppState, router};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
