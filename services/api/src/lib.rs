@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use axum::{
+    Json, Router,
     extract::State,
     http::{HeaderValue, Method, StatusCode},
     response::IntoResponse,
     routing::get,
-    Json, Router,
 };
 use school_collect_contracts::ServiceStatus;
 use sqlx::PgPool;
@@ -18,10 +18,7 @@ pub struct AppState {
 }
 
 #[derive(OpenApi)]
-#[openapi(
-    paths(health, readiness),
-    components(schemas(ServiceStatus))
-)]
+#[openapi(paths(health, readiness), components(schemas(ServiceStatus)))]
 struct ApiDoc;
 
 pub fn router(state: AppState, cors_origin: HeaderValue) -> Router {
@@ -88,7 +85,12 @@ mod tests {
             AppState::default(),
             HeaderValue::from_static("http://127.0.0.1:1420"),
         )
-        .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
 
@@ -101,7 +103,12 @@ mod tests {
             AppState::default(),
             HeaderValue::from_static("http://127.0.0.1:1420"),
         )
-        .oneshot(Request::builder().uri("/ready").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/ready")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
 
