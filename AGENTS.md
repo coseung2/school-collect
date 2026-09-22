@@ -40,7 +40,7 @@ Tests may create data at runtime through factories/builders and must clean it up
 
 Domain-required reference data is allowed only when it is actual product data rather than demonstration content.
 
-If a legacy file may contain real work information or secrets, do not quote it into issues, logs, PR bodies, or documentation. Treat deletion/history rewriting as a separately authorized security operation.
+If a file from an earlier revision may contain real work information or secrets, do not quote it into issues, logs, PR bodies, or documentation. Treat history rewriting as a separately authorized security operation.
 
 ## 3. Trust boundaries
 
@@ -68,7 +68,7 @@ Keep dependency direction explicit.
 - `apps/app`: product client and narrow native adapters.
 - `packages/ui`: reusable design-system implementation; no business API calls.
 
-v2 migrations live under `migrations/v2/`. Do not make v2 migration execution consume legacy v1 migrations.
+Migrations live under `migrations/v2/` and are applied only by `services/migrator`.
 
 Prefer a modular monolith plus explicit workers over premature service splitting.
 
@@ -129,10 +129,10 @@ Do not perform any of the following as an incidental side effect:
 - credential rotation in external systems;
 - destructive data operations;
 - Git history rewrite/force push;
-- deletion of legacy business-source documents before the approved retention/security decision.
+- bulk deletion of tracked business-source documents without an explicit owner decision.
 
-## 9. Legacy v1
+## 9. Retired v1
 
-Existing v1 web files are legacy. Change them only when a task explicitly targets v1 maintenance or security cleanup.
+The v1 web application has been removed from this repository. There is no v1 source, schema, or configuration to maintain, and no compatibility layer to keep working.
 
-Do not copy legacy architecture into v2 merely for compatibility. Preserve useful domain knowledge, not retired infrastructure decisions.
+Do not reintroduce the retired stack or its infrastructure assumptions. Useful domain knowledge belongs in `docs/`, not in restored code. Past revisions remain reachable through Git history for reference only.
