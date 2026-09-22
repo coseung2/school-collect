@@ -8,7 +8,7 @@
 | --- | --- | --- | --- |
 | 1. 보안/기준점 | 현재 HEAD 정리 완료 | public 저장소 확인, PR #10 main merge, PR #12로 main -> develop 동기화 | credential 폐기/회전, 업무자료 history 처리, history rewrite 범위/실행 |
 | 2. 협업 | 진행 중 | develop/작업 브랜치/문서/초기 CI 구성 | main/develop 실제 보호 설정, 독립 리뷰 |
-| 3. 실행 기반 | 검증 중 | PR #11에서 TS/Rust/Postgres/Windows Tauri CI 성공 | lockfile final pin, frozen/locked CI, local tauri dev, mobile compatibility |
+| 3. 실행 기반 | 조건 충족 | lockfile 커밋 + frozen/locked CI, TS strict, fmt/clippy/test, PostgreSQL 18 migration, /health·/ready 분리 검증, Windows native build, local tauri dev | mobile target/plugin (미검증), dev/prod config 분리 완료 (Stage 6) |
 | 4. Figma | 시안 승인 | Design System/Product 파일과 핵심 UI 규칙 승인 | code mapping, interaction/accessibility detail, Library/Code Connect 후속 |
 | 5. Code DS/AppShell | 미착수 | 승인 Figma 기준 존재 | packages/ui, token mapping, 실제 AppShell |
 | 6. Auth/Data/Ops | 계획 | architecture 결정 | OIDC/RBAC/R2/NATS/SQLite/backup 실제 구현·검증 |
@@ -62,12 +62,20 @@ Draft PR #11: `feat/v2-architecture-foundation -> develop`
 
 PR #11 최신 head는 이후 문서/CI 작업으로 변경될 수 있으므로, merge 전 실제 head와 최신 CI를 다시 확인합니다.
 
-남은 Stage 3:
-- generated pnpm/Cargo lockfile을 repository source of truth로 최종 커밋
-- CI를 frozen/locked install로 전환
-- 실제 개발 머신 `tauri dev`
-- mobile target/plugin compatibility
-- 운영/개발 config separation 재검토
+Stage 3 완료 항목 (PR #11):
+- `pnpm-lock.yaml`(root + `apps/app` importer)과 `Cargo.lock`을 커밋해 source of truth로 확정
+- CI의 모든 install을 `pnpm install --frozen-lockfile` / cargo `--locked`로 전환
+- `--exclude school-collect-app` 제거. clippy `-D warnings`와 test가 Tauri crate 포함
+- 실제 개발 머신에서 `tauri dev` 확인. "School Collect" 창 표시, Vite dev server 200 응답
+- 실제 개발 머신에서 `tauri build --no-bundle` 성공
+- PostgreSQL 18 빈 DB 확인 → v2 migration → 결과 검증 → 재실행 idempotency를 CI에서 검증
+- production migration에 demo seed table이 생성되지 않음을 CI 검사로 보장
+- `/health`와 `/ready` 의미 분리를 실제로 검증. `DATABASE_URL` 누락은 기동 실패, 도달 불가 DB는 `/ready` 503, 도달 가능 시 200
+
+Stage 3 미검증 항목:
+- mobile target/plugin compatibility: Android SDK/NDK 부재, Rust target 미설치, iOS는 macOS 필요. CLI에 `android init`/`ios init`가 존재하는 것만 확인
+- dev/prod config 분리: `tauri.conf.json` CSP `connect-src`가 아직 `http://127.0.0.1:*` 허용. production 교체는 Stage 6
+- Linux/macOS native build 미검증
 
 ### Stage 4 Figma
 사용자가 현재 Figma 시안을 승인함.
@@ -93,7 +101,7 @@ PR #11 최신 head는 이후 문서/CI 작업으로 변경될 수 있으므로, 
 
 ## 아직 하지 않은 것
 
-- PR #9/#11 merge
+- PR #11 merge
 - Git history rewrite
 - 외부 credential 실제 폐기/회전
 - branch protection/ruleset 적용

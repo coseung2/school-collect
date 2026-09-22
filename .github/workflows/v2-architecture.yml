@@ -1,0 +1,182 @@
+name: V2 Architecture
+
+on:
+  pull_request:
+    branches: [develop]
+    paths:
+      - "apps/app/**"
+      - "services/**"
+      - "crates/**"
+      - "migrations/**"
+      - "infra/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "pnpm-workspace.yaml"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/v2-architecture.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust-and-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux system dependencies for the Tauri crate
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            patchelf
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.13.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install JS dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck v2 app
+        run: pnpm --filter @school-collect/app typecheck
+      - name: Build v2 web assets
+        run: pnpm --filter @school-collect/app build
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Rust format
+        run: cargo fmt --all -- --check
+      - name: Rust clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Rust tests
+        run: cargo test --workspace --locked
+
+  lockfiles-verified:
+    name: lockfiles-verified
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.13.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Committed pnpm lockfile must satisfy every workspace package
+        run: pnpm install --frozen-lockfile
+      - name: Committed Cargo.lock must be current
+        run: cargo metadata --locked --format-version 1 > /dev/null
+
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: school_collect
+          POSTGRES_USER: school_collect
+          POSTGRES_PASSWORD: school_collect_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U school_collect -d school_collect"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://school_collect:school_collect_ci@127.0.0.1:5432/school_collect
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Confirm the target database starts empty
+        run: |
+          test "$(psql "$DATABASE_URL" -tAc "select count(*) from information_schema.tables where table_schema='public'")" = "0"
+      - name: Run v2 migrations on the empty database
+        run: cargo run -p school-collect-migrator --locked
+      - name: Verify migration outcome and absence of demo seed rows
+        run: |
+          test "$(psql "$DATABASE_URL" -tAc "select schema_version from app_meta")" = "v2-bootstrap"
+          test "$(psql "$DATABASE_URL" -tAc "select count(*) from _sqlx_migrations where success")" = "1"
+          test "$(psql "$DATABASE_URL" -tAc "select count(*) from information_schema.tables where table_schema='public' and table_name in ('schools','users','tasks','submissions')")" = "0"
+      - name: Re-running migrations must be a no-op
+        run: cargo run -p school-collect-migrator --locked
+      - name: Missing configuration must fail startup instead of degrading
+        shell: bash
+        env:
+          DATABASE_URL: ""
+        run: |
+          if cargo run -p school-collect-api --locked > /tmp/api-noconfig.log 2>&1; then
+            echo "API started without DATABASE_URL; configuration errors must not be tolerated"
+            exit 1
+          fi
+          grep -q "DATABASE_URL is required" /tmp/api-noconfig.log
+      - name: Readiness must be false while PostgreSQL is unreachable
+        shell: bash
+        env:
+          DATABASE_URL: postgres://school_collect:school_collect_ci@127.0.0.1:1/school_collect
+          APP_BIND_ADDR: 127.0.0.1:3001
+        run: |
+          cargo run -p school-collect-api --locked > /tmp/api-nodb.log 2>&1 &
+          api_pid=$!
+          trap 'kill "$api_pid" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:3001/health >/dev/null; then break; fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:3001/health >/dev/null
+          code=$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:3001/ready)
+          if [ "$code" != "503" ]; then
+            echo "expected /ready 503 while PostgreSQL is unreachable, got $code"
+            cat /tmp/api-nodb.log
+            exit 1
+          fi
+      - name: Readiness must be true once PostgreSQL is reachable
+        shell: bash
+        run: |
+          cargo run -p school-collect-api --locked > /tmp/api.log 2>&1 &
+          api_pid=$!
+          trap 'kill "$api_pid" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:3000/ready >/dev/null; then
+              curl --fail --silent http://127.0.0.1:3000/health >/dev/null
+              curl --fail --silent http://127.0.0.1:3000/openapi.json >/dev/null
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/api.log
+          exit 1
+
+  tauri-windows-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.13.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install JS dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build native app without bundling
+        working-directory: apps/app
+        run: pnpm tauri build --no-bundle

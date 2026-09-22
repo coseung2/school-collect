@@ -1,0 +1,8 @@
+[package]
+name = "school-collect-application"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+school-collect-domain = { path = "../domain" }

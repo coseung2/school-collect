@@ -1,0 +1,35 @@
+[workspace]
+resolver = "2"
+members = [
+  "apps/app/src-tauri",
+  "services/api",
+  "services/worker",
+  "services/migrator",
+  "crates/domain",
+  "crates/application",
+  "crates/db",
+  "crates/auth",
+  "crates/contracts",
+  "crates/observability",
+]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2024"
+license = "UNLICENSED"
+
+[workspace.dependencies]
+anyhow = "1"
+axum = "0.8"
+http = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "uuid", "migrate", "macros"] }
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net", "time"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+utoipa = { version = "5", features = ["axum_extras", "uuid"] }
+uuid = { version = "1", features = ["v7", "serde"] }

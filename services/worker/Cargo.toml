@@ -1,0 +1,11 @@
+[package]
+name = "school-collect-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+school-collect-observability = { path = "../../crates/observability" }
+tokio = { workspace = true }
+tracing = { workspace = true }
