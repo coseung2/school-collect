@@ -25,8 +25,6 @@ The target stack is:
 - private R2
 - SQLite only for local draft/cache/outbox responsibilities
 
-The retired Supabase project is not part of v2. Do not reconnect it, restore it, provision a replacement Supabase project, or make new v2 code depend on Supabase.
-
 ## 2. Data policy
 
 The repository and production migrations must stay free of persistent demo data.
@@ -135,6 +133,6 @@ Do not perform any of the following as an incidental side effect:
 
 ## 9. Legacy v1
 
-Existing Next.js/Supabase files are legacy. Change them only when a task explicitly targets v1 maintenance or security cleanup.
+Existing v1 web files are legacy. Change them only when a task explicitly targets v1 maintenance or security cleanup.
 
 Do not copy legacy architecture into v2 merely for compatibility. Preserve useful domain knowledge, not retired infrastructure decisions.
