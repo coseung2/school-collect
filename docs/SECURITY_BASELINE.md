@@ -11,8 +11,8 @@ repository는 **public 유지**가 사용자 의도입니다. 보안 목표는 p
 값 자체는 이 문서에 기록하지 않습니다.
 
 확인된 항목:
-- 과거 `.env.example`에 실제처럼 보이는 Supabase endpoint/anon 계열/service-role 계열/DB URL 형태 값
-- `supabase/.temp`에 linked project metadata, pooler URL, project ref 등 local CLI state
+- 과거 `.env.example`에 실제처럼 보이는 외부 서비스 endpoint/token/DB URL 형태 값
+- legacy local CLI state에 linked project metadata, connection URL, project reference 정보
 - `_agent_작업` 아래 실제 업무에서 생성된 spreadsheet/CSV/Google Docs·Sheets source metadata 및 derived artifact
 - 일부 업무 artifact에 학교 운영정보/교직원 이름이 포함될 가능성 또는 실제 확인 사례
 
@@ -22,7 +22,7 @@ repository는 **public 유지**가 사용자 의도입니다. 보안 목표는 p
 
 hotfix PR #10에서:
 - legacy `.env.example` 값 제거
-- `supabase/.temp/*` 제거
+- legacy local CLI state 제거
 - `tsconfig.tsbuildinfo` 제거
 - `.gitignore` 강화
 
