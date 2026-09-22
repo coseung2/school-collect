@@ -10,8 +10,10 @@ on:
       - "migrations/**"
       - "infra/**"
       - "Cargo.toml"
+      - "Cargo.lock"
       - "rust-toolchain.toml"
       - "pnpm-workspace.yaml"
+      - "pnpm-lock.yaml"
       - ".github/workflows/v2-architecture.yml"
   workflow_dispatch:
 
@@ -31,7 +33,7 @@ jobs:
           node-version: 22
           cache: pnpm
       - name: Install JS dependencies
-        run: pnpm install --no-frozen-lockfile
+        run: pnpm install --frozen-lockfile
       - name: Typecheck v2 app
         run: pnpm --filter @school-collect/app typecheck
       - name: Build v2 web assets
@@ -44,11 +46,12 @@ jobs:
       - name: Rust format
         run: cargo fmt --all -- --check
       - name: Rust clippy
-        run: cargo clippy --workspace --exclude school-collect-app --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Rust tests
-        run: cargo test --workspace --exclude school-collect-app
+        run: cargo test --workspace --locked
 
-  lockfiles-export:
+  lockfiles-verified:
+    name: lockfiles-verified
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -58,23 +61,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: pnpm
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-      - name: Generate reproducible lockfiles
-        run: |
-          pnpm install --lockfile-only --no-frozen-lockfile
-          cargo generate-lockfile
-      - name: Export lockfiles for repository commit
-        shell: bash
-        run: |
-          echo "PNPM_LOCK_B64_BEGIN"
-          base64 -w 4000 pnpm-lock.yaml
-          echo
-          echo "PNPM_LOCK_B64_END"
-          echo "CARGO_LOCK_B64_BEGIN"
-          base64 -w 4000 Cargo.lock
-          echo
-          echo "CARGO_LOCK_B64_END"
+      - name: Committed pnpm lockfile must satisfy every workspace package
+        run: pnpm install --frozen-lockfile
+      - name: Committed Cargo.lock must be current
+        run: cargo metadata --locked --format-version 1 > /dev/null
 
   postgres:
     runs-on: ubuntu-latest
@@ -99,21 +92,53 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Run migrations
-        run: cargo run -p school-collect-migrator
-      - name: Verify API readiness
+      - name: Confirm the target database starts empty
+        run: |
+          test "$(psql "$DATABASE_URL" -tAc "select count(*) from information_schema.tables where table_schema='public'")" = "0"
+      - name: Run v2 migrations on the empty database
+        run: cargo run -p school-collect-migrator --locked
+      - name: Verify migration outcome and absence of demo seed rows
+        run: |
+          test "$(psql "$DATABASE_URL" -tAc "select schema_version from app_meta")" = "v2-bootstrap"
+          test "$(psql "$DATABASE_URL" -tAc "select count(*) from _sqlx_migrations where success")" = "1"
+          test "$(psql "$DATABASE_URL" -tAc "select count(*) from information_schema.tables where table_schema='public' and table_name in ('schools','users','tasks','submissions')")" = "0"
+      - name: Re-running migrations must be a no-op
+        run: cargo run -p school-collect-migrator --locked
+      - name: Readiness must be false before the API can reach PostgreSQL
+        shell: bash
+        env:
+          DATABASE_URL: ""
+          APP_BIND_ADDR: 127.0.0.1:3001
+        run: |
+          cargo run -p school-collect-api --locked > /tmp/api-nodb.log 2>&1 &
+          api_pid=$!
+          trap 'kill "$api_pid" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:3001/health >/dev/null; then break; fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:3001/health >/dev/null
+          code=$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:3001/ready)
+          if [ "$code" != "503" ]; then
+            echo "expected /ready 503 without PostgreSQL, got $code"
+            cat /tmp/api-nodb.log
+            exit 1
+          fi
+      - name: Readiness must be true once PostgreSQL is reachable
         shell: bash
         run: |
-          cargo run -p school-collect-api > /tmp/school-collect-api.log 2>&1 &
+          cargo run -p school-collect-api --locked > /tmp/api.log 2>&1 &
           api_pid=$!
-          trap 'kill "$api_pid" || true' EXIT
-          for attempt in {1..30}; do
+          trap 'kill "$api_pid" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do
             if curl --fail --silent http://127.0.0.1:3000/ready >/dev/null; then
+              curl --fail --silent http://127.0.0.1:3000/health >/dev/null
+              curl --fail --silent http://127.0.0.1:3000/openapi.json >/dev/null
               exit 0
             fi
             sleep 1
           done
-          cat /tmp/school-collect-api.log
+          cat /tmp/api.log
           exit 1
 
   tauri-windows-smoke:
@@ -128,7 +153,7 @@ jobs:
           node-version: 22
           cache: pnpm
       - name: Install JS dependencies
-        run: pnpm install --no-frozen-lockfile
+        run: pnpm install --frozen-lockfile
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2

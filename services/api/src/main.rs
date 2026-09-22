@@ -8,13 +8,12 @@ use school_collect_api::{AppState, router};
 async fn main() -> anyhow::Result<()> {
     school_collect_observability::init("api");
 
-    let pool = match env::var("DATABASE_URL") {
-        Ok(database_url) => Some(school_collect_db::connect(&database_url).await?),
-        Err(_) => {
-            tracing::warn!("DATABASE_URL is unset; API will start but readiness will fail");
-            None
-        }
-    };
+    // Missing configuration is an operator error, not a degraded runtime mode.
+    let database_url = env::var("DATABASE_URL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .context("DATABASE_URL is required to run the API")?;
+    let pool = school_collect_db::lazy_pool(&database_url)?;
 
     let cors_origin = env::var("APP_CORS_ORIGIN")
         .unwrap_or_else(|_| "http://127.0.0.1:1420".to_owned())

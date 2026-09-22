@@ -25,6 +25,7 @@ supabase/.temp/
 .data/
 .local/
 tmp/
+apps/app/src-tauri/gen/schemas/
 *.sqlite
 *.sqlite3
 *.sqlite-wal

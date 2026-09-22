@@ -12,9 +12,14 @@ use sqlx::PgPool;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use utoipa::OpenApi;
 
-#[derive(Clone, Default)]
+/// Shared request state.
+///
+/// The pool is created eagerly from configuration but connects lazily, so a
+/// temporarily unreachable database is a readiness problem rather than a
+/// startup problem.
+#[derive(Clone)]
 pub struct AppState {
-    pub pool: Option<PgPool>,
+    pub pool: PgPool,
 }
 
 #[derive(OpenApi)]
@@ -56,10 +61,7 @@ async fn health() -> Json<ServiceStatus> {
     )
 )]
 async fn readiness(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let ready = match &state.pool {
-        Some(pool) => school_collect_db::ping(pool).await.is_ok(),
-        None => false,
-    };
+    let ready = school_collect_db::ping(&state.pool).await.is_ok();
 
     let body = ServiceStatus {
         status: if ready { "ready" } else { "not_ready" },
@@ -79,10 +81,21 @@ mod tests {
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
 
+    /// Points at a closed loopback port so readiness fails without needing a
+    /// live database or any seeded data.
+    fn unreachable_state() -> AppState {
+        AppState {
+            pool: school_collect_db::lazy_pool(
+                "postgres://unused:unused@127.0.0.1:1/school_collect_absent",
+            )
+            .expect("connection string is valid"),
+        }
+    }
+
     #[tokio::test]
     async fn health_does_not_depend_on_postgres() {
         let response = router(
-            AppState::default(),
+            unreachable_state(),
             HeaderValue::from_static("http://127.0.0.1:1420"),
         )
         .oneshot(
@@ -100,7 +113,7 @@ mod tests {
     #[tokio::test]
     async fn readiness_fails_without_postgres() {
         let response = router(
-            AppState::default(),
+            unreachable_state(),
             HeaderValue::from_static("http://127.0.0.1:1420"),
         )
         .oneshot(
