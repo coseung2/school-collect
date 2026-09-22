@@ -1,6 +1,36 @@
+# Dependencies and generated output
 node_modules/
 .next/
-.env.local
-.env
+dist/
+coverage/
+*.tsbuildinfo
 *.log
-.vercel
+.vercel/
+target/
+__pycache__/
+*.py[cod]
+
+# Environment and local credentials
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.p12
+*.pfx
+*.key
+
+# Local service / native state
+supabase/.temp/
+.data/
+.local/
+tmp/
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+.DS_Store
+Thumbs.db
+
+# Legacy source documents: already tracked files require a separate audit.
+_agent_작업/**/source_*
