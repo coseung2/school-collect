@@ -6,7 +6,7 @@
 
 School Collect는 학교의 반복 행정업무를 수합·검증·자동화하기 위한 **오픈소스 업무 플랫폼**입니다. v2는 처음부터 운영 환경을 전제로 설계하며, Tauri 데스크톱 앱을 우선 제공하고 이후 모바일·웹 확장을 고려합니다.
 
-> 이 저장소의 v2 전환은 진행 중입니다. 기존 `src/`의 기존 웹 코드는 legacy v1이며, v2의 최종 구조를 의미하지 않습니다.
+> v1 웹 애플리케이션은 이 저장소에서 제거되었습니다. 현재 추적되는 코드는 모두 v2이며, 유지해야 할 v1 코드나 호환 계층은 없습니다.
 
 ### 현재 상태
 
@@ -14,12 +14,13 @@ School Collect는 학교의 반복 행정업무를 수합·검증·자동화하�
 | --- | --- |
 | 공개 저장소 | Public / 오픈소스 운영 방향 |
 | Figma Design System | 승인 완료 |
-| Tauri + React/Vite | 실행 기반 PR #11에서 CI 검증 완료 |
-| Rust/Axum API | 실행 기반 PR #11에서 CI 검증 완료 |
-| PostgreSQL 18 | v2 migration + readiness CI 검증 완료 |
+| Tauri + React/Vite | 실행 기반 CI 검증 완료 |
+| Rust/Axum API | 실행 기반 CI 검증 완료 |
+| PostgreSQL 18 | migration + readiness CI 검증 완료 |
 | 인증/권한 | 설계 확정, 실제 OIDC/RBAC 구현은 후속 단계 |
 | Collect | production-grade reference implementation 예정 |
-| 보안 정리 | legacy credential/업무자료 history 정리 진행 중 |
+| 보안 정리 | 추적 파일 정리 완료. Git history 정리는 별도 판단 |
+| Branch protection | main/develop 적용 완료 |
 
 자세한 현재 상태는 [docs/STATUS.md](docs/STATUS.md)를 봅니다.
 
@@ -131,7 +132,7 @@ feat/* / fix/* / refactor/* / chore/* / docs/*
 
 이 저장소는 public 오픈소스 운영을 전제로 합니다. 따라서 “public이므로 숨긴다”가 아니라 **public에 있어도 되는 코드와 문서만 남기는 것**이 기준입니다.
 
-legacy history에 포함된 실제처럼 보이는 credential과 업무 원본/파생 자료는 별도 보안 정리 대상입니다. 값 자체를 Issue, PR, 문서에 재게시하지 않습니다. 자세한 내용은 [SECURITY.md](SECURITY.md)를 봅니다.
+과거 revision에 포함된 credential 형태 값과 업무 원본/파생 자료는 추적 파일에서 제거되었지만 Git history에는 남아 있습니다. 값 자체를 Issue, PR, 문서에 재게시하지 않습니다. 자세한 내용은 [SECURITY.md](SECURITY.md)를 봅니다.
 
 라이선스는 별도 결정 후 저장소에 명시합니다. 라이선스 파일이 추가되기 전에는 사용·재배포 조건이 확정되었다고 가정하지 마세요.
 
@@ -141,7 +142,7 @@ legacy history에 포함된 실제처럼 보이는 credential과 업무 원본/�
 
 School Collect is an **open-source work platform** for collecting, validating, and automating recurring school administration workflows. v2 is designed from the start as a production system, with a desktop-first Tauri application and room for later mobile and web expansion.
 
-> The v2 transition is still in progress. The existing web application is legacy v1 and does not define the v2 architecture.
+> The v1 web application has been removed from this repository. Everything tracked here is v2; there is no v1 code or compatibility layer to maintain.
 
 ### Current status
 
@@ -149,12 +150,13 @@ School Collect is an **open-source work platform** for collecting, validating, a
 | --- | --- |
 | Repository | Public, intended for open-source development |
 | Figma Design System | Approved |
-| Tauri + React/Vite | Executable foundation validated in PR #11 CI |
-| Rust/Axum API | Executable foundation validated in PR #11 CI |
-| PostgreSQL 18 | v2 migrations and readiness validated in CI |
+| Tauri + React/Vite | Executable foundation validated in CI |
+| Rust/Axum API | Executable foundation validated in CI |
+| PostgreSQL 18 | Migrations and readiness validated in CI |
 | Authentication/authorization | Architecture decided; OIDC/RBAC implementation follows |
 | Collect | Planned as a production-grade reference implementation |
-| Security cleanup | Legacy credentials and work artifacts in Git history are being addressed |
+| Security cleanup | Tracked files cleaned; Git history remains a separate decision |
+| Branch protection | Enabled on main and develop |
 
 See [docs/STATUS.md](docs/STATUS.md) for the current verified state.
 

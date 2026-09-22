@@ -1,12 +1,36 @@
-# main / develop 보호 설정 체크리스트
+# main / develop 보호 설정
 
 기준일: 2026-09-22.
 
-## 현재 확인 상태
+## 현재 적용 상태
 
-- repository rulesets API 조회 결과: `[]`
-- classic branch protection read: 현재 연결의 administration 권한 부족으로 403
-- 따라서 main/develop 보호가 활성화되었다고 주장하지 않음
+classic branch protection을 `main`과 `develop`에 적용하고 API 조회로 확인했습니다.
+
+| 항목 | main | develop |
+| --- | --- | --- |
+| pull request 필수 | 적용 | 적용 |
+| stale approval dismissal | 적용 | 적용 |
+| conversation resolution 필수 | 적용 | 적용 |
+| required status check | `repository-checks` | `repository-checks` |
+| 최신 base 강제 (strict) | 적용 | 미적용 |
+| 관리자에게도 적용 (enforce_admins) | 적용 | 적용 |
+| force push | 차단 | 차단 |
+| branch 삭제 | 차단 | 차단 |
+| linear history 강제 | 미적용 | 미적용 |
+
+`develop`에 strict를 적용하지 않은 이유는 main -> develop 동기화가 merge commit이고, 다수 PR이 동시에 열려 있을 때 불필요한 재빌드를 강제하지 않기 위해서입니다. `main`은 승격 대상이므로 strict를 적용합니다.
+
+linear history는 두 브랜치 모두 강제하지 않습니다. develop -> main 승격과 main -> develop 동기화가 merge commit이기 때문입니다.
+
+### required check 선정 기준
+
+`repository-checks`만 등록했습니다. 이 job은 `foundation.yml`에 있고 모든 PR에서 실행되므로 required로 안전합니다.
+
+`V2 Architecture` workflow의 job(`rust-and-web`, `postgres`, `lockfiles-verified`, `tauri-windows-smoke`)은 `paths` 필터를 사용합니다. path 조건에 맞지 않는 PR에서는 아예 실행되지 않으므로, required로 등록하면 문서만 수정한 PR이 영구 대기 상태가 됩니다. 이 job들을 required로 만들려면 먼저 path 필터를 제거하거나 skip 시 성공을 보고하는 경로를 만들어야 합니다.
+
+### 미적용 항목
+
+approval 최소 개수는 0입니다. 현재 저장소는 단독 운영이라 1 이상으로 두면 본인 PR을 병합할 수 없습니다. 협업자가 추가되면 1 이상과 code owner review를 함께 올려야 합니다.
 
 문서, CODEOWNERS, CI workflow는 GitHub 서버의 실제 보호 설정을 대신하지 않습니다.
 
@@ -45,16 +69,20 @@ promotion은 merge commit을 사용합니다. exact develop candidate SHA의 통
 
 ## 적용 검증
 
-- [ ] main 직접 push 차단
-- [ ] develop 직접 push 차단
-- [ ] feature -> main 차단
-- [ ] required CI 실패/대기 상태 merge 차단
-- [ ] code-owner path review 동작
-- [ ] 작성자 자기 승인만으로 merge 불가
-- [ ] force push 차단
-- [ ] branch deletion 차단
-- [ ] develop -> main merge commit
-- [ ] main -> develop sync
-- [ ] hotfix -> main -> develop 경로 검증
+API 조회로 확인한 항목:
 
-연결된 GitHub App이 metadata상 admin으로 보여도 branch administration API 권한이 없을 수 있습니다. 실제 UI/관리 권한으로 설정한 결과를 체크리스트에 반영해야 합니다.
+- [x] main pull request 필수 + force push/삭제 차단
+- [x] develop pull request 필수 + force push/삭제 차단
+- [x] required status check `repository-checks` 등록
+- [x] enforce_admins로 관리자 bypass 차단
+- [x] conversation resolution 필수
+- [x] develop -> main merge commit 경로 (PR #12에서 실제 수행)
+- [x] main -> develop sync 경로 (PR #12에서 실제 수행)
+
+아직 실제 상황으로 검증하지 않은 항목:
+
+- [ ] required CI 실패/대기 상태에서 merge 차단 동작
+- [ ] feature -> main 직접 PR 차단 (현재 protection은 base 브랜치를 제한하지 않으므로 규칙으로만 운영)
+- [ ] code-owner path review 동작 (require_code_owner_reviews 미적용)
+- [ ] 작성자 자기 승인만으로 merge 불가 (approval 0이라 현재 해당 없음)
+- [ ] hotfix -> main -> develop 경로

@@ -6,8 +6,8 @@
 
 | 단계 | 상태 | 확인된 내용 | 남은 게이트 |
 | --- | --- | --- | --- |
-| 1. 보안/기준점 | 현재 HEAD 정리 완료 | public 저장소 확인, PR #10 main merge, PR #12로 main -> develop 동기화 | credential 폐기/회전, 업무자료 history 처리, history rewrite 범위/실행 |
-| 2. 협업 | 진행 중 | develop/작업 브랜치/문서/초기 CI 구성 | main/develop 실제 보호 설정, 독립 리뷰 |
+| 1. 보안/기준점 | 추적 파일 정리 완료 | public 저장소 확인, PR #10 main merge, PR #12 동기화, v1 애플리케이션·업무자료 추적 제거 | credential 폐기/회전, history rewrite 범위/실행 |
+| 2. 협업 | 보호 적용 완료 | develop/작업 브랜치/문서/CI 구성, main·develop branch protection 적용 및 API 확인 | 협업자 추가 시 approval >= 1 및 code owner review, 독립 리뷰 |
 | 3. 실행 기반 | 조건 충족 | lockfile 커밋 + frozen/locked CI, TS strict, fmt/clippy/test, PostgreSQL 18 migration, /health·/ready 분리 검증, Windows native build, local tauri dev | mobile target/plugin (미검증), dev/prod config 분리 완료 (Stage 6) |
 | 4. Figma | 시안 승인 | Design System/Product 파일과 핵심 UI 규칙 승인 | code mapping, interaction/accessibility detail, Library/Code Connect 후속 |
 | 5. Code DS/AppShell | 미착수 | 승인 Figma 기준 존재 | packages/ui, token mapping, 실제 AppShell |
@@ -19,50 +19,28 @@
 ### Public repository / security
 - repository visibility: public
 - public 유지가 사용자 의도임
-- legacy `.env.example` 과거 이력에서 실제처럼 보이는 외부 서비스/DB credential 형태 값 확인
-- legacy local CLI state에 project connection metadata 추적 이력 확인
+- 과거 `.env.example` 이력에서 실제처럼 보이는 외부 서비스/DB credential 형태 값 확인
+- 과거 local CLI state에 project connection metadata 추적 이력 확인
 - `_agent_작업` 아래 실제 업무에서 생성된 source/derived artifact 존재 확인
 - 현재 HEAD 노출 축소용 hotfix PR #10이 main에 merge됨 (merge commit `3a7acd9`)
 - PR #12로 main -> develop 동기화 완료 (merge commit)
-- PR #10은 과거 Git object를 제거하지 않으므로 history 정리는 별도
+- 이후 소유자 결정으로 v1 웹 애플리케이션과 `_agent_작업` 업무자료를 추적 대상에서 전부 제거. 현재 HEAD에는 실제 업무자료가 없음
+- 추적 제거는 과거 Git object를 삭제하지 않으므로 history 정리는 여전히 별도 작업
 
 credential 값 자체는 문서에 기록하지 않습니다.
 
 ### Git protection
-- repository rulesets 조회 결과: 비어 있음
-- classic branch protection API는 연결 권한상 403으로 확인/적용 불가
-- 따라서 main/develop 보호가 활성화되었다고 주장하지 않음
+classic branch protection을 `main`과 `develop`에 적용하고 API 조회로 확인했습니다. pull request 필수, stale approval dismissal, conversation resolution, required check `repository-checks`, force push/삭제 차단, enforce_admins가 두 브랜치 모두 활성입니다. `main`만 strict(최신 base 강제)를 적용했습니다.
 
-### Legacy v1 Vercel Preview 실패 (기존 문제)
-모든 PR에서 `Vercel` check가 실패 상태로 보입니다. 이는 v2 작업의 회귀가 아닙니다.
+approval 최소 개수는 0입니다. 단독 운영 상태에서 1 이상이면 본인 PR을 병합할 수 없기 때문이며, 협업자 추가 시 함께 올려야 합니다. 자세한 내용은 [BRANCH_PROTECTION.md](BRANCH_PROTECTION.md)를 봅니다.
 
-- legacy v1 `src/lib/supabase.ts`가 module 초기화 시점에 `NEXT_PUBLIC_SUPABASE_URL`을 요구합니다.
-- Vercel 프로젝트에는 해당 변수가 Production 환경에만 등록되어 있어 Preview 빌드에서 값이 없습니다.
-- `origin/main`을 그대로 체크아웃해 `pnpm install --frozen-lockfile` 후 `pnpm run build`를 실행하면 동일하게 `Error: supabaseUrl is required.`로 실패하는 것을 확인했습니다.
-- 해결은 legacy v1 유지보수 또는 v1 Vercel 연동 종료 결정에 속하며 Stage 1~3 범위가 아닙니다.
+### v1 Vercel 연동
+v1 웹 애플리케이션 제거와 함께 Vercel Preview 빌드를 깨뜨리던 원인(`supabaseUrl is required.`)도 저장소에서 사라졌습니다. Vercel 프로젝트 연결과 Production 환경변수는 저장소 밖 설정이므로, 연결 해제 또는 프로젝트 정리는 소유자가 Vercel 쪽에서 별도로 수행해야 합니다.
 
 ### Stage 3
-Draft PR #11: `feat/v2-architecture-foundation -> develop`
+PR #11이 develop에 squash merge되었습니다 (`4cadf7e`).
 
-검증된 내용:
-- React/Vite foundation
-- Tauri 2 Windows native build smoke
-- Rust/Axum API
-- Rust workspace
-- PostgreSQL 18 v2 migration
-- `/health` / `/ready`
-- generated OpenAPI
-- rustfmt
-- clippy `-D warnings`
-- Rust tests
-- TypeScript typecheck/build
-- PostgreSQL migration + readiness
-
-최신 확인한 `V2 Architecture` CI run `35555121713`은 모든 job 성공.
-
-PR #11 최신 head는 이후 문서/CI 작업으로 변경될 수 있으므로, merge 전 실제 head와 최신 CI를 다시 확인합니다.
-
-Stage 3 완료 항목 (PR #11):
+Stage 3 완료 항목:
 - `pnpm-lock.yaml`(root + `apps/app` importer)과 `Cargo.lock`을 커밋해 source of truth로 확정
 - CI의 모든 install을 `pnpm install --frozen-lockfile` / cargo `--locked`로 전환
 - `--exclude school-collect-app` 제거. clippy `-D warnings`와 test가 Tauri crate 포함
@@ -101,10 +79,9 @@ Stage 3 미검증 항목:
 
 ## 아직 하지 않은 것
 
-- PR #11 merge
 - Git history rewrite
 - 외부 credential 실제 폐기/회전
-- branch protection/ruleset 적용
+- Vercel 프로젝트 연결 해제/정리 (저장소 밖 설정)
 - production infra 생성/배포
 - ZITADEL/R2/NATS production 연결
 - production DB migration

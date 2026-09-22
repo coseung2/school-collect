@@ -1,11 +1,9 @@
 # Dependencies and generated output
 node_modules/
-.next/
 dist/
 coverage/
 *.tsbuildinfo
 *.log
-.vercel/
 target/
 __pycache__/
 *.py[cod]
@@ -21,7 +19,6 @@ __pycache__/
 *.key
 
 # Local service / native state
-supabase/.temp/
 .data/
 .local/
 tmp/
@@ -32,6 +29,3 @@ apps/app/src-tauri/gen/schemas/
 *.sqlite-shm
 .DS_Store
 Thumbs.db
-
-# Legacy source documents: already tracked files require a separate audit.
-_agent_작업/**/source_*
