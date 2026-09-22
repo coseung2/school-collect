@@ -19,8 +19,8 @@
 ### Public repository / security
 - repository visibility: public
 - public 유지가 사용자 의도임
-- legacy `.env.example` 과거 이력에서 실제처럼 보이는 Supabase/DB credential 형태 값 확인
-- legacy `supabase/.temp`에 project connection metadata 추적 이력 확인
+- legacy `.env.example` 과거 이력에서 실제처럼 보이는 외부 서비스/DB credential 형태 값 확인
+- legacy local CLI state에 project connection metadata 추적 이력 확인
 - `_agent_작업` 아래 실제 업무에서 생성된 source/derived artifact 존재 확인
 - 현재 HEAD 노출 축소용 hotfix PR #10 열림
 - PR #10은 과거 Git object를 제거하지 않으므로 history 정리는 별도
