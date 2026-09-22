@@ -1,0 +1,31 @@
+name: Foundation
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: foundation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repository-checks:
+    name: repository-checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout reviewed revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test repository rules
+        run: python3 -m unittest discover -s scripts/tests -v
+      - name: Check tracked files and selected credential patterns
+        run: python3 scripts/check_repository.py
+      - name: Check PR direction
+        run: python3 scripts/check_branch_policy.py
