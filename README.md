@@ -6,7 +6,7 @@
 
 School Collect는 학교의 반복 행정업무를 수합·검증·자동화하기 위한 **오픈소스 업무 플랫폼**입니다. v2는 처음부터 운영 환경을 전제로 설계하며, Tauri 데스크톱 앱을 우선 제공하고 이후 모바일·웹 확장을 고려합니다.
 
-> 이 저장소의 v2 전환은 진행 중입니다. 기존 `src/`의 Next.js/Supabase 코드는 legacy v1이며, v2의 최종 구조를 의미하지 않습니다. 폐기된 Supabase 프로젝트는 v2에서 사용하지 않습니다.
+> 이 저장소의 v2 전환은 진행 중입니다. 기존 `src/`의 기존 웹 코드는 legacy v1이며, v2의 최종 구조를 의미하지 않습니다.
 
 ### 현재 상태
 
@@ -141,7 +141,7 @@ legacy history에 포함된 실제처럼 보이는 credential과 업무 원본/�
 
 School Collect is an **open-source work platform** for collecting, validating, and automating recurring school administration workflows. v2 is designed from the start as a production system, with a desktop-first Tauri application and room for later mobile and web expansion.
 
-> The v2 transition is still in progress. The existing Next.js/Supabase code under the legacy application is v1 and does not define the v2 architecture. The retired Supabase project is not part of v2.
+> The v2 transition is still in progress. The existing web application is legacy v1 and does not define the v2 architecture.
 
 ### Current status
 
