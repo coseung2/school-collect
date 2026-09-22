@@ -35,8 +35,6 @@ v2는 MVP나 임시 프로토타입을 목표로 하지 않습니다. 각 단계
 - history rewrite 필요 범위 확정
 - rewrite 시 백업/협업자 재동기화/공개 캐시 한계 기록
 
-Supabase는 폐기된 legacy 인프라입니다. 복구/재연결하지 않습니다.
-
 production용 seed에 demo data를 넣지 않습니다. 테스트 데이터는 테스트 실행 중 생성하고 종료 시 제거합니다.
 
 ## 2. 공동작업
