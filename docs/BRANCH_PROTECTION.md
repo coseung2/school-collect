@@ -1,31 +1,60 @@
 # main / develop 보호 설정 체크리스트
 
-상태: 적용 전. 문서·CODEOWNERS·workflow 생성은 GitHub 서버의 보호 설정 적용과 다릅니다. 현재 연결된 GitHub App의 administration 권한과 지원 작업을 확인한 뒤 실제 설정 결과를 기록해야 합니다.
+기준일: 2026-09-22.
 
-## 공통
+## 현재 확인 상태
 
-PR required, 작성자 외 approval >= 1, stale review 해제, conversation resolution, code owner review, force push/삭제 차단을 적용합니다. main/develop 직접 push 및 상시 관리자 bypass를 금지합니다. squash와 merge commit 둘 다 repository에서 허용해야 합니다. rebase merge는 운영 규칙에서 사용하지 않습니다.
+- repository rulesets API 조회 결과: `[]`
+- classic branch protection read: 현재 연결의 administration 권한 부족으로 403
+- 따라서 main/develop 보호가 활성화되었다고 주장하지 않음
+
+문서, CODEOWNERS, CI workflow는 GitHub 서버의 실제 보호 설정을 대신하지 않습니다.
+
+## 공통 목표
+
+main/develop:
+- pull request required
+- 작성자 외 approval >= 1
+- stale approval dismissal
+- conversation resolution
+- required status checks
+- code owner review
+- force push 금지
+- branch deletion 금지
+- 상시 관리자 bypass 금지
+
+repository에는 squash merge와 merge commit 둘 다 필요합니다. rebase merge는 운영 workflow에서 사용하지 않습니다.
 
 ## develop
 
-초기 필수 체크는 실제 성공을 확인한 `repository-checks`입니다. 기능 브랜치는 squash merge. main -> develop 동기화에는 merge commit이 필요하므로 develop에도 무조건적인 linear history 요구를 걸지 않습니다.
+작업 브랜치는 `develop`으로 PR을 열고 squash merge합니다.
+
+required checks는 실제 존재하고 안정적으로 성공한 workflow만 등록합니다. Stage 3 이후에는 repository foundation 검사와 v2 architecture 검사 중 실제 branch path에 적용되는 check를 기준으로 고정합니다.
+
+main -> develop 동기화는 merge commit이므로 develop에 unconditional linear history를 강제하지 않습니다.
 
 ## main
 
-동일 저장소 develop 승격 또는 main 기반 hotfix만 허용합니다. branch-direction CI는 보조 게이트이고 관리자/규칙 우회를 차단하는 설정의 대체재는 아닙니다. 승격은 merge commit을 사용하므로 linear history 필수 설정을 켜지 않습니다.
+허용 경로:
+- `develop -> main` release promotion
+- `hotfix/* -> main`
 
-후속 필수 검사: TS lint/typecheck/test/build, Rust fmt/clippy/test, PostgreSQL migration/RLS/API integration, native build/smoke, Collect E2E. 존재하지 않거나 아직 실행되지 않은 check 이름을 미리 필수로 등록하지 않습니다.
+feature branch -> main 직접 PR은 허용하지 않습니다.
+
+promotion은 merge commit을 사용합니다. exact develop candidate SHA의 통합 검증이 끝난 뒤 승격합니다.
 
 ## 적용 검증
 
-- [ ] main/develop 직접 push 차단
-- [ ] feature -> main PR 방향 검사 실패
-- [ ] CI 실패/미완료 상태에서 merge 차단
-- [ ] auth/db/token/CI 변경 시 owner review 요청
-- [ ] head 본인 PR의 별도 리뷰어 지정
-- [ ] develop -> main merge commit 후 main -> develop 동기화 시험
-- [ ] hotfix 경로 검증
+- [ ] main 직접 push 차단
+- [ ] develop 직접 push 차단
+- [ ] feature -> main 차단
+- [ ] required CI 실패/대기 상태 merge 차단
+- [ ] code-owner path review 동작
+- [ ] 작성자 자기 승인만으로 merge 불가
+- [ ] force push 차단
+- [ ] branch deletion 차단
+- [ ] develop -> main merge commit
+- [ ] main -> develop sync
+- [ ] hotfix -> main -> develop 경로 검증
 
-GitHub App 연결은 repository metadata가 admin으로 보이더라도 administration API 권한이 없을 수 있습니다. 적용하지 못한 항목을 적용 완료로 기록하지 않습니다.
-
-공식 문서: https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches
+연결된 GitHub App이 metadata상 admin으로 보여도 branch administration API 권한이 없을 수 있습니다. 실제 UI/관리 권한으로 설정한 결과를 체크리스트에 반영해야 합니다.

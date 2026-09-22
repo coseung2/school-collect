@@ -1,22 +1,57 @@
 # 보안 정책
 
-## 저장소와 보고
+School Collect 저장소는 public 오픈소스 운영을 전제로 합니다. 따라서 모든 코드, 문서, commit, PR, CI log는 외부 공개되어도 되는 정보만 포함해야 합니다.
 
-코드 저장소에는 실제 학생·교직원·학부모 데이터, 업무 원본, 인증 토큰, DB 비밀번호, 서명키를 넣지 않습니다. 테스트는 합성 데이터만 사용합니다. 의심 자격증명이나 개인정보를 발견하면 값/본문을 공개 Issue나 PR에 복사하지 마세요. 소유자에게 기존에 합의된 비공개 경로로 알리고, GitHub private vulnerability reporting은 실제 활성화 여부를 확인한 뒤 사용합니다.
+## 저장소에 들어가면 안 되는 것
 
-현재 환경변수 예제 정리는 이력 삭제나 credential 무효화를 뜻하지 않습니다. `.gitignore`도 이미 추적 중인 파일에는 소급 적용되지 않습니다. 상세 상태는 `docs/SECURITY_BASELINE.md`에 기록합니다.
+- 학생·교직원·학부모 등 실제 개인정보
+- 실제 학교 업무 원본과 그 복사/파생 파일
+- 운영 access token, refresh token, API key, DB password
+- signing key, private key, certificate private material
+- private endpoint나 내부 운영정보 중 공개가 승인되지 않은 값
+- production DB dump
+- demo 목적으로 영구 보존되는 가상 업무 seed/fixture DB
+
+production migration은 schema, constraint, index와 실제 제품에 필요한 reference data를 관리합니다. 데모 학교/사용자/업무/제출 데이터는 넣지 않습니다.
+
+테스트 데이터는 테스트 실행 시 생성하고 rollback, truncate, disposable DB/container 등으로 제거합니다.
+
+## legacy history
+
+과거 v1 이력에서 실제처럼 보이는 credential과 업무 원본/파생 artifact가 확인되어 별도 정리 중입니다. 해당 값을 공개 Issue, PR, 문서, 로그에 다시 복사하지 않습니다.
+
+현재 HEAD에서 값을 비우거나 파일을 삭제하는 것만으로 과거 Git object가 제거되지는 않습니다. credential은 외부 시스템에서 폐기/회전되어야 하며, history rewrite가 필요하면 범위·백업·협업자 재동기화·공개 캐시 한계를 확인한 별도 보안 작업으로 수행합니다.
+
+상세 상태: [docs/SECURITY_BASELINE.md](docs/SECURITY_BASELINE.md)
 
 ## v2 신뢰 경계
 
-- 배포되는 Tauri/Rust 바이너리는 서버가 아닙니다. 앱에 서버 비밀값을 포함하지 않습니다.
-- OIDC 로그인은 외부 브라우저 + PKCE, redirect/state/nonce 검증. API는 토큰 서명, issuer, audience, 만료를 검증합니다.
-- 학교 선택은 클라이언트 입력일 뿐입니다. 서버 membership 확인과 DB RLS로 학교별 접근을 제한합니다.
-- runtime DB 역할은 superuser, BYPASSRLS, table owner가 아니어야 합니다. connection pool의 tenant context는 트랜잭션 범위를 넘기지 않습니다.
-- R2는 private bucket을 기본으로 하고 권한 확인 이후 짧은 수명의 파일 URL을 발급합니다.
-- 로컬 초안/세션은 사용자·학교별 분리, OS 보호 저장소, 보존 기한, 로그아웃 정리 정책을 적용합니다.
-- audit/log에는 암호, 토큰, 학생 원문, 불필요한 before/after 전체 payload를 기록하지 않습니다.
-- Tauri capability/CSP/IPC 범위를 최소화하고 운영 빌드에 테스트용 native driver를 포함하지 않습니다.
+- Tauri 앱은 신뢰 서버가 아닙니다.
+- 서버 credential은 frontend/native binary에 포함하지 않습니다.
+- OIDC는 external browser + Authorization Code + PKCE를 기준으로 합니다.
+- API는 token signature, issuer, audience, expiration을 검증합니다.
+- tenant/role/resource ownership은 서버가 membership과 정책으로 검증합니다.
+- runtime DB 역할은 schema owner/superuser/BYPASSRLS가 아니어야 합니다.
+- migration은 별도 권한/프로세스로 수행합니다.
+- private R2 접근은 서버 권한 확인 후 제한된 방식으로 제공합니다.
+- audit/log에는 token, password, 불필요한 개인정보 원문, 전체 payload dump를 기록하지 않습니다.
+- local draft/session은 사용자·tenant 경계를 유지하고 logout/expiration cleanup 정책을 가집니다.
+- Tauri capability/CSP/IPC 권한은 최소화합니다.
 
-## 운영 승인
+## 취약점/비밀정보 보고
 
-인프라 생성, 실제 서버 접속, DNS 변경, production migration, 인증서/서명키 배포, Git 이력 재작성은 구체적 대상과 권한이 확인된 별도 변경으로 취급합니다. PR 생성만으로 운영 승인을 받은 것으로 보지 않습니다. 백업은 복원 테스트까지 통과해야 합니다.
+민감한 값을 공개 Issue에 게시하지 마세요. 저장소 소유자에게 합의된 비공개 채널을 사용합니다. GitHub private vulnerability reporting을 사용할 경우 실제 활성화 여부를 먼저 확인합니다.
+
+## 운영 변경
+
+다음 작업은 코드 PR과 별개의 명시적 운영 권한을 요구합니다.
+- 실제 credential 폐기/회전
+- production DB 접속/migration
+- DNS/domain/TLS 변경
+- production deployment
+- 서명키/업데이트키 배포
+- paid infrastructure 생성
+- Git history rewrite/force push
+- 실제 데이터 삭제/보존 변경
+
+백업은 존재 여부가 아니라 **복원 검증**까지 포함해야 합니다.

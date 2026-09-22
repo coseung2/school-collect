@@ -1,6 +1,10 @@
 # v2 목표 아키텍처
 
-상태: 설계 기준. 아래 서비스와 경로는 아직 구현·배포 완료가 아닙니다.
+상태: production target architecture. 실행 가능한 기반은 PR #11에서 CI 검증되었지만 아직 장기 브랜치에 통합되지 않았습니다.
+
+## 원칙
+
+School Collect v2는 MVP 전용 임시 구조를 두지 않습니다. 작은 기능도 최종 trust boundary, tenancy, migration, observability, recovery 방향과 호환되도록 구현합니다.
 
 ## 데이터 경로
 
@@ -9,74 +13,147 @@ Tauri (React UI + narrow native adapters)
   -> HTTPS / OIDC access token
   -> Cloudflare edge
   -> Rust/Axum API
-       -> SQLx -> PostgreSQL
+       -> SQLx -> PostgreSQL 18
        -> private R2
        -> DB transactional outbox -> relay -> NATS JetStream
-                                            -> job worker -> R2 / PostgreSQL
+                                            -> worker -> R2 / PostgreSQL
 
 System browser -> ZITADEL (OIDC Authorization Code + PKCE)
-Local SQLite -> draft/outbox -> API; server is authoritative
+Local SQLite -> draft/cache/outbox -> API
+Server data remains authoritative
 ```
 
-DB credential, R2 signing credential, ZITADEL masterkey, NATS credentials는 서버에만 둡니다. 클라이언트 Rust는 신뢰 서버가 아닙니다. 일반 CRUD도 API 권한 검사를 거칩니다.
+클라이언트는 DB/R2/NATS 관리자 credential을 갖지 않습니다. Tauri의 Rust 코드도 신뢰 서버가 아닙니다.
 
-## 목표 디렉터리와 책임
+## 저장소 구조
+
+현재 확정 방향:
 
 ```text
-apps/app/                 React/Vite product + src-tauri native shell
-packages/ui/              reusable UI, no business API dependency
-packages/tokens/          approved token manifest / generated CSS
-packages/core/            client use-cases, draft/view logic; not authorization authority
-packages/data/            generated API client wrapper / platform adapters
-packages/schemas/         generated API types and client validation
-services/api/             Axum HTTP, auth, tenant context, application composition
-services/worker/          isolated async consumers
-crates/domain/            authoritative business rules, no HTTP/DB dependency
+apps/app/                 React/Vite product + Tauri 2 shell
+services/api/             Axum HTTP API
+services/worker/          asynchronous worker process
+services/migrator/        migration-only process
+
+crates/domain/            authoritative business invariants
 crates/application/       server use-cases and ports
-crates/persistence/       SQLx repositories and transaction boundaries
-crates/contracts/         DTO/OpenAPI definitions, no secrets/config
-db/migrations/            v2 database source of truth
-infra/                    dev, staging/prod manifests and runbooks
-docs/ADR/                 versioned architecture decisions
+crates/db/                SQLx repositories/transactions/migrator binding
+crates/auth/              auth/authz boundary helpers
+crates/contracts/         API/OpenAPI DTO contracts
+crates/observability/     tracing/telemetry setup
+
+packages/ui/              approved design-system implementation
+packages/schemas/         generated/shared client schemas where justified
+packages/config/          non-secret shared build/config primitives
+
+migrations/v2/            v2 PostgreSQL migration source of truth
+infra/                    local/staging/production infrastructure definitions
+docs/ADR/                 architecture decisions
 ```
 
-서버가 규칙의 최종 판단자입니다. TS 검증은 UX 보조이며 Rust 권한 로직을 대체하지 않습니다. OpenAPI에서 TS 타입/클라이언트를 생성하는 것을 기준으로 하고, 필요한 코드 공유만 합니다. 클라이언트 crate가 서버 설정·DB/인증 관리자 dependency를 끌고 오지 않게 합니다.
+server-only crate/config가 Tauri bundle로 유입되지 않게 합니다.
 
-## 서버 구성
+## Server composition
 
-API는 modular monolith로 시작하고 worker는 별도 실행 프로세스로 분리합니다. Docker/Compose는 로컬 개발과 검증의 수단입니다. API/DB 분리만으로 HA가 보장되지는 않습니다. 장애 도메인, replica, 백업, 복원, 배포 절차를 따로 검증합니다.
+API는 modular monolith를 기준으로 합니다. worker와 migrator는 책임을 분리한 별도 process입니다.
 
-Caddy/TLS 종료와 Cloudflare proxy/origin 접근 정책은 실제 배포 시 결정합니다. DB와 NATS 관리 포트를 공용 인터넷에 노출하지 않습니다. Cloudflare를 거친다고 접근권한 검사가 생기는 것은 아닙니다. API, DB, worker는 데이터 지연과 운영 요구를 고려해 가까운 리전에 둡니다. 국내 저장·국외 처리 제한 등은 실제 조직의 정책을 먼저 확인하며 R2 사용이 자동으로 해당 정책을 만족한다고 간주하지 않습니다.
+마이크로서비스 분리는 독립 배포/스케일/장애 경계가 실제로 필요할 때 근거를 갖고 수행합니다.
 
-## 인증 및 tenant authorization
+`/health`는 process liveness, `/ready`는 PostgreSQL 등 required dependency readiness를 나타냅니다. dependency가 준비되지 않았는데 readiness 성공을 반환하지 않습니다.
 
-ZITADEL은 신원 인증, School Collect는 학교 소속/역할/업무 권한을 관리합니다. 이메일만으로 계정을 식별하지 않고 검증된 issuer+subject를 사용합니다. access token인지 ID token인지 구분하여 검증합니다.
+## PostgreSQL / migration
 
-클라이언트의 tenant_id/role은 신뢰하지 않습니다. 서버가 membership을 확인하고, 동일 DB transaction 안에서 transaction-local tenant context를 설정합니다. runtime DB 역할은 table owner/superuser/BYPASSRLS가 아니어야 하며, 필요한 테이블에는 FORCE RLS를 검토합니다. pool 재사용과 A/B tenant 교차 테스트를 필수로 둡니다. tenant-scoped FK/unique constraint로 학교 간 잘못된 관계도 차단합니다.
+v2 migration은 `migrations/v2/`만 실행합니다. legacy v1 migration과 섞지 않습니다.
 
-## API/업무 처리
+- runtime DB role != migration role
+- runtime role은 schema owner/superuser/BYPASSRLS 금지
+- 이미 배포된 migration 수정 대신 forward-only migration
+- 파괴적 변경은 보존/복구 계획
+- tenant-scoped FK/unique/invariant
+- 필요 시 FORCE RLS를 defense-in-depth로 사용
 
-`/v1` 계약, 입력 검증, 제한된 pagination, 일관된 오류 코드/request id, optimistic version, idempotency key를 사용합니다. deadline과 상태 전이는 서버 기준입니다. 요청 전체/토큰/개인정보 원문을 자동 로깅하지 않습니다. audit에는 actor, action, resource, 시점, 최소 변경 요약을 기록합니다.
+production migration에는 demo 업무 데이터를 넣지 않습니다. 테스트 DB 데이터는 runtime factory/builders로 생성 후 정리합니다.
 
-## 비동기 신뢰성
+## Authentication / authorization
 
-DB 변경과 메시지 전송을 별도 성공 조건으로 처리하지 않습니다. 업무 데이터와 outbox를 한 DB transaction으로 commit하고 relay가 JetStream publish ACK 후 전송 상태를 기록합니다. 재전달은 정상적인 실패 시나리오로 간주합니다.
+ZITADEL은 identity provider, School Collect 서버는 tenant membership/RBAC/resource policy authority입니다.
 
-Consumer는 durable/pull 및 explicit ACK를 기준으로 합니다. idempotent effect, job unique key, 재시도/backoff, 최대 횟수, 실패함으로의 이동, 관측성을 구현합니다. NATS 전달 보장만으로 DB/파일 side effect의 exactly-once를 주장하지 않습니다. 문서 변환은 격리된 worker와 제한된 리소스/파일 범위에서 수행합니다.
+검증 기준:
+- Authorization Code + PKCE
+- external browser
+- state/nonce/redirect 검증
+- API에서 signature/issuer/audience/expiration 검증
+- verified issuer + subject로 identity 연결
+- client가 보낸 tenant_id/role을 신뢰하지 않음
 
-## 로컬/모바일
+UI 권한 표시는 usability를 위한 것이며 access control이 아닙니다.
 
-SQLite는 초안·작업 outbox·cache 용도입니다. 서버와 전 DB를 복제하는 sync engine은 이번 범위가 아닙니다. 로컬에도 학교/사용자 구분, 보존·삭제·충돌 정책이 필요합니다. refresh token은 일반 localStorage/평문 SQLite에 넣지 않고 검증된 OS 보호 저장소 adapter로 다룹니다.
+## API contract
 
-Desktop/mobile별 plugin 지원과 보안 저장소/파일 picker/redirect 제약은 실제 target에서 검증합니다. 화면 크기만 줄였다고 모바일 대응이 완료된 것은 아닙니다.
+OpenAPI를 API 계약의 기준으로 사용합니다.
 
-## 버전과 출처
+기본 운영 규칙:
+- explicit versioning
+- structured error code/request id
+- bounded pagination
+- optimistic version where needed
+- idempotency key for retryable mutations
+- server-side deadline/state transitions
+- sensitive payload redaction
 
-PostgreSQL 공식 지원표는 2026-09-21 조회 시 18.6을 표시합니다. 실제 이미지 digest, Rust/Node/pnpm과 crate/npm 버전은 실행 기반 PR에서 lockfile 및 CI로 검증해 고정합니다.
+## Async reliability
 
-- PostgreSQL 지원: https://www.postgresql.org/support/versioning/
-- PostgreSQL RLS: https://www.postgresql.org/docs/current/ddl-rowsecurity.html
-- ZITADEL 권장 흐름: https://zitadel.com/docs/guides/integrate/login/oidc/oauth-recommended-flows
-- ZITADEL self-hosting: https://zitadel.com/docs/self-hosting/deploy/compose
-- NATS consumers: https://docs.nats.io/nats-concepts/jetstream/consumers
-- Tauri tests: https://v2.tauri.app/develop/tests/
+업무 데이터 변경과 outbox row를 같은 PostgreSQL transaction에서 commit합니다.
+
+```text
+business transaction
+  -> outbox
+  -> relay publish
+  -> JetStream
+  -> durable consumer
+  -> idempotent side effect
+  -> ACK after effect commit
+```
+
+재전달은 정상 failure mode로 취급합니다. NATS가 exactly-once business side effect를 자동 보장한다고 가정하지 않습니다.
+
+## Files
+
+R2는 private bucket을 기본으로 합니다. 서버가 tenant/resource 권한을 검증한 뒤 제한된 upload/download capability를 제공합니다.
+
+파일 metadata와 access policy는 DB에, object bytes는 R2에 둡니다.
+
+## Local/offline
+
+SQLite는 전체 server database replica가 아닙니다.
+
+허용 책임:
+- drafts
+- local cache
+- pending mutation/outbox
+- version/idempotency metadata
+
+사용자/tenant 경계, conflict handling, logout cleanup, retention을 설계합니다. token은 평문 SQLite/localStorage에 두지 않습니다.
+
+## Observability / operations
+
+- structured tracing
+- metrics
+- secret/PII log redaction
+- request/job correlation
+- staging/production separation
+- backup + restore drill
+- signed release/update
+- least-privilege network exposure
+
+백업 성공은 “백업 파일이 있다”가 아니라 실제 restore 검증으로 판단합니다.
+
+## Design boundary
+
+Figma -> approved design contract -> repository tokens -> `packages/ui` -> product screens 순으로 관리합니다.
+
+UI primitive에는 business API 호출을 넣지 않습니다.
+
+## Versioning
+
+실제 Rust/Node/pnpm/crate/npm/PostgreSQL image는 lockfile/toolchain/CI로 고정합니다. 문서에 적힌 버전 문자열만으로 reproducibility를 주장하지 않습니다.
