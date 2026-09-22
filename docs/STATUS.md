@@ -6,7 +6,7 @@
 
 | 단계 | 상태 | 확인된 내용 | 남은 게이트 |
 | --- | --- | --- | --- |
-| 1. 보안/기준점 | 진행 중 | public 저장소 확인, 현재 HEAD sanitization PR #10 생성 | credential 폐기/회전, 업무자료 history 처리, history rewrite 범위/실행 |
+| 1. 보안/기준점 | 현재 HEAD 정리 완료 | public 저장소 확인, PR #10 main merge, PR #12로 main -> develop 동기화 | credential 폐기/회전, 업무자료 history 처리, history rewrite 범위/실행 |
 | 2. 협업 | 진행 중 | develop/작업 브랜치/문서/초기 CI 구성 | main/develop 실제 보호 설정, 독립 리뷰 |
 | 3. 실행 기반 | 검증 중 | PR #11에서 TS/Rust/Postgres/Windows Tauri CI 성공 | lockfile final pin, frozen/locked CI, local tauri dev, mobile compatibility |
 | 4. Figma | 시안 승인 | Design System/Product 파일과 핵심 UI 규칙 승인 | code mapping, interaction/accessibility detail, Library/Code Connect 후속 |
@@ -22,7 +22,8 @@
 - legacy `.env.example` 과거 이력에서 실제처럼 보이는 외부 서비스/DB credential 형태 값 확인
 - legacy local CLI state에 project connection metadata 추적 이력 확인
 - `_agent_작업` 아래 실제 업무에서 생성된 source/derived artifact 존재 확인
-- 현재 HEAD 노출 축소용 hotfix PR #10 열림
+- 현재 HEAD 노출 축소용 hotfix PR #10이 main에 merge됨 (merge commit `3a7acd9`)
+- PR #12로 main -> develop 동기화 완료 (merge commit)
 - PR #10은 과거 Git object를 제거하지 않으므로 history 정리는 별도
 
 credential 값 자체는 문서에 기록하지 않습니다.
@@ -31,6 +32,14 @@ credential 값 자체는 문서에 기록하지 않습니다.
 - repository rulesets 조회 결과: 비어 있음
 - classic branch protection API는 연결 권한상 403으로 확인/적용 불가
 - 따라서 main/develop 보호가 활성화되었다고 주장하지 않음
+
+### Legacy v1 Vercel Preview 실패 (기존 문제)
+모든 PR에서 `Vercel` check가 실패 상태로 보입니다. 이는 v2 작업의 회귀가 아닙니다.
+
+- legacy v1 `src/lib/supabase.ts`가 module 초기화 시점에 `NEXT_PUBLIC_SUPABASE_URL`을 요구합니다.
+- Vercel 프로젝트에는 해당 변수가 Production 환경에만 등록되어 있어 Preview 빌드에서 값이 없습니다.
+- `origin/main`을 그대로 체크아웃해 `pnpm install --frozen-lockfile` 후 `pnpm run build`를 실행하면 동일하게 `Error: supabaseUrl is required.`로 실패하는 것을 확인했습니다.
+- 해결은 legacy v1 유지보수 또는 v1 Vercel 연동 종료 결정에 속하며 Stage 1~3 범위가 아닙니다.
 
 ### Stage 3
 Draft PR #11: `feat/v2-architecture-foundation -> develop`
@@ -84,7 +93,7 @@ PR #11 최신 head는 이후 문서/CI 작업으로 변경될 수 있으므로, 
 
 ## 아직 하지 않은 것
 
-- PR #10/#11 merge
+- PR #9/#11 merge
 - Git history rewrite
 - 외부 credential 실제 폐기/회전
 - branch protection/ruleset 적용
