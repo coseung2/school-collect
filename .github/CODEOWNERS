@@ -1,0 +1,19 @@
+# Critical boundaries. Require code owner reviews in GitHub settings separately.
+/.github/ @coseung2
+/scripts/ @coseung2
+/AGENTS.md @coseung2
+/CLAUDE.md @coseung2
+/CONTRIBUTING.md @coseung2
+/SECURITY.md @coseung2
+/docs/ADR/ @coseung2
+/docs/ARCHITECTURE.md @coseung2
+/docs/DESIGN_SYSTEM.md @coseung2
+/packages/ui/ @coseung2
+/packages/tokens/ @coseung2
+/db/ @coseung2
+/infra/ @coseung2
+/crates/domain/ @coseung2
+/crates/persistence/ @coseung2
+/services/api/src/auth/ @coseung2
+/services/api/src/authorization/ @coseung2
+/apps/app/src-tauri/ @coseung2

@@ -1,0 +1,21 @@
+name: 버그 보고
+description: 재현 가능한 오류를 기록합니다.
+title: "[Bug] "
+body:
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 재현 절차와 기대/실제 결과
+      description: 실데이터와 인증정보를 포함하지 마세요.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: 앱 버전 / OS / 확인한 commit
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 비식별화한 로그 또는 테스트 증거

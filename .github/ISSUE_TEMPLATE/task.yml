@@ -1,0 +1,30 @@
+name: V2 작업
+description: 단계와 검증 기준이 있는 개발 작업을 등록합니다.
+title: "[V2] "
+body:
+  - type: input
+    id: parent
+    attributes:
+      label: 관련 단계 / 상위 Issue
+      placeholder: "예: V2-03, #4"
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: 목표와 변경 범위
+      description: 목표, 제외 범위, 선행 조건을 적습니다.
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: 완료 기준과 검증 방법
+      description: 실제 실행할 테스트와 필요한 증거를 적습니다.
+    validations:
+      required: true
+  - type: textarea
+    id: risks
+    attributes:
+      label: 보안 / DB / 디자인 / 인프라 영향
+      description: 실제 데이터나 비밀값을 포함하지 마세요.
