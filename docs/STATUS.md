@@ -10,7 +10,7 @@
 | 2. 협업 | 보호 적용 완료 | develop/작업 브랜치/문서/CI 구성, main·develop branch protection 적용 및 API 확인 | 협업자 추가 시 approval >= 1 및 code owner review, 독립 리뷰 |
 | 3. 실행 기반 | 조건 충족 | lockfile 커밋 + frozen/locked CI, TS strict, fmt/clippy/test, PostgreSQL 18 migration, /health·/ready 분리 검증, Windows native build, local tauri dev | mobile target/plugin (미검증), dev/prod config 분리 완료 (Stage 6) |
 | 4. Figma | 시안 승인 | Design System/Product 파일과 핵심 UI 규칙 승인 | code mapping, interaction/accessibility detail, Library/Code Connect 후속 |
-| 5. Code DS/AppShell | 미착수 | 승인 Figma 기준 존재 | packages/ui, token mapping, 실제 AppShell |
+| 5. Code DS/AppShell | 구현 중 | `packages/ui` token/component와 실제 AppShell 1차 배치, wide/narrow/offline/browser/native dev 검증 | CI/PR 검증, Figma와의 상세 interaction/accessibility 대조 |
 | 6. Auth/Data/Ops | 계획 | architecture 결정 | OIDC/RBAC/R2/NATS/SQLite/backup 실제 구현·검증 |
 | 7. Collect | 계획 | reference flow 정의 | end-to-end production-grade 구현/E2E |
 
@@ -69,6 +69,24 @@ Stage 3 미검증 항목:
 - radius <= 8px
 - decorative shadow 없음
 
+## Stage 5 Code Design System / AppShell
+
+첫 번째 code-only migration은 별도 작업 브랜치에서 진행 중입니다.
+
+- `packages/ui`: semantic token, Button, Status, Card, List Surface/Row, Tabs,
+  DataTable, FormField, Sidebar, Header, AppShell, Empty/Loading/Error/
+  Permission/Offline state primitive
+- `apps/app`: 승인된 compact shell, hash 기반 navigation/history, 실제 `/health`
+  확인, API error와 browser offline recovery state
+- 검증: typecheck, frozen install, build, browser 1280/1024/720 viewport,
+  keyboard focus, offline event
+- 이 배치는 Figma canonical file을 쓰지 않으며, 실제 업무 데이터나 demo seed를
+  추가하지 않습니다. 상세 mapping과 rollback은
+  [STAGE5_CODE_MIGRATION.md](STAGE5_CODE_MIGRATION.md)에 기록합니다.
+
+남은 Stage 5 게이트는 CI 결과와 Figma 승인 화면 및 세부
+interaction/accessibility의 대조입니다.
+
 ## Production-first 데이터 정책
 
 - production migration에 demo school/user/task/submission seed를 넣지 않음
@@ -85,4 +103,3 @@ Stage 3 미검증 항목:
 - production infra 생성/배포
 - ZITADEL/R2/NATS production 연결
 - production DB migration
-- Stage 5 UI 코드 구현

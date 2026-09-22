@@ -65,7 +65,9 @@ cargo run -p school-collect-api
 pnpm --filter @school-collect/app tauri dev
 ```
 
-Stage 5 replaces the diagnostic UI with the approved Figma design-system implementation.
+Stage 5 is replacing the diagnostic UI with the approved Figma design-system
+implementation. The current code migration is recorded in
+`docs/STAGE5_CODE_MIGRATION.md`; it adds no production data or database seed.
 
 ## Mobile targets: unverified
 
