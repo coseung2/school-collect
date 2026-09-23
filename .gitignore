@@ -1,6 +1,8 @@
 # Dependencies and generated output
 node_modules/
 dist/
+.next/
+.vercel/
 coverage/
 *.tsbuildinfo
 *.log
