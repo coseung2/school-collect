@@ -10,8 +10,8 @@
 | 2. 협업 | 보호 적용 완료 | develop/작업 브랜치/문서/CI 구성, main·develop branch protection 적용 및 API 확인 | 협업자 추가 시 approval >= 1 및 code owner review, 독립 리뷰 |
 | 3. 실행 기반 | 조건 충족 | lockfile 커밋 + frozen/locked CI, TS strict, fmt/clippy/test, PostgreSQL 18 migration, /health·/ready 분리 검증, Windows native build, local tauri dev | mobile target/plugin (미검증), dev/prod config 분리 완료 (Stage 6) |
 | 4. Figma | 시안 승인 | Design System/Product 파일과 핵심 UI 규칙 승인 | code mapping, interaction/accessibility detail, Library/Code Connect 후속 |
-| 5. Code DS/AppShell | 구현 중 | `packages/ui` token/component와 실제 AppShell 1차 배치, wide/narrow/offline/browser/native dev 검증 | CI/PR 검증, Figma와의 상세 interaction/accessibility 대조 |
-| 6. Auth/Data/Ops | 계획 | architecture 결정 | OIDC/RBAC/R2/NATS/SQLite/backup 실제 구현·검증 |
+| 5. Code DS/AppShell | 완료 (PR #17, `9697363`) | `packages/ui` token/component와 실제 Tauri AppShell, 상태·키보드·wide/narrow 검증 | Figma Library/Code Connect 후속 |
+| 6. Auth/Data/Ops | 구현 중 | API environment boundary와 staging/production OIDC configuration fail-closed validation | token signature/JWKS middleware, RBAC/tenant data, R2/NATS/SQLite/backup 실제 구현·검증 |
 | 7. Collect | 계획 | reference flow 정의 | end-to-end production-grade 구현/E2E |
 
 ## 확인된 원격 상태
@@ -34,8 +34,8 @@ classic branch protection을 `main`과 `develop`에 적용하고 API 조회로 �
 
 approval 최소 개수는 0입니다. 단독 운영 상태에서 1 이상이면 본인 PR을 병합할 수 없기 때문이며, 협업자 추가 시 함께 올려야 합니다. 자세한 내용은 [BRANCH_PROTECTION.md](BRANCH_PROTECTION.md)를 봅니다.
 
-### v1 Vercel 연동
-v1 웹 애플리케이션 제거와 함께 Vercel Preview 빌드를 깨뜨리던 원인(`supabaseUrl is required.`)도 저장소에서 사라졌습니다. Vercel 프로젝트 연결과 Production 환경변수는 저장소 밖 설정이므로, 연결 해제 또는 프로젝트 정리는 소유자가 Vercel 쪽에서 별도로 수행해야 합니다.
+### Vercel 연동
+v2 전환 후 남아 있던 Vercel `school-collect` 프로젝트와 배포를 2026-09-23에 삭제했습니다. 이 저장소는 Vercel 배포를 사용하지 않습니다.
 
 ### Stage 3
 PR #11이 develop에 squash merge되었습니다 (`4cadf7e`).
@@ -99,7 +99,6 @@ interaction/accessibility의 대조입니다.
 
 - Git history rewrite
 - 외부 credential 실제 폐기/회전
-- Vercel 프로젝트 연결 해제/정리 (저장소 밖 설정)
 - production infra 생성/배포
 - ZITADEL/R2/NATS production 연결
 - production DB migration

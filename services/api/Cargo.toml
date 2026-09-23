@@ -8,6 +8,7 @@ license.workspace = true
 anyhow = { workspace = true }
 axum = { workspace = true }
 http = { workspace = true }
+school-collect-auth = { path = "../../crates/auth" }
 school-collect-contracts = { path = "../../crates/contracts" }
 school-collect-db = { path = "../../crates/db" }
 school-collect-observability = { path = "../../crates/observability" }

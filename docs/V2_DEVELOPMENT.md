@@ -53,6 +53,13 @@ The client is untrusted, so it receives no secret of any kind. `apps/app` reads 
 
 Known Stage 3 limitation: `tauri.conf.json` currently ships one CSP whose `connect-src` allows `http://127.0.0.1:*`. That is a development convenience, and a production build must not keep loopback HTTP in `connect-src`. Stage 6 splits development and production configuration and replaces this with the real API origin over HTTPS.
 
+Stage 6 now validates the server environment boundary:
+
+- `APP_ENV` accepts only `development`, `staging`, or `production`.
+- Development may use the loopback CORS default; staging and production require `APP_CORS_ORIGIN`.
+- Staging and production require `OIDC_ISSUER_URL` with an HTTPS scheme and `OIDC_AUDIENCE`.
+- The client still receives only the public API origin. OIDC secrets and verification material remain server-side.
+
 The local development password in `infra/compose.dev.yml` is for loopback-only containers. It is not a shared secret and must not be reused for any reachable database.
 
 ## Commands

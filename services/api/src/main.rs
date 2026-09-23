@@ -4,9 +4,38 @@ use anyhow::Context;
 use axum::http::HeaderValue;
 use school_collect_api::{AppState, router};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Environment {
+    Development,
+    Staging,
+    Production,
+}
+
+impl Environment {
+    fn from_env() -> anyhow::Result<Self> {
+        match env::var("APP_ENV").as_deref().unwrap_or("development") {
+            "development" => Ok(Self::Development),
+            "staging" => Ok(Self::Staging),
+            "production" => Ok(Self::Production),
+            value => {
+                anyhow::bail!("APP_ENV must be development, staging, or production; got {value}")
+            }
+        }
+    }
+
+    fn requires_production_configuration(self) -> bool {
+        !matches!(self, Self::Development)
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     school_collect_observability::init("api");
+
+    let environment = Environment::from_env()?;
+    if environment.requires_production_configuration() {
+        school_collect_auth::OidcConfig::from_env(|key| env::var(key).ok())?;
+    }
 
     // Missing configuration is an operator error, not a degraded runtime mode.
     let database_url = env::var("DATABASE_URL")
@@ -16,7 +45,12 @@ async fn main() -> anyhow::Result<()> {
     let pool = school_collect_db::lazy_pool(&database_url)?;
 
     let cors_origin = env::var("APP_CORS_ORIGIN")
-        .unwrap_or_else(|_| "http://127.0.0.1:1420".to_owned())
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            (environment == Environment::Development).then(|| "http://127.0.0.1:1420".to_owned())
+        })
+        .context("APP_CORS_ORIGIN is required outside development")?
         .parse::<HeaderValue>()
         .context("APP_CORS_ORIGIN is not a valid HTTP origin")?;
 

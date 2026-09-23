@@ -3108,6 +3108,7 @@ dependencies = [
  "anyhow",
  "axum",
  "http",
+ "school-collect-auth",
  "school-collect-contracts",
  "school-collect-db",
  "school-collect-observability",
@@ -3140,7 +3141,9 @@ dependencies = [
 name = "school-collect-auth"
 version = "0.2.0"
 dependencies = [
+ "anyhow",
  "school-collect-domain",
+ "url",
 ]
 
 [[package]]
