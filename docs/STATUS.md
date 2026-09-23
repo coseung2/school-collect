@@ -10,7 +10,7 @@
 | 2. 협업 | 보호 적용 완료 | develop/작업 브랜치/문서/CI 구성, main·develop branch protection 적용 및 API 확인 | 협업자 추가 시 approval >= 1 및 code owner review, 독립 리뷰 |
 | 3. 실행 기반 | 조건 충족 | lockfile 커밋 + frozen/locked CI, TS strict, fmt/clippy/test, PostgreSQL 18 migration, /health·/ready 분리 검증, Windows native build, local tauri dev | mobile target/plugin (미검증), dev/prod config 분리 완료 (Stage 6) |
 | 4. Figma | 시안 승인 | Design System/Product 파일과 핵심 UI 규칙 승인 | code mapping, interaction/accessibility detail, Library/Code Connect 후속 |
-| 5. Code DS/AppShell | 완료 (PR #17, `9697363`) | `packages/ui` token/component와 실제 Tauri AppShell, 상태·키보드·wide/narrow 검증 | Figma Library/Code Connect 후속 |
+| 5. Code DS/AppShell | 기반 통합 (PR #17, `9697363`) | `packages/ui`와 Tauri AppShell 통합, Windows native build 및 실행 확인 | 세부 접근성·상태 대조, Dialog/Sheet/Toast 등 계획 컴포넌트, Figma Library/Code Connect 후속 |
 | 6. Auth/Data/Ops | 구현 중 | API environment boundary와 staging/production OIDC configuration fail-closed validation | token signature/JWKS middleware, RBAC/tenant data, R2/NATS/SQLite/backup 실제 구현·검증 |
 | 7. Collect | 계획 | reference flow 정의 | end-to-end production-grade 구현/E2E |
 
@@ -71,7 +71,7 @@ Stage 3 미검증 항목:
 
 ## Stage 5 Code Design System / AppShell
 
-첫 번째 code-only migration은 별도 작업 브랜치에서 진행 중입니다.
+첫 번째 code-only migration은 PR #17로 develop에 통합되었습니다. 통합은 Stage 5의 모든 컴포넌트 및 UI 검수 완료를 뜻하지 않습니다.
 
 - `packages/ui`: semantic token, Button, Status, Card, List Surface/Row, Tabs,
   DataTable, FormField, Sidebar, Header, AppShell, Empty/Loading/Error/

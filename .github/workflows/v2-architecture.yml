@@ -100,6 +100,7 @@ jobs:
           --health-retries 20
     env:
       DATABASE_URL: postgres://school_collect:school_collect_ci@127.0.0.1:5432/school_collect
+      APP_ENV: development
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust

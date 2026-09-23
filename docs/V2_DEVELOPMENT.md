@@ -1,6 +1,6 @@
 # v2 development foundation
 
-This document covers Stage 3 only. It is not the production deployment guide.
+This document covers the development foundation and Stage 6 configuration checks. It is not the production deployment guide.
 
 ## Processes
 
@@ -19,6 +19,7 @@ docker compose -f infra/compose.dev.yml up -d
 Example local environment:
 
 ```text
+APP_ENV=development
 DATABASE_URL=postgres://school_collect:school_collect_local_only@127.0.0.1:5432/school_collect
 APP_BIND_ADDR=127.0.0.1:3000
 APP_CORS_ORIGIN=http://127.0.0.1:1420
@@ -55,7 +56,7 @@ Known Stage 3 limitation: `tauri.conf.json` currently ships one CSP whose `conne
 
 Stage 6 now validates the server environment boundary:
 
-- `APP_ENV` accepts only `development`, `staging`, or `production`.
+- `APP_ENV` is required and accepts only `development`, `staging`, or `production`; omission never silently selects development.
 - Development may use the loopback CORS default; staging and production require `APP_CORS_ORIGIN`.
 - Staging and production require `OIDC_ISSUER_URL` with an HTTPS scheme and `OIDC_AUDIENCE`.
 - The client still receives only the public API origin. OIDC secrets and verification material remain server-side.
@@ -76,12 +77,19 @@ Stage 5 is replacing the diagnostic UI with the approved Figma design-system
 implementation. The current code migration is recorded in
 `docs/STAGE5_CODE_MIGRATION.md`; it adds no production data or database seed.
 
-## Mobile targets: unverified
+## Windows native development
+
+Use PowerShell 7: `./scripts/windows-dev.ps1 -Action build` (or `test`, `check`, `dev`).
+The script selects rustup's pinned MSVC toolchain and the installed Visual Studio C++ tools without changing the system PATH.
+On 2026-09-23 the release build and process/window launch succeeded, as did full workspace tests and clippy with warnings denied.
+The previous GNU linker failures came from PATH selecting a separate GNU installation; MSVC was already installed.
+
+## Mobile targets: partially verified
 
 Mobile is not a Stage 3 deliverable and is not verified.
 
-What was checked: the pinned `tauri-cli` 2.11.5 exposes `tauri android init` and `tauri ios init`, so the CLI surface exists. Nothing beyond that was confirmed.
+On 2026-09-23 Android SDK 36 and NDK 28.2 were found locally, the ARM64 Rust target was installed, and the Tauri ARM64 release library compiled successfully.
 
-What was not checked, and why: the development machine has no Android SDK/NDK (`ANDROID_HOME` and NDK are unset) and only the `x86_64-pc-windows-msvc` Rust target installed, so no Android target could be built. iOS additionally requires macOS, which is unavailable here. `android init` and `ios init` were not run, because generating mobile project scaffolding would add unverifiable files to this PR.
+APK packaging failed when Tauri attempted a symbolic link: this Windows session lacks that privilege. The generated Android project remains local pending packaging validation. No APK, device interaction, or mobile plugin compatibility is certified. iOS requires macOS and remains unverified.
 
 Consequence: treat Android/iOS target and plugin compatibility as an open Stage 6+ decision. Do not record it as supported.
