@@ -58,7 +58,9 @@ Stage 6 now validates the server environment boundary:
 
 - `APP_ENV` is required and accepts only `development`, `staging`, or `production`; omission never silently selects development.
 - Development may use the loopback CORS default; staging and production require `APP_CORS_ORIGIN`.
-- Staging and production require `OIDC_ISSUER_URL` with an HTTPS scheme and `OIDC_AUDIENCE`.
+- Staging and production require `OIDC_ISSUER_URL` with an HTTPS scheme, `OIDC_AUDIENCE`, and an HTTPS `OIDC_JWKS_URL`.
+- The API verifies RS256 signatures against the cached JWKS, requires the configured issuer/audience plus `exp`, `iss`, `aud`, and `sub`, and refreshes the key set when a key id is rotated.
+- `GET /v1/session` is the first protected route. Missing or invalid Bearer credentials return 401; missing server auth configuration returns 503. `GET /health`, `/ready`, and `/openapi.json` remain public infrastructure routes.
 - The client still receives only the public API origin. OIDC secrets and verification material remain server-side.
 
 The local development password in `infra/compose.dev.yml` is for loopback-only containers. It is not a shared secret and must not be reused for any reachable database.
