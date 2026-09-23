@@ -5,6 +5,7 @@ on:
     branches: [develop]
     paths:
       - "apps/app/**"
+      - "packages/**"
       - "services/**"
       - "crates/**"
       - "migrations/**"
@@ -46,6 +47,8 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Typecheck v2 app
         run: pnpm --filter @school-collect/app typecheck
+      - name: Typecheck shared UI package
+        run: pnpm --filter @school-collect/ui typecheck
       - name: Build v2 web assets
         run: pnpm --filter @school-collect/app build
       - name: Install Rust

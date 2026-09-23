@@ -15,6 +15,7 @@ School Collect는 학교의 반복 행정업무를 수합·검증·자동화하�
 | 공개 저장소 | Public / 오픈소스 운영 방향 |
 | Figma Design System | 승인 완료 |
 | Tauri + React/Vite | 실행 기반 CI 검증 완료 |
+| Code Design System / AppShell | Stage 5 구현 중 |
 | Rust/Axum API | 실행 기반 CI 검증 완료 |
 | PostgreSQL 18 | migration + readiness CI 검증 완료 |
 | 인증/권한 | 설계 확정, 실제 OIDC/RBAC 구현은 후속 단계 |
@@ -151,6 +152,7 @@ School Collect is an **open-source work platform** for collecting, validating, a
 | Repository | Public, intended for open-source development |
 | Figma Design System | Approved |
 | Tauri + React/Vite | Executable foundation validated in CI |
+| Code Design System / AppShell | Stage 5 in progress |
 | Rust/Axum API | Executable foundation validated in CI |
 | PostgreSQL 18 | Migrations and readiness validated in CI |
 | Authentication/authorization | Architecture decided; OIDC/RBAC implementation follows |
