@@ -470,6 +470,7 @@ export interface NavigationItem {
   id: string;
   label: string;
   icon: IconName;
+  group?: string;
   disabled?: boolean;
 }
 
@@ -484,11 +485,11 @@ export interface SidebarProps {
 
 export function Sidebar({
   activeId,
-  brand = "SCHOOL COLLECT",
+  brand = "School Collect",
   footer,
   items,
   onSelect,
-  subtitle = "학교 업무 수합",
+  subtitle = "",
 }: SidebarProps) {
   return (
     <aside className="sc-sidebar">
@@ -502,21 +503,24 @@ export function Sidebar({
         </span>
       </div>
       <nav aria-label="주 메뉴" className="sc-sidebar__nav">
-        {items.map((item) => {
+        {items.map((item, index) => {
           const active = item.id === activeId;
 
           return (
-            <button
-              aria-current={active ? "page" : undefined}
-              className={cx("sc-nav-item", active && "sc-nav-item--active")}
-              disabled={item.disabled}
-              key={item.id}
-              onClick={() => onSelect(item.id)}
-              type="button"
-            >
-              <Icon name={item.icon} size={18} />
-              <span>{item.label}</span>
-            </button>
+            <div className="sc-nav-entry" key={item.id}>
+              {item.group && (index === 0 || items[index - 1].group !== item.group) ? (
+                <span className="sc-nav-group">{item.group}</span>
+              ) : null}
+              <button
+                aria-current={active ? "page" : undefined}
+                className={cx("sc-nav-item", active && "sc-nav-item--active")}
+                disabled={item.disabled}
+                onClick={() => onSelect(item.id)}
+                type="button"
+              >
+                <span>{item.label}</span>
+              </button>
+            </div>
           );
         })}
       </nav>

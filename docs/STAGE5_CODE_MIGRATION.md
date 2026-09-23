@@ -28,6 +28,14 @@
 
 ## MIGRATION PLAN
 
+### Desktop Home alignment (2026-09-23)
+
+- Source: Product `Desktop / Home` node `13:2` (1280×820), read through Figma design context. Preserve this approved frame; no Figma write.
+- Classification: the current four-item icon navigation and diagnostic-first overview diverge from the approved grouped, text-first sidebar and work-first hierarchy. The depicted counts, named work, search, account identity, and actions lack an implemented data/auth contract; do not copy them as live data or make inert controls.
+- Destination: `packages/ui` Sidebar/Header tokens and `apps/app` route composition. Keep `/health` diagnostic in Settings. Use an empty work state on Home until authorized API data exists.
+- Rollback: revert this code batch; no DB, API, Figma node, or native capability changes.
+- Screenshot targets: 1280×820 and 720×700 Home empty, Settings checking/error, keyboard and offline state. Compare shell geometry and hierarchy with node `13:2`, not sample business values.
+
 1. `packages/ui`를 React peer dependency만 사용하는 shared package로 추가합니다.
 2. 승인된 semantic token을 CSS custom property로 고정하고, 제품 화면은 token을
    통해서만 색·spacing·radius를 사용합니다.

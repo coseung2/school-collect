@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AppShell,
   Button,
-  Card,
   EmptyState,
   OfflineState,
   Status,
@@ -10,7 +9,7 @@ import {
   type StatusTone,
 } from "@school-collect/ui";
 
-type RouteId = "overview" | "collections" | "schools" | "settings";
+type RouteId = "overview" | "collections" | "settings";
 type ConnectionState = "idle" | "checking" | "healthy" | "error" | "offline";
 
 type ApiHealth = {
@@ -23,10 +22,15 @@ const apiBaseUrl = (
 ).replace(/\/$/, "");
 
 const navigation: NavigationItem[] = [
-  { id: "overview", icon: "activity", label: "개요" },
-  { id: "collections", icon: "briefcase", label: "수집 작업" },
-  { id: "schools", icon: "school", label: "학교" },
-  { id: "settings", icon: "settings", label: "설정" },
+  { id: "overview", icon: "activity", label: "홈", group: "업무" },
+  { id: "collections", icon: "briefcase", label: "자료수합", group: "업무" },
+  { id: "privacy", icon: "lock", label: "개인정보", group: "업무", disabled: true },
+  { id: "purchase", icon: "briefcase", label: "구매·출장", group: "업무", disabled: true },
+  { id: "curriculum", icon: "school", label: "교육과정", group: "교육", disabled: true },
+  { id: "timetable", icon: "school", label: "시간표", group: "교육", disabled: true },
+  { id: "plans", icon: "school", label: "교육계획", group: "교육", disabled: true },
+  { id: "documents", icon: "briefcase", label: "문서자동화", group: "도구", disabled: true },
+  { id: "settings", icon: "settings", label: "설정", group: "도구" },
 ];
 
 const routeMeta: Record<
@@ -34,28 +38,22 @@ const routeMeta: Record<
   { title: string; description: string; emptyTitle: string; emptyDescription: string }
 > = {
   overview: {
-    title: "개요",
-    description: "API 연결 상태와 수집 작업을 확인합니다.",
-    emptyTitle: "아직 수집 작업이 없습니다",
-    emptyDescription: "수집 작업을 만들면 이곳에서 진행 상태를 확인할 수 있습니다.",
+    title: "오늘의 업무",
+    description: "",
+    emptyTitle: "표시할 업무가 없습니다",
+    emptyDescription: "업무 데이터가 연결되면 이곳에서 확인할 수 있습니다.",
   },
   collections: {
-    title: "수집 작업",
-    description: "학교 업무 수합을 만들고 진행 상태를 관리합니다.",
-    emptyTitle: "표시할 수집 작업이 없습니다",
-    emptyDescription: "수집 작업이 준비되면 이곳에서 확인할 수 있습니다.",
-  },
-  schools: {
-    title: "학교",
-    description: "접근 가능한 학교와 운영 범위를 관리합니다.",
-    emptyTitle: "연결된 학교가 없습니다",
-    emptyDescription: "학교 연결이 완료되면 이곳에 표시됩니다.",
+    title: "자료수합",
+    description: "",
+    emptyTitle: "표시할 수합이 없습니다",
+    emptyDescription: "수합 데이터 연결 후 이곳에 표시됩니다.",
   },
   settings: {
     title: "설정",
-    description: "앱 환경과 연결 상태를 관리합니다.",
-    emptyTitle: "설정할 항목이 없습니다",
-    emptyDescription: "사용 가능한 설정이 준비되면 이곳에서 관리할 수 있습니다.",
+    description: "",
+    emptyTitle: "",
+    emptyDescription: "",
   },
 };
 
@@ -109,7 +107,7 @@ function routeFromHash(): RouteId {
   }
 
   const candidate = window.location.hash.replace(/^#\/?/, "");
-  return candidate in routeMeta ? (candidate as RouteId) : "overview";
+  return Object.hasOwn(routeMeta, candidate) ? (candidate as RouteId) : "overview";
 }
 
 export default function App() {
@@ -157,10 +155,6 @@ export default function App() {
 
   const currentRoute = routeMeta[activeRoute];
   const connection = connectionCopy[connectionState];
-  const headerStatus = useMemo(
-    () => <Status tone={connection.tone}>{connection.label}</Status>,
-    [connection.label, connection.tone],
-  );
 
   async function checkApi() {
     if (!isOnline) {
@@ -216,23 +210,24 @@ export default function App() {
         ) : null
       }
       description={currentRoute.description}
-      eyebrow="SCHOOL COLLECT"
+      eyebrow={activeRoute === "overview" ? "홈" : undefined}
       navigation={navigation}
       onNavigationChange={(id) => {
         if (id in routeMeta) {
           window.location.hash = `/${id}`;
         }
       }}
-      status={headerStatus}
       title={currentRoute.title}
     >
-      {activeRoute === "overview" ? (
-        <Overview
+      {activeRoute === "settings" ? (
+        <ConnectionSettings
           apiHealth={apiHealth}
           connection={connection}
           connectionState={connectionState}
           onCheckApi={checkApi}
         />
+      ) : activeRoute === "overview" ? (
+        <Overview />
       ) : (
         <RouteEmptyState route={currentRoute} />
       )}
@@ -240,7 +235,19 @@ export default function App() {
   );
 }
 
-function Overview({
+function Overview() {
+  return (
+    <section className="app-page" aria-labelledby="priority-heading">
+      <h2 id="priority-heading">우선 확인할 업무</h2>
+      <EmptyState
+        description="업무 데이터가 연결되면 이곳에서 확인할 수 있습니다."
+        title="표시할 업무가 없습니다"
+      />
+    </section>
+  );
+}
+
+function ConnectionSettings({
   apiHealth,
   connection,
   connectionState,
@@ -253,13 +260,8 @@ function Overview({
 }) {
   return (
     <div className="app-page">
-      <div className="app-page__intro">
-        <p className="sc-eyebrow">업무 현황</p>
-        <h2>수집 현황</h2>
-      </div>
-
       <div className="app-overview-grid">
-        <Card className="app-connection-card" variant="attention">
+        <section className="app-connection-card">
           <div className="app-card-heading">
             <div>
               <p className="app-card-eyebrow">API 연결</p>
@@ -288,20 +290,6 @@ function Overview({
           >
             연결 확인
           </Button>
-        </Card>
-
-        <section aria-labelledby="recent-collections-title">
-          <div className="app-section-heading">
-            <div>
-              <p className="app-card-eyebrow">수집 작업</p>
-              <h2 id="recent-collections-title">최근 수집</h2>
-            </div>
-          </div>
-          <EmptyState
-            className="app-empty-state"
-            description="수집 작업을 만들면 이곳에서 진행 상태를 확인할 수 있습니다."
-            title="아직 수집 작업이 없습니다"
-          />
         </section>
       </div>
     </div>
@@ -315,10 +303,6 @@ function RouteEmptyState({
 }) {
   return (
     <div className="app-page">
-      <div className="app-page__intro">
-        <p className="sc-eyebrow">{route.title}</p>
-        <h2>업무 공간</h2>
-      </div>
       <EmptyState
         description={route.emptyDescription}
         title={route.emptyTitle}
