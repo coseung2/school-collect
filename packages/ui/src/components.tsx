@@ -3,6 +3,7 @@ import {
   useId,
   type ButtonHTMLAttributes,
   type HTMLAttributes,
+  type KeyboardEvent,
   type LiHTMLAttributes,
   type ReactNode,
   type SVGProps,
@@ -306,6 +307,36 @@ export function Tabs({
   onChange,
   value,
 }: TabsProps) {
+  function handleKeyDown(event: KeyboardEvent<HTMLButtonElement>, id: string) {
+    const enabled = items.filter((item) => !item.disabled);
+    const index = enabled.findIndex((item) => item.id === id);
+    if (index < 0) return;
+
+    let nextIndex: number;
+    switch (event.key) {
+      case "ArrowRight":
+        nextIndex = (index + 1) % enabled.length;
+        break;
+      case "ArrowLeft":
+        nextIndex = (index - 1 + enabled.length) % enabled.length;
+        break;
+      case "Home":
+        nextIndex = 0;
+        break;
+      case "End":
+        nextIndex = enabled.length - 1;
+        break;
+      default:
+        return;
+    }
+
+    event.preventDefault();
+    const nextId = enabled[nextIndex].id;
+    onChange(nextId);
+    const buttons = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("[role=tab]");
+    buttons?.[items.findIndex((item) => item.id === nextId)]?.focus();
+  }
+
   return (
     <div aria-label={label} className="sc-tabs" role="tablist">
       {items.map((item) => (
@@ -314,8 +345,10 @@ export function Tabs({
           className={cx("sc-tab", item.id === value && "sc-tab--active")}
           disabled={item.disabled}
           key={item.id}
+          onKeyDown={(event) => handleKeyDown(event, item.id)}
           onClick={() => onChange(item.id)}
           role="tab"
+          tabIndex={item.id === value ? 0 : -1}
           type="button"
         >
           {item.label}
