@@ -1,4 +1,4 @@
-use std::{env, net::SocketAddr};
+use std::{env, net::SocketAddr, sync::Arc};
 
 use anyhow::Context;
 use axum::http::{HeaderValue, Uri};
@@ -70,9 +70,12 @@ async fn main() -> anyhow::Result<()> {
     school_collect_observability::init("api");
 
     let environment = Environment::from_env(|key| env::var(key).ok())?;
-    if environment.requires_production_configuration() {
-        school_collect_auth::OidcConfig::from_env(|key| env::var(key).ok())?;
-    }
+    let auth = if environment.requires_production_configuration() {
+        let config = school_collect_auth::OidcConfig::from_env(|key| env::var(key).ok())?;
+        Some(Arc::new(school_collect_auth::TokenVerifier::new(config)?))
+    } else {
+        None
+    };
 
     // Missing configuration is an operator error, not a degraded runtime mode.
     let database_url = env::var("DATABASE_URL")
@@ -98,7 +101,7 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(address).await?;
     tracing::info!(%address, "API listening");
 
-    axum::serve(listener, router(AppState { pool }, cors_origin))
+    axum::serve(listener, router(AppState { pool }, cors_origin, auth))
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 
