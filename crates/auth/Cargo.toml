@@ -6,5 +6,9 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+jsonwebtoken.workspace = true
+reqwest.workspace = true
+serde.workspace = true
 school-collect-domain = { path = "../domain" }
+tokio.workspace = true
 url.workspace = true
