@@ -23,6 +23,7 @@ DATABASE_URL=postgres://school_collect:school_collect_local_only@127.0.0.1:5432/
 APP_BIND_ADDR=127.0.0.1:3000
 APP_CORS_ORIGIN=http://127.0.0.1:1420
 VITE_API_BASE_URL=http://127.0.0.1:3000
+APP_AUTH_MODE=disabled
 ```
 
 Do not use the local development password outside a loopback-only development machine.
@@ -59,6 +60,9 @@ Stage 6 now validates the server environment boundary:
 - Development may use the loopback CORS default; staging and production require `APP_CORS_ORIGIN`.
 - Staging and production require `OIDC_ISSUER_URL` with an HTTPS scheme and `OIDC_AUDIENCE`.
 - The client still receives only the public API origin. OIDC secrets and verification material remain server-side.
+- Development may use `APP_AUTH_MODE=disabled`; staging and production require `APP_AUTH_MODE=oidc` and verified OIDC access tokens.
+
+The v2 migration now creates the empty identity, membership, Collect, audit, and outbox tables. It does not create a school, user, assignment, or submission row. Tests and local experiments must create disposable records at runtime.
 
 The local development password in `infra/compose.dev.yml` is for loopback-only containers. It is not a shared secret and must not be reused for any reachable database.
 

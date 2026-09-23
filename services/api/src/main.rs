@@ -3,6 +3,7 @@ use std::{env, net::SocketAddr};
 use anyhow::Context;
 use axum::http::HeaderValue;
 use school_collect_api::{AppState, router};
+use school_collect_auth::{AuthMode, OidcConfig};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Environment {
@@ -33,8 +34,16 @@ async fn main() -> anyhow::Result<()> {
     school_collect_observability::init("api");
 
     let environment = Environment::from_env()?;
-    if environment.requires_production_configuration() {
-        school_collect_auth::OidcConfig::from_env(|key| env::var(key).ok())?;
+    let auth_mode = AuthMode::from_env(|key| env::var(key).ok())?;
+    let auth_state = match auth_mode {
+        AuthMode::DisabledForDevelopment => school_collect_api::AuthState::development_disabled(),
+        AuthMode::Oidc => {
+            let config = OidcConfig::from_env(|key| env::var(key).ok())?;
+            school_collect_api::AuthState::oidc(school_collect_auth::OidcVerifier::new(config)?)
+        }
+    };
+    if environment.requires_production_configuration() && auth_mode != AuthMode::Oidc {
+        anyhow::bail!("production-like environments require OIDC authentication");
     }
 
     // Missing configuration is an operator error, not a degraded runtime mode.
@@ -62,7 +71,7 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(address).await?;
     tracing::info!(%address, "API listening");
 
-    axum::serve(listener, router(AppState { pool }, cors_origin))
+    axum::serve(listener, router(AppState { pool }, cors_origin, auth_state))
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 

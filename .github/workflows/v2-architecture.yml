@@ -16,6 +16,21 @@ on:
       - "pnpm-workspace.yaml"
       - "pnpm-lock.yaml"
       - ".github/workflows/v2-architecture.yml"
+  push:
+    branches: [develop]
+    paths:
+      - "apps/app/**"
+      - "packages/**"
+      - "services/**"
+      - "crates/**"
+      - "migrations/**"
+      - "infra/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "pnpm-workspace.yaml"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/v2-architecture.yml"
   workflow_dispatch:
 
 permissions:
@@ -113,8 +128,10 @@ jobs:
       - name: Verify migration outcome and absence of demo seed rows
         run: |
           test "$(psql "$DATABASE_URL" -tAc "select schema_version from app_meta")" = "v2-bootstrap"
-          test "$(psql "$DATABASE_URL" -tAc "select count(*) from _sqlx_migrations where success")" = "1"
-          test "$(psql "$DATABASE_URL" -tAc "select count(*) from information_schema.tables where table_schema='public' and table_name in ('schools','users','tasks','submissions')")" = "0"
+          test "$(psql "$DATABASE_URL" -tAc "select count(*) from _sqlx_migrations where success")" = "2"
+          test "$(psql "$DATABASE_URL" -tAc "select count(*) from information_schema.tables where table_schema='public' and table_name in ('tenants','users','memberships','collects','collect_items','collect_assignments','collect_submissions','audit_events','outbox_events')")" = "9"
+          test "$(psql "$DATABASE_URL" -tAc "select count(*) from collects")" = "0"
+          test "$(psql "$DATABASE_URL" -tAc "select count(*) from users")" = "0"
       - name: Re-running migrations must be a no-op
         run: cargo run -p school-collect-migrator --locked
       - name: Missing configuration must fail startup instead of degrading
