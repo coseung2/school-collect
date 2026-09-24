@@ -31,6 +31,10 @@ COPY --from=build /src/target/release/school-collect-worker /usr/local/bin/schoo
 USER schoolcollect
 EXPOSE 3000
 
+# A container listener must not stay on the container's own loopback, otherwise
+# port publishing and platform health probes can never reach it.
+ENV APP_BIND_ADDR=0.0.0.0:3000
+
 # The platform probes HTTP directly: /health for liveness and /ready for
 # readiness, which also verifies that the v2 schema has been migrated.
 ENTRYPOINT ["/usr/local/bin/school-collect-api"]
