@@ -67,5 +67,6 @@ pnpm --filter @school-collect/app tauri dev  # 데스크톱 창
   `services/api/tests/collect_flow_e2e.rs`가 검증합니다.
 - 데스크톱 UI 흐름(로그인 → 학교 등록 → 수합 생성 → 배포 → 초안 저장 → 제출)은
   로컬 API와 dev 서버를 띄운 상태에서 실제 브라우저로 확인했습니다.
-- `infra/api.Dockerfile`의 이미지 빌드는 이 개발 머신에 Docker 데몬이 없어
-  실행하지 못했습니다. CI의 `container` 작업이 빌드를 검증합니다.
+- `infra/api.Dockerfile` 이미지 빌드는 이 개발 머신에 Docker 데몬이 없어 로컬에서
+  실행하지 못했습니다. 대신 PR CI의 `server-image` 작업이 이미지를 빌드하고,
+  그 이미지로 PostgreSQL에 마이그레이션을 적용한 뒤 `/ready` 200까지 확인합니다.
