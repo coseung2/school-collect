@@ -35,6 +35,25 @@ pub enum MembershipRole {
 }
 
 impl MembershipRole {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "admin" => Some(Self::Admin),
+            "coordinator" => Some(Self::Coordinator),
+            "contributor" => Some(Self::Contributor),
+            "viewer" => Some(Self::Viewer),
+            _ => None,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Admin => "admin",
+            Self::Coordinator => "coordinator",
+            Self::Contributor => "contributor",
+            Self::Viewer => "viewer",
+        }
+    }
+
     pub const fn can_manage_collects(self) -> bool {
         matches!(self, Self::Admin | Self::Coordinator)
     }

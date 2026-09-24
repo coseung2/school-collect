@@ -24,6 +24,8 @@ APP_BIND_ADDR=127.0.0.1:3000
 APP_CORS_ORIGIN=http://127.0.0.1:1420
 VITE_API_BASE_URL=http://127.0.0.1:3000
 APP_AUTH_MODE=disabled
+OIDC_ISSUER_URL=https://<project-ref>.supabase.co/auth/v1
+OIDC_AUDIENCE=authenticated
 ```
 
 Do not use the local development password outside a loopback-only development machine.
@@ -89,3 +91,24 @@ What was checked: the pinned `tauri-cli` 2.11.5 exposes `tauri android init` and
 What was not checked, and why: the development machine has no Android SDK/NDK (`ANDROID_HOME` and NDK are unset) and only the `x86_64-pc-windows-msvc` Rust target installed, so no Android target could be built. iOS additionally requires macOS, which is unavailable here. `android init` and `ios init` were not run, because generating mobile project scaffolding would add unverifiable files to this PR.
 
 Consequence: treat Android/iOS target and plugin compatibility as an open Stage 6+ decision. Do not record it as supported.
+
+## Identity and database binding
+
+Stage 6 binds the API to the registered identity provider and database, decided in
+[ADR-0002](ADR/0002-supabase-identity-and-database.md).
+
+- v2 objects live in the `school_collect` schema. `public` is left alone because
+  the retired v1 tables still exist there and `collect_submissions` collides by
+  name. Repository SQL is schema-qualified, and pooled connections also set
+  `search_path=school_collect,public`.
+- `APP_AUTH_MODE=oidc` verifies access tokens through OIDC discovery plus JWKS
+  (ES256 or RS256) and checks issuer, audience, signature, and expiry.
+  `OIDC_JWKS_URL` can point directly at a JWKS document for providers that do not
+  advertise discovery.
+- The first authenticated request creates the local user row from the verified
+  `issuer`/`subject` pair. Tenant and role always come from
+  `school_collect.memberships`, never from the request body or headers.
+- `services/api/tests/collect_flow_e2e.rs` runs the whole Collect flow against
+  real infrastructure and removes every record and test identity it creates. It
+  skips when `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, or
+  `SUPABASE_SERVICE_ROLE_KEY` is absent, so `cargo test` stays offline-safe.

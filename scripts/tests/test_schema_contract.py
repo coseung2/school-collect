@@ -23,11 +23,17 @@ class SchemaContractTests(unittest.TestCase):
             "audit_events",
             "outbox_events",
         ):
-            self.assertIn(f"CREATE TABLE IF NOT EXISTS {table}", self.sql)
+            self.assertIn(f"CREATE TABLE IF NOT EXISTS school_collect.{table}", self.sql)
+
+    def test_v2_objects_live_in_a_dedicated_schema(self):
+        self.assertIn("CREATE SCHEMA IF NOT EXISTS school_collect", self.sql)
+        self.assertNotIn("CREATE TABLE IF NOT EXISTS app_meta", self.sql)
 
     def test_tenant_and_version_invariants_are_present(self):
         self.assertIn("UNIQUE (issuer, subject)", self.sql)
-        self.assertIn("tenant_id UUID NOT NULL REFERENCES tenants(id)", self.sql)
+        self.assertIn(
+            "tenant_id UUID NOT NULL REFERENCES school_collect.tenants(id)", self.sql
+        )
         self.assertIn("version BIGINT NOT NULL DEFAULT 0 CHECK (version >= 0)", self.sql)
         self.assertIn("published_at TIMESTAMPTZ", self.sql)
 

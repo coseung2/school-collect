@@ -7,15 +7,25 @@ license.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 axum = { workspace = true }
+chrono = { workspace = true }
 http = { workspace = true }
 school-collect-auth = { path = "../../crates/auth" }
 school-collect-contracts = { path = "../../crates/contracts" }
 school-collect-db = { path = "../../crates/db" }
+school-collect-domain = { path = "../../crates/domain" }
 school-collect-observability = { path = "../../crates/observability" }
 serde = { workspace = true }
+serde_json = { workspace = true }
 sqlx = { workspace = true }
 tokio = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
 tracing = { workspace = true }
 utoipa = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+reqwest = { workspace = true }
+serde_json = { workspace = true }
+tower = { workspace = true }
+url = { workspace = true }

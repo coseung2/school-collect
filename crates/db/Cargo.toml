@@ -6,4 +6,8 @@ license.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+chrono = { workspace = true }
+school-collect-domain = { path = "../domain" }
+serde_json = { workspace = true }
 sqlx = { workspace = true }
+uuid = { workspace = true }

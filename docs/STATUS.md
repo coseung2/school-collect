@@ -1,6 +1,6 @@
 # 실행 상태
 
-기준일: 2026-09-24. 이 문서는 계획과 실제 검증 완료를 구분합니다.
+기준일: 2026-09-25. 이 문서는 계획과 실제 검증 완료를 구분합니다.
 
 ## 단계 상태
 
@@ -11,7 +11,7 @@
 | 3. 실행 기반 | 조건 충족 | lockfile 커밋 + frozen/locked CI, TS strict, fmt/clippy/test, PostgreSQL 18 migration, /health·/ready 분리 검증, Windows native build, local tauri dev | mobile target/plugin (미검증), dev/prod config 분리 완료 (Stage 6) |
 | 4. Figma | 시안 승인 | Design System/Product 파일과 핵심 UI 규칙 승인 | code mapping, interaction/accessibility detail, Library/Code Connect 후속 |
 | 5. Code DS/AppShell | 완료 (PR #17, `9697363`) | `packages/ui` token/component와 실제 Tauri AppShell, 상태·키보드·wide/narrow 검증 | Figma Library/Code Connect 후속 |
-| 6. Auth/Data/Ops | 기반 구현 중 | API environment boundary, RS256/JWKS verifier, protected principal route, tenant/Collect migration, 공용 API 계약 | user provisioning/membership RBAC, R2/NATS/SQLite/backup 실제 구현·검증 |
+| 6. Auth/Data/Ops | 구현 중 | Supabase Auth 실로그인 + ES256/JWKS 검증, user/membership provisioning, tenant RBAC, Collect 상태 전이와 version 충돌까지 실제 프로젝트·실제 DB에서 E2E 통과 | R2/NATS/SQLite/backup, 환경 분리, 세션 영속화 |
 | 7. Collect | 계획 | reference flow 정의 | end-to-end production-grade 구현/E2E |
 
 ## 확인된 원격 상태
@@ -94,6 +94,13 @@ interaction/accessibility의 대조입니다.
 - 테스트 실행 시 필요한 데이터만 생성하고 rollback/truncate/disposable DB 등으로 제거
 - 실제 업무자료/개인정보는 public repository에 두지 않음
 - 제품에 필수인 reference data는 demo data와 구분
+
+## 실제 연결된 개발 환경
+
+- identity/database: 등록된 Supabase 프로젝트(Andong ICT Infisical `school collect`, Development)
+- v2 객체는 `school_collect` 스키마에 있고, v1 잔여 테이블(`public`)과 분리되어 있습니다.
+- 검증: `services/api/tests/collect_flow_e2e.rs`가 실제 로그인 → 토큰 검증 → 수합 생성·배포·작성·제출·마감과 tenant 격리를 확인하고 생성한 행과 테스트 계정을 모두 삭제합니다.
+- 위험: dev/staging/prod Infisical 라벨이 **같은** Supabase 프로젝트를 가리킵니다. 환경 분리는 아직 없습니다.
 
 ## 아직 하지 않은 것
 
