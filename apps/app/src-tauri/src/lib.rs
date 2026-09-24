@@ -139,14 +139,11 @@ fn write_automation_recipes(
         content.push('\n');
     }
 
-    fs::write(path, content)
-        .map_err(|error| format!("자동화 설정을 저장하지 못했습니다: {error}"))
+    fs::write(path, content).map_err(|error| format!("자동화 설정을 저장하지 못했습니다: {error}"))
 }
 
 #[tauri::command]
-fn list_automation_recipes(
-    app_handle: tauri::AppHandle,
-) -> Result<Vec<AutomationRecipe>, String> {
+fn list_automation_recipes(app_handle: tauri::AppHandle) -> Result<Vec<AutomationRecipe>, String> {
     read_automation_recipes(&app_handle)
 }
 
