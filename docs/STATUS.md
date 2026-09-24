@@ -12,7 +12,7 @@
 | 4. Figma | 시안 승인 | Design System/Product 파일과 핵심 UI 규칙 승인 | code mapping, interaction/accessibility detail, Library/Code Connect 후속 |
 | 5. Code DS/AppShell | 완료 (PR #17, `9697363`) | `packages/ui` token/component와 실제 Tauri AppShell, 상태·키보드·wide/narrow 검증 | Figma Library/Code Connect 후속 |
 | 6. Auth/Data/Ops | 구현 중 | Supabase Auth 실로그인 + ES256/JWKS 검증, user/membership provisioning, tenant RBAC, Collect 상태 전이와 version 충돌까지 실제 프로젝트·실제 DB에서 E2E 통과 | R2/NATS/SQLite/backup, 환경 분리, 세션 영속화 |
-| 7. Collect | 계획 | reference flow 정의 | end-to-end production-grade 구현/E2E |
+| 7. Collect | 구현 중(첫 제품 틀) | 수합 항목·대상·제출 현황까지 서버와 데스크톱 화면을 연결하고, 실제 Supabase·PostgreSQL E2E와 로컬 UI 흐름으로 확인 | 구성원 초대(교사 합류), 파일 첨부, 결과 export, offline 초안 |
 
 ## 확인된 원격 상태
 
@@ -116,6 +116,15 @@ interaction/accessibility의 대조입니다.
 - `apps/app`은 로그인 → 학교 등록 → 수합 생성 → 배포 → 초안 저장 → 제출을 실제 API와 연결합니다.
 - 접근 토큰은 창 메모리에만 보관하고 디스크에 저장하지 않습니다.
 - 검증: 로컬 API(`APP_AUTH_MODE=oidc`)와 dev 서버를 띄운 상태에서 실제 브라우저로 전체 흐름을 확인했습니다. 검증용 계정과 데이터는 삭제했습니다.
+
+## 제품 틀 (Stage 7 첫 슬라이스)
+
+역할·객체·화면·API 표면은 [MVP_SCOPE.md](MVP_SCOPE.md)에 고정했습니다.
+
+- 화면: 홈, 자료수합(+상세), 내 제출(+제출 작성), 구성원, 설정. 해시 라우팅과 권한별 메뉴 노출을 포함합니다.
+- 서버: 수합 생성 시 항목(`collect_items`)과 대상(`collect_assignments`)을 한 transaction으로 기록하고, 배포가 상태를 `published`로 바꾸며, 제출 현황(`/v1/collects/{id}/status`)과 내 배정(`/v1/assignments`), 구성원(`/v1/members`)을 제공합니다.
+- 검증: `services/api/tests/collect_flow_e2e.rs`가 실제 Supabase 로그인과 실제 PostgreSQL에서 항목 저장, 기본 대상 생성, 제출 현황 수치, 내 배정 목록, 잘못된 항목 key 거부를 함께 확인합니다. 로컬 Docker 스택에서는 브라우저로 홈 → 수합 생성(항목 2개) → 배포 → 제출 작성(임시 저장 버전 1, 제출) → 관리자 현황 `1/1`, 미제출 없음까지 확인했습니다.
+- 남은 위험: 구성원 초대 경로가 아직 없어서 관리자가 교사를 자기 학교에 추가할 수 없습니다. 교사 화면은 membership이 있는 사용자에게만 열리므로, 초대 기능이 다음 슬라이스입니다.
 
 ## 배포 기반
 
