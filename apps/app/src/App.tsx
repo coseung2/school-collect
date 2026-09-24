@@ -86,7 +86,13 @@ function canManage(role: string): boolean {
 }
 
 function messageOf(error: unknown): string {
-  return error instanceof ApiError ? error.message : "알 수 없는 오류가 발생했습니다.";
+  if (error instanceof ApiError || error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  return "알 수 없는 오류가 발생했습니다.";
 }
 
 export default function App() {
