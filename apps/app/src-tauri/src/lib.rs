@@ -1,9 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf};
 use tauri::Manager;
-use url::Url;
 
-const AUTOMATION_RECIPES_FILE: &str = "automation-recipes.json";
+const AUTOMATION_RECIPES_FILE: &str = "automation-recipes.tsv";
 const MAX_RECIPE_NAME_LEN: usize = 80;
 const MAX_RECIPE_ID_LEN: usize = 128;
 const MAX_TARGET_URL_LEN: usize = 2048;
@@ -23,23 +22,35 @@ struct AutomationRecipe {
     kind: AutomationKind,
 }
 
-fn validate_target_url(value: &str) -> Result<Url, String> {
+fn validate_plain_field(value: &str) -> Result<(), String> {
+    if value.contains(['\t', '\r', '\n']) {
+        return Err("탭이나 줄바꿈 문자는 사용할 수 없습니다.".to_string());
+    }
+    Ok(())
+}
+
+fn validate_target_url(value: &str) -> Result<(), String> {
     if value.len() > MAX_TARGET_URL_LEN {
         return Err("대상 URL이 너무 깁니다.".to_string());
     }
+    validate_plain_field(value)?;
 
-    let parsed = Url::parse(value).map_err(|_| "올바른 URL을 입력하세요.".to_string())?;
-    if parsed.scheme() != "https" && parsed.scheme() != "http" {
-        return Err("http 또는 https URL만 등록할 수 있습니다.".to_string());
-    }
-    if parsed.host_str().is_none() {
+    let authority = value
+        .strip_prefix("https://")
+        .or_else(|| value.strip_prefix("http://"))
+        .ok_or_else(|| "http 또는 https URL만 등록할 수 있습니다.".to_string())?
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("");
+
+    if authority.is_empty() {
         return Err("대상 URL에 호스트가 없습니다.".to_string());
     }
-    if !parsed.username().is_empty() || parsed.password().is_some() {
+    if authority.contains('@') {
         return Err("계정 정보가 포함된 URL은 등록할 수 없습니다.".to_string());
     }
 
-    Ok(parsed)
+    Ok(())
 }
 
 fn validate_recipe(recipe: &AutomationRecipe) -> Result<(), String> {
@@ -52,10 +63,9 @@ fn validate_recipe(recipe: &AutomationRecipe) -> Result<(), String> {
     if name.is_empty() || name.len() > MAX_RECIPE_NAME_LEN {
         return Err("버튼 이름은 1~80자로 입력하세요.".to_string());
     }
-    if recipe.kind != AutomationKind::Shortcut {
-        return Err("지원하지 않는 자동화 유형입니다.".to_string());
-    }
 
+    validate_plain_field(id)?;
+    validate_plain_field(name)?;
     validate_target_url(recipe.target_url.trim())?;
     Ok(())
 }
@@ -72,6 +82,34 @@ fn automation_recipes_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, Str
     Ok(directory.join(AUTOMATION_RECIPES_FILE))
 }
 
+fn encode_recipe(recipe: &AutomationRecipe) -> String {
+    format!(
+        "{}\tshortcut\t{}\t{}",
+        recipe.id, recipe.name, recipe.target_url
+    )
+}
+
+fn decode_recipe(line: &str) -> Result<AutomationRecipe, String> {
+    let mut fields = line.splitn(4, '\t');
+    let id = fields.next().unwrap_or("");
+    let kind = fields.next().unwrap_or("");
+    let name = fields.next().unwrap_or("");
+    let target_url = fields.next().unwrap_or("");
+
+    if kind != "shortcut" || id.is_empty() || name.is_empty() || target_url.is_empty() {
+        return Err("자동화 설정 형식이 올바르지 않습니다.".to_string());
+    }
+
+    let recipe = AutomationRecipe {
+        id: id.to_string(),
+        kind: AutomationKind::Shortcut,
+        name: name.to_string(),
+        target_url: target_url.to_string(),
+    };
+    validate_recipe(&recipe)?;
+    Ok(recipe)
+}
+
 fn read_automation_recipes(app_handle: &tauri::AppHandle) -> Result<Vec<AutomationRecipe>, String> {
     let path = automation_recipes_path(app_handle)?;
     if !path.exists() {
@@ -80,14 +118,11 @@ fn read_automation_recipes(app_handle: &tauri::AppHandle) -> Result<Vec<Automati
 
     let content = fs::read_to_string(path)
         .map_err(|error| format!("자동화 설정을 읽지 못했습니다: {error}"))?;
-    let recipes: Vec<AutomationRecipe> = serde_json::from_str(&content)
-        .map_err(|error| format!("자동화 설정 형식이 올바르지 않습니다: {error}"))?;
-
-    for recipe in &recipes {
-        validate_recipe(recipe)?;
-    }
-
-    Ok(recipes)
+    content
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(decode_recipe)
+        .collect()
 }
 
 fn write_automation_recipes(
@@ -95,8 +130,14 @@ fn write_automation_recipes(
     recipes: &[AutomationRecipe],
 ) -> Result<(), String> {
     let path = automation_recipes_path(app_handle)?;
-    let content = serde_json::to_string_pretty(recipes)
-        .map_err(|error| format!("자동화 설정을 직렬화하지 못했습니다: {error}"))?;
+    let mut content = recipes
+        .iter()
+        .map(encode_recipe)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !content.is_empty() {
+        content.push('\n');
+    }
 
     fs::write(path, content)
         .map_err(|error| format!("자동화 설정을 저장하지 못했습니다: {error}"))
@@ -140,6 +181,7 @@ fn delete_automation_recipe(
     if recipe_id.is_empty() || recipe_id.len() > MAX_RECIPE_ID_LEN {
         return Err("자동화 식별자가 올바르지 않습니다.".to_string());
     }
+    validate_plain_field(recipe_id)?;
 
     let mut recipes = read_automation_recipes(&app_handle)?;
     recipes.retain(|recipe| recipe.id != recipe_id);
@@ -197,8 +239,9 @@ fn launch_external_url(_url: &str) -> Result<(), String> {
 
 #[tauri::command]
 fn open_automation_target(target_url: String) -> Result<(), String> {
-    let parsed = validate_target_url(target_url.trim())?;
-    launch_external_url(parsed.as_str())
+    let target_url = target_url.trim();
+    validate_target_url(target_url)?;
+    launch_external_url(target_url)
 }
 
 #[tauri::command]
@@ -226,9 +269,7 @@ mod tests {
 
     #[test]
     fn accepts_https_target_without_credentials() {
-        let url = validate_target_url("https://example.invalid/portal#draft").unwrap();
-        assert_eq!(url.scheme(), "https");
-        assert_eq!(url.host_str(), Some("example.invalid"));
+        assert!(validate_target_url("https://example.invalid/portal#draft").is_ok());
     }
 
     #[test]
@@ -241,5 +282,17 @@ mod tests {
     fn rejects_embedded_credentials() {
         let error = validate_target_url("https://user:secret@example.invalid/").unwrap_err();
         assert!(error.contains("계정 정보"));
+    }
+
+    #[test]
+    fn recipe_round_trip_preserves_fields() {
+        let recipe = AutomationRecipe {
+            id: "recipe-1".to_string(),
+            name: "기안".to_string(),
+            target_url: "https://example.invalid/draft".to_string(),
+            kind: AutomationKind::Shortcut,
+        };
+        let decoded = decode_recipe(&encode_recipe(&recipe)).unwrap();
+        assert_eq!(decoded, recipe);
     }
 }
