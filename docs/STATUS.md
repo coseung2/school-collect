@@ -6,7 +6,7 @@
 
 | 단계 | 상태 | 확인된 내용 | 남은 게이트 |
 | --- | --- | --- | --- |
-| 1. 보안/기준점 | 추적 파일 정리 완료 | public 저장소 확인, PR #10 main merge, PR #12 동기화, v1 애플리케이션·업무자료 추적 제거 | credential 폐기/회전, history rewrite 범위/실행 |
+| 1. 보안/기준점 | 추적 파일 정리 완료 | public 저장소 확인, PR #10 main merge, PR #12 동기화, v1 애플리케이션·업무자료 추적 제거, Infisical dev 서비스 토큰 회전(2026-09-25) | history rewrite 범위/실행, 나머지 외부 credential 정리 |
 | 2. 협업 | 보호 적용 완료 | develop/작업 브랜치/문서/CI 구성, main·develop branch protection 적용 및 API 확인 | 협업자 추가 시 approval >= 1 및 code owner review, 독립 리뷰 |
 | 3. 실행 기반 | 조건 충족 | lockfile 커밋 + frozen/locked CI, TS strict, fmt/clippy/test, PostgreSQL 18 migration, /health·/ready 분리 검증, Windows native build, local tauri dev | mobile target/plugin (미검증), dev/prod config 분리 완료 (Stage 6) |
 | 4. Figma | 시안 승인 | Design System/Product 파일과 핵심 UI 규칙 승인 | code mapping, interaction/accessibility detail, Library/Code Connect 후속 |
@@ -97,10 +97,12 @@ interaction/accessibility의 대조입니다.
 
 ## 실제 연결된 개발 환경
 
+- 개발 환경: 개발자별 Docker 스택(`infra/compose.dev.yml`)입니다. 공용 개발 서버와 공용 개발 DB를 두지 않습니다.
 - identity/database: 등록된 Supabase 프로젝트(Andong ICT Infisical `school collect`, Development)
 - v2 객체는 `school_collect` 스키마에 있고, v1 잔여 테이블(`public`)과 분리되어 있습니다.
 - 검증: `services/api/tests/collect_flow_e2e.rs`가 실제 로그인 → 토큰 검증 → 수합 생성·배포·작성·제출·마감과 tenant 격리를 확인하고 생성한 행과 테스트 계정을 모두 삭제합니다.
 - 위험: dev/staging/prod Infisical 라벨이 **같은** Supabase 프로젝트를 가리킵니다. 환경 분리는 아직 없습니다.
+- 참고: staging용 Supabase 프로젝트 생성은 무료 한도(계정당 무료 프로젝트 2개)에 걸려 있어 소유자 결정이 필요합니다.
 
 ## 데스크톱 클라이언트 (Stage 5 이후 첫 제품 기능)
 
