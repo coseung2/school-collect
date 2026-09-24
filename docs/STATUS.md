@@ -29,6 +29,13 @@
 
 credential 값 자체는 문서에 기록하지 않습니다.
 
+### 승격 이력
+
+- `develop` 통합: PR #19(실제 Supabase 인증·DB 연결과 첫 Collect 수직 슬라이스), PR #20(개발자별 Docker 개발 스택과 로컬 실행 절차)을 squash merge했습니다.
+- `develop -> main` 승격: PR #21. 통합 후보 SHA는 `3ac8d1f`이고 merge commit은 `49f856a`입니다. 승격 후 main CI(Foundation) success를 확인했습니다.
+- `main -> develop` 동기화: PR #22. merge commit은 `b50ff87`이고, 승격 merge commit이 develop에 포함됩니다. 두 브랜치의 트리는 동일합니다.
+- 내용 변경 없는 승격·동기화이므로 이 시점의 배포나 production migration은 없습니다.
+
 ### Git protection
 classic branch protection을 `main`과 `develop`에 적용하고 API 조회로 확인했습니다. pull request 필수, stale approval dismissal, conversation resolution, required check `repository-checks`, force push/삭제 차단, enforce_admins가 두 브랜치 모두 활성입니다. `main`만 strict(최신 base 강제)를 적용했습니다.
 
