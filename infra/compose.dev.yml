@@ -1,3 +1,17 @@
+# Local development stack.
+#
+# Every developer runs this on their own machine. There is no shared
+# development server and no shared development database, so nothing here
+# carries a credential and the default values are safe to publish.
+#
+#   docker compose -f infra/compose.dev.yml up -d
+#
+# `migrator` applies migrations/v2 and exits; `api` waits for it, so a fresh
+# checkout is ready after a single `up`. The desktop client is not
+# containerized: run it with `pnpm --filter @school-collect/app tauri dev` and
+# it talks to the API on 127.0.0.1:3000.
+name: school-collect-dev
+
 services:
   postgres:
     image: postgres:18
@@ -13,7 +27,10 @@ services:
       timeout: 3s
       retries: 20
     volumes:
-      - school_collect_pg:/var/lib/postgresql/data
+      # postgres:18 stores data in a version-specific directory and requires the
+      # volume at the parent path; mounting /var/lib/postgresql/data makes the
+      # entrypoint refuse to start.
+      - school_collect_pg:/var/lib/postgresql
 
   nats:
     image: nats:2.11-alpine
@@ -21,6 +38,70 @@ services:
     ports:
       - "127.0.0.1:4222:4222"
       - "127.0.0.1:8222:8222"
+
+  # One-shot schema owner. It is the only process that runs DDL, in
+  # development exactly as in staging and production.
+  migrator:
+    image: ${SCHOOL_COLLECT_SERVER_IMAGE:-school-collect-server:local}
+    build:
+      context: ..
+      dockerfile: infra/api.Dockerfile
+    entrypoint: ["/usr/local/bin/school-collect-migrator"]
+    environment:
+      APP_ENV: development
+      DATABASE_URL: postgres://school_collect:${POSTGRES_PASSWORD:-school_collect_local_only}@postgres:5432/school_collect
+      RUST_LOG: ${RUST_LOG:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    image: ${SCHOOL_COLLECT_SERVER_IMAGE:-school-collect-server:local}
+    build:
+      context: ..
+      dockerfile: infra/api.Dockerfile
+    environment:
+      APP_ENV: development
+      APP_BIND_ADDR: 0.0.0.0:3000
+      APP_CORS_ORIGIN: ${APP_CORS_ORIGIN:-http://127.0.0.1:1420}
+      # Local development authenticates as a fixed development principal, so a
+      # developer needs no identity-provider account. To exercise the real
+      # login path set APP_AUTH_MODE=oidc with OIDC_ISSUER_URL and
+      # OIDC_AUDIENCE; every other APP_ENV refuses to start with
+      # authentication disabled.
+      APP_AUTH_MODE: ${APP_AUTH_MODE:-disabled}
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-}
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE:-authenticated}
+      DATABASE_URL: postgres://school_collect:${POSTGRES_PASSWORD:-school_collect_local_only}@postgres:5432/school_collect
+      RUST_LOG: ${RUST_LOG:-info,tower_http=info}
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # Async consumer placeholder. It stays up so a developer working on jobs has
+  # a running process and a broker to attach to.
+  worker:
+    image: ${SCHOOL_COLLECT_SERVER_IMAGE:-school-collect-server:local}
+    build:
+      context: ..
+      dockerfile: infra/api.Dockerfile
+    entrypoint: ["/usr/local/bin/school-collect-worker"]
+    environment:
+      APP_ENV: development
+      NATS_URL: nats://nats:4222
+      RUST_LOG: ${RUST_LOG:-info}
+    depends_on:
+      nats:
+        condition: service_started
+      migrator:
+        condition: service_completed_successfully
+    restart: unless-stopped
 
 volumes:
   school_collect_pg:
