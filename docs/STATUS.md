@@ -102,6 +102,18 @@ interaction/accessibility의 대조입니다.
 - 검증: `services/api/tests/collect_flow_e2e.rs`가 실제 로그인 → 토큰 검증 → 수합 생성·배포·작성·제출·마감과 tenant 격리를 확인하고 생성한 행과 테스트 계정을 모두 삭제합니다.
 - 위험: dev/staging/prod Infisical 라벨이 **같은** Supabase 프로젝트를 가리킵니다. 환경 분리는 아직 없습니다.
 
+## 데스크톱 클라이언트 (Stage 5 이후 첫 제품 기능)
+
+- `apps/app`은 로그인 → 학교 등록 → 수합 생성 → 배포 → 초안 저장 → 제출을 실제 API와 연결합니다.
+- 접근 토큰은 창 메모리에만 보관하고 디스크에 저장하지 않습니다.
+- 검증: 로컬 API(`APP_AUTH_MODE=oidc`)와 dev 서버를 띄운 상태에서 실제 브라우저로 전체 흐름을 확인했습니다. 검증용 계정과 데이터는 삭제했습니다.
+
+## 배포 기반
+
+- `infra/api.Dockerfile`과 `infra/compose.deploy.yml`로 서버 이미지·구성을 정의했습니다.
+- 실행 순서와 소유자 결정이 필요한 항목은 [DEPLOYMENT.md](DEPLOYMENT.md)에 정리했습니다.
+- 호스팅 위치, 도메인·TLS, DB 역할 분리, 데스크톱 서명은 아직 결정되지 않았습니다.
+
 ## 아직 하지 않은 것
 
 - Git history rewrite

@@ -182,6 +182,44 @@ jobs:
           cat /tmp/api.log
           exit 1
 
+  container:
+    name: server-image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the server image
+        run: docker build -f infra/api.Dockerfile -t school-collect-server:ci .
+      - name: Run the migrator and probe readiness in the built image
+        run: |
+          docker network create school-collect-ci
+          docker run -d --name pg --network school-collect-ci \
+            -e POSTGRES_DB=school_collect -e POSTGRES_USER=school_collect \
+            -e POSTGRES_PASSWORD=school_collect_ci postgres:18
+          for _ in $(seq 1 30); do
+            if docker exec pg pg_isready -U school_collect -d school_collect >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          docker run --rm --network school-collect-ci \
+            -e DATABASE_URL=postgres://school_collect:school_collect_ci@pg:5432/school_collect \
+            --entrypoint /usr/local/bin/school-collect-migrator \
+            school-collect-server:ci
+          docker run -d --name api --network school-collect-ci -p 127.0.0.1:3000:3000 \
+            -e APP_ENV=development \
+            -e DATABASE_URL=postgres://school_collect:school_collect_ci@pg:5432/school_collect \
+            school-collect-server:ci
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3000/ready >/dev/null; then
+              curl -fsS http://127.0.0.1:3000/health >/dev/null
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs api
+          exit 1
+      - name: Show container logs on failure
+        if: failure()
+        run: docker logs api || docker logs pg || true
+
   tauri-windows-smoke:
     runs-on: windows-latest
     steps:
