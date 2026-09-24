@@ -6,6 +6,8 @@ School Collect는 public 오픈소스 저장소를 전제로 작업합니다. �
 
 `main`은 검증된 승격 브랜치, `develop`은 다음 릴리스의 통합 브랜치입니다. 일반 작업은 `develop`에서 분기합니다.
 
+팀 기능 개발의 시작 절차와 공용 domain/API/DB 계약은 [docs/TEAM_WORKFLOW.md](docs/TEAM_WORKFLOW.md)와 [docs/API_CONTRACT.md](docs/API_CONTRACT.md)를 먼저 읽습니다.
+
 ```sh
 git fetch origin
 git switch develop

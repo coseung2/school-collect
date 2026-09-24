@@ -5,4 +5,11 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+anyhow.workspace = true
+jsonwebtoken.workspace = true
+reqwest.workspace = true
 school-collect-domain = { path = "../domain" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+url.workspace = true

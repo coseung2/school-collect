@@ -1,6 +1,8 @@
 # Dependencies and generated output
 node_modules/
 dist/
+.next/
+.vercel/
 coverage/
 *.tsbuildinfo
 *.log
@@ -27,5 +29,7 @@ apps/app/src-tauri/gen/schemas/
 *.sqlite3
 *.sqlite-wal
 *.sqlite-shm
+.playwright-cli/
+output/playwright/
 .DS_Store
 Thumbs.db
