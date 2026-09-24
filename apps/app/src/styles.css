@@ -132,3 +132,144 @@
     width: 100%;
   }
 }
+
+/* Signed-out and first-run screens */
+
+.app-standalone {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  background: var(--sc-color-canvas);
+  padding: var(--sc-space-6);
+}
+
+.app-standalone__panel {
+  width: min(460px, 100%);
+}
+
+.app-signin {
+  display: grid;
+  gap: var(--sc-space-6);
+  padding: var(--sc-space-7);
+}
+
+.app-signin h1 {
+  margin: var(--sc-space-2) 0 var(--sc-space-3);
+  font-size: 24px;
+}
+
+.app-form {
+  display: grid;
+  gap: var(--sc-space-5);
+  margin: 0;
+}
+
+.app-form__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sc-space-3);
+}
+
+.app-form__error {
+  margin: 0;
+  color: var(--sc-color-danger);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.app-form__notice {
+  margin: 0;
+  color: var(--sc-color-success);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* Signed-in work area */
+
+.app-section {
+  display: grid;
+  gap: var(--sc-space-4);
+}
+
+.app-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sc-space-4);
+}
+
+.app-create {
+  display: grid;
+  gap: var(--sc-space-5);
+  padding: var(--sc-space-6);
+}
+
+.app-create h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.app-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sc-space-2);
+  justify-content: flex-end;
+}
+
+.app-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sc-space-4);
+}
+
+.app-detail-head + .sc-card,
+.app-page > .sc-card {
+  display: grid;
+  gap: var(--sc-space-5);
+  padding: var(--sc-space-6);
+}
+
+.app-page > .sc-card h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.app-meta {
+  display: grid;
+  gap: var(--sc-space-3);
+  margin: 0;
+}
+
+.app-meta div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sc-space-4);
+}
+
+.app-meta dt {
+  color: var(--sc-color-text-muted);
+  font-size: 13px;
+}
+
+.app-meta dd {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.app-sidebar-footer {
+  display: grid;
+  gap: var(--sc-space-2);
+}
+
+.app-sidebar-footer__name {
+  margin: 0;
+  overflow: hidden;
+  color: var(--sc-color-text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

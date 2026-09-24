@@ -1,0 +1,43 @@
+# Deployment shape for the server side of School Collect.
+#
+# Values come from the environment or a secret manager; nothing here contains a
+# credential. The migrator is a one-shot profile so schema changes are always an
+# explicit step instead of a side effect of starting the API.
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: infra/api.Dockerfile
+    restart: unless-stopped
+    environment:
+      APP_ENV: ${APP_ENV:?set APP_ENV to staging or production}
+      APP_BIND_ADDR: 0.0.0.0:3000
+      APP_CORS_ORIGIN: ${APP_CORS_ORIGIN:?set the exact client origin}
+      APP_AUTH_MODE: oidc
+      DATABASE_URL: ${DATABASE_URL:?set the pooled PostgreSQL URL}
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:?set the identity provider issuer}
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE:-authenticated}
+      RUST_LOG: ${RUST_LOG:-info,tower_http=info}
+    ports:
+      - "127.0.0.1:3000:3000"
+
+  migrator:
+    build:
+      context: ..
+      dockerfile: infra/api.Dockerfile
+    profiles: ["migrate"]
+    entrypoint: ["/usr/local/bin/school-collect-migrator"]
+    environment:
+      APP_ENV: ${APP_ENV:?set APP_ENV to staging or production}
+      DATABASE_URL: ${DATABASE_URL:?set the migration PostgreSQL URL}
+      RUST_LOG: ${RUST_LOG:-info}
+
+  worker:
+    build:
+      context: ..
+      dockerfile: infra/api.Dockerfile
+    restart: unless-stopped
+    entrypoint: ["/usr/local/bin/school-collect-worker"]
+    environment:
+      APP_ENV: ${APP_ENV:?set APP_ENV to staging or production}
+      RUST_LOG: ${RUST_LOG:-info}

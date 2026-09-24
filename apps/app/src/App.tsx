@@ -1,312 +1,812 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   AppShell,
   Button,
+  Card,
   EmptyState,
-  OfflineState,
+  ErrorState,
+  FormField,
+  ListRow,
+  ListSurface,
+  LoadingState,
   Status,
   type NavigationItem,
   type StatusTone,
 } from "@school-collect/ui";
+import {
+  ApiError,
+  closeCollect,
+  createCollect,
+  createTenant,
+  fetchCollect,
+  fetchSession,
+  identityConfigured,
+  listCollects,
+  publishCollect,
+  saveDraft,
+  sendSubmission,
+  signInWithPassword,
+  signUpWithPassword,
+  type Collect,
+  type CollectDetail,
+  type Membership,
+  type SessionInfo,
+} from "./api";
 
-type RouteId = "overview" | "collections" | "settings";
-type ConnectionState = "idle" | "checking" | "healthy" | "error" | "offline";
-
-type ApiHealth = {
-  status: string;
-  service: string;
-};
-
-const apiBaseUrl = (
-  import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:3000"
-).replace(/\/$/, "");
+type RouteId = "overview" | "collects" | "settings";
 
 const navigation: NavigationItem[] = [
   { id: "overview", icon: "activity", label: "홈", group: "업무" },
-  { id: "collections", icon: "briefcase", label: "자료수합", group: "업무" },
-  { id: "privacy", icon: "lock", label: "개인정보", group: "업무", disabled: true },
-  { id: "purchase", icon: "briefcase", label: "구매·출장", group: "업무", disabled: true },
-  { id: "curriculum", icon: "school", label: "교육과정", group: "교육", disabled: true },
-  { id: "timetable", icon: "school", label: "시간표", group: "교육", disabled: true },
-  { id: "plans", icon: "school", label: "교육계획", group: "교육", disabled: true },
-  { id: "documents", icon: "briefcase", label: "문서자동화", group: "도구", disabled: true },
+  { id: "collects", icon: "briefcase", label: "자료수합", group: "업무" },
   { id: "settings", icon: "settings", label: "설정", group: "도구" },
 ];
 
-const routeMeta: Record<
-  RouteId,
-  { title: string; description: string; emptyTitle: string; emptyDescription: string }
-> = {
-  overview: {
-    title: "오늘의 업무",
-    description: "",
-    emptyTitle: "표시할 업무가 없습니다",
-    emptyDescription: "업무 데이터가 연결되면 이곳에서 확인할 수 있습니다.",
-  },
-  collections: {
-    title: "자료수합",
-    description: "",
-    emptyTitle: "표시할 수합이 없습니다",
-    emptyDescription: "수합 데이터 연결 후 이곳에 표시됩니다.",
-  },
-  settings: {
-    title: "설정",
-    description: "",
-    emptyTitle: "",
-    emptyDescription: "",
-  },
+const statusTone: Record<string, StatusTone> = {
+  draft: "neutral",
+  published: "info",
+  closed: "success",
+  submitted: "success",
+  assigned: "neutral",
+  started: "info",
 };
 
-const connectionCopy: Record<
-  ConnectionState,
-  { label: string; tone: StatusTone; description: string }
-> = {
-  idle: {
-    label: "확인 전",
-    tone: "neutral",
-    description: "API 연결 상태를 확인할 수 있습니다.",
-  },
-  checking: {
-    label: "확인 중",
-    tone: "info",
-    description: "API에 연결하고 있습니다.",
-  },
-  healthy: {
-    label: "연결됨",
-    tone: "success",
-    description: "API가 정상적으로 응답했습니다.",
-  },
-  error: {
-    label: "확인 필요",
-    tone: "danger",
-    description: "API에 연결하지 못했습니다. 연결 상태를 확인한 뒤 다시 시도하세요.",
-  },
-  offline: {
-    label: "오프라인",
-    tone: "warning",
-    description: "네트워크가 연결되면 다시 확인할 수 있습니다.",
-  },
+const statusLabel: Record<string, string> = {
+  draft: "작성 중",
+  published: "진행 중",
+  closed: "마감",
+  submitted: "제출 완료",
 };
 
-function isApiHealth(value: unknown): value is ApiHealth {
-  if (!value || typeof value !== "object") {
-    return false;
+function toneOf(value: string | null): StatusTone {
+  if (!value) {
+    return "neutral";
   }
-
-  const body = value as Record<string, unknown>;
-  return typeof body.status === "string" && typeof body.service === "string";
+  return statusTone[value] ?? "neutral";
 }
 
-function initialOnlineState() {
-  return typeof navigator === "undefined" || navigator.onLine;
+function labelOf(value: string | null): string {
+  if (!value) {
+    return "-";
+  }
+  return statusLabel[value] ?? value;
 }
 
-function routeFromHash(): RouteId {
-  if (typeof window === "undefined") {
-    return "overview";
-  }
+function canManage(role: string): boolean {
+  return role === "admin" || role === "coordinator";
+}
 
-  const candidate = window.location.hash.replace(/^#\/?/, "");
-  return Object.hasOwn(routeMeta, candidate) ? (candidate as RouteId) : "overview";
+function messageOf(error: unknown): string {
+  return error instanceof ApiError ? error.message : "알 수 없는 오류가 발생했습니다.";
 }
 
 export default function App() {
-  const [activeRoute, setActiveRoute] = useState<RouteId>(routeFromHash);
-  const [connectionState, setConnectionState] =
-    useState<ConnectionState>("idle");
-  const [apiHealth, setApiHealth] = useState<ApiHealth | null>(null);
-  const [isOnline, setIsOnline] = useState(initialOnlineState);
+  const [token, setToken] = useState<string | null>(null);
+  const [session, setSession] = useState<SessionInfo | null>(null);
+  const [activeTenantId, setActiveTenantId] = useState<string | null>(null);
+  const [activeRoute, setActiveRoute] = useState<RouteId>("overview");
+  const [bootError, setBootError] = useState<string | null>(null);
 
-  useEffect(() => {
-    function handleOnline() {
-      setIsOnline(true);
-      setConnectionState((current) =>
-        current === "offline" ? "idle" : current,
-      );
-    }
-
-    function handleOffline() {
-      setIsOnline(false);
-      setConnectionState("offline");
-      setApiHealth(null);
-    }
-
-    window.addEventListener("online", handleOnline);
-    window.addEventListener("offline", handleOffline);
-
-    return () => {
-      window.removeEventListener("online", handleOnline);
-      window.removeEventListener("offline", handleOffline);
-    };
+  const signOut = useCallback(() => {
+    setToken(null);
+    setSession(null);
+    setActiveTenantId(null);
+    setActiveRoute("overview");
   }, []);
 
   useEffect(() => {
-    function handleHashChange() {
-      setActiveRoute(routeFromHash());
-    }
-
-    if (!window.location.hash) {
-      window.history.replaceState(null, "", "#/overview");
-    }
-
-    window.addEventListener("hashchange", handleHashChange);
-    return () => window.removeEventListener("hashchange", handleHashChange);
-  }, []);
-
-  const currentRoute = routeMeta[activeRoute];
-  const connection = connectionCopy[connectionState];
-
-  async function checkApi() {
-    if (!isOnline) {
-      setConnectionState("offline");
+    if (!token || session) {
       return;
     }
-
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 5000);
-    setConnectionState("checking");
-    setApiHealth(null);
-
-    try {
-      const response = await fetch(`${apiBaseUrl}/health`, {
-        headers: { Accept: "application/json" },
-        signal: controller.signal,
+    let cancelled = false;
+    fetchSession(token)
+      .then((value) => {
+        if (cancelled) return;
+        setSession(value);
+        setActiveTenantId(value.memberships[0]?.tenantId ?? null);
+        setBootError(null);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setBootError(messageOf(error));
+        if (error instanceof ApiError && error.status === 401) {
+          signOut();
+        }
       });
+    return () => {
+      cancelled = true;
+    };
+  }, [session, signOut, token]);
 
-      if (!response.ok) {
-        throw new Error("health request failed");
-      }
-
-      const body: unknown = await response.json();
-      if (!isApiHealth(body)) {
-        throw new Error("invalid health response");
-      }
-
-      setApiHealth(body);
-      setConnectionState("healthy");
-    } catch {
-      setApiHealth(null);
-      setConnectionState("error");
-    } finally {
-      window.clearTimeout(timeout);
-    }
+  if (!token) {
+    return <SignInView onSignedIn={setToken} />;
   }
+
+  if (bootError) {
+    return (
+      <Standalone>
+        <ErrorState
+          description={bootError}
+          title="로그인 정보를 확인하지 못했습니다"
+          action={
+            <Button onClick={signOut} variant="secondary">
+              다시 로그인
+            </Button>
+          }
+        />
+      </Standalone>
+    );
+  }
+
+  if (!session) {
+    return (
+      <Standalone>
+        <LoadingState description="계정 정보를 불러오고 있습니다." title="확인 중" />
+      </Standalone>
+    );
+  }
+
+  const activeTenant =
+    session.memberships.find((item) => item.tenantId === activeTenantId) ?? null;
+
+  if (!activeTenant) {
+    return (
+      <CreateSchoolView
+        onCreated={(membership) => {
+          setSession({
+            ...session,
+            memberships: [...session.memberships, membership],
+          });
+          setActiveTenantId(membership.tenantId);
+        }}
+        token={token}
+      />
+    );
+  }
+
+  const routeMeta: Record<RouteId, { title: string; description: string }> = {
+    overview: { title: "홈", description: "우리 학교의 수합 업무를 한눈에 봅니다." },
+    collects: { title: "자료수합", description: "수합을 만들고, 작성하고, 마감합니다." },
+    settings: { title: "설정", description: "연결 상태와 계정을 확인합니다." },
+  };
 
   return (
     <AppShell
       activeNavigationId={activeRoute}
-      banner={
-        !isOnline ? (
-          <div className="app-offline-banner" role="status">
-            <OfflineState
-              className="app-offline-banner__state"
-              description="네트워크 연결을 확인한 뒤 다시 시도하세요."
-              title="오프라인 상태입니다"
-            />
-            <Button onClick={checkApi} size="small" variant="secondary">
-              다시 확인
-            </Button>
-          </div>
-        ) : null
-      }
-      description={currentRoute.description}
-      eyebrow={activeRoute === "overview" ? "홈" : undefined}
+      description={routeMeta[activeRoute].description}
+      eyebrow={activeTenant.tenantName}
       navigation={navigation}
-      onNavigationChange={(id) => {
-        if (id in routeMeta) {
-          window.location.hash = `/${id}`;
-        }
-      }}
-      title={currentRoute.title}
+      onNavigationChange={(id) => setActiveRoute(id as RouteId)}
+      sidebarFooter={
+        <div className="app-sidebar-footer">
+          <p className="app-sidebar-footer__name">
+            {session.user.displayName ?? session.user.subject}
+          </p>
+          <Button onClick={signOut} size="small" variant="quiet">
+            로그아웃
+          </Button>
+        </div>
+      }
+      title={routeMeta[activeRoute].title}
     >
       {activeRoute === "settings" ? (
-        <ConnectionSettings
-          apiHealth={apiHealth}
-          connection={connection}
-          connectionState={connectionState}
-          onCheckApi={checkApi}
-        />
-      ) : activeRoute === "overview" ? (
-        <Overview />
+        <SettingsView session={session} tenant={activeTenant} token={token} />
       ) : (
-        <RouteEmptyState route={currentRoute} />
+        <CollectsView
+          role={activeTenant.role}
+          tenantId={activeTenant.tenantId}
+          token={token}
+          variant={activeRoute === "overview" ? "overview" : "full"}
+        />
       )}
     </AppShell>
   );
 }
 
-function Overview() {
+function Standalone({ children }: { children: React.ReactNode }) {
   return (
-    <section className="app-page" aria-labelledby="priority-heading">
-      <h2 id="priority-heading">우선 확인할 업무</h2>
-      <EmptyState
-        description="업무 데이터가 연결되면 이곳에서 확인할 수 있습니다."
-        title="표시할 업무가 없습니다"
-      />
-    </section>
+    <main className="app-standalone">
+      <div className="app-standalone__panel">{children}</div>
+    </main>
   );
 }
 
-function ConnectionSettings({
-  apiHealth,
-  connection,
-  connectionState,
-  onCheckApi,
+function SignInView({ onSignedIn }: { onSignedIn: (token: string) => void }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const accessToken = await signInWithPassword(email.trim(), password);
+      onSignedIn(accessToken);
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createAccount() {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const needsConfirmation = await signUpWithPassword(email.trim(), password);
+      setNotice(
+        needsConfirmation
+          ? "가입 요청을 보냈습니다. 메일함에서 주소를 확인한 뒤 로그인하세요."
+          : "계정이 만들어졌습니다. 이제 로그인할 수 있습니다.",
+      );
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Standalone>
+      <Card className="app-signin">
+        <div>
+          <p className="app-card-eyebrow">SCHOOL COLLECT</p>
+          <h1>로그인</h1>
+          <p className="app-card-description">
+            학교 계정으로 로그인하면 우리 학교의 수합 업무를 볼 수 있습니다.
+          </p>
+        </div>
+        {!identityConfigured ? (
+          <ErrorState
+            description="빌드에 VITE_SUPABASE_URL 과 VITE_SUPABASE_ANON_KEY 가 없습니다."
+            title="로그인 설정이 없습니다"
+          />
+        ) : (
+          <form className="app-form" onSubmit={submit}>
+            <FormField htmlFor="email" label="이메일" required>
+              <input
+                autoComplete="username"
+                id="email"
+                onChange={(event) => setEmail(event.target.value)}
+                required
+                type="email"
+                value={email}
+              />
+            </FormField>
+            <FormField htmlFor="password" label="비밀번호" required>
+              <input
+                autoComplete="current-password"
+                id="password"
+                minLength={6}
+                onChange={(event) => setPassword(event.target.value)}
+                required
+                type="password"
+                value={password}
+              />
+            </FormField>
+            {error ? (
+              <p className="app-form__error" role="alert">
+                {error}
+              </p>
+            ) : null}
+            {notice ? <p className="app-form__notice">{notice}</p> : null}
+            <div className="app-form__actions">
+              <Button loading={busy} type="submit">
+                로그인
+              </Button>
+              <Button
+                disabled={busy || !email || !password}
+                onClick={createAccount}
+                type="button"
+                variant="secondary"
+              >
+                계정 만들기
+              </Button>
+            </div>
+          </form>
+        )}
+      </Card>
+    </Standalone>
+  );
+}
+
+function CreateSchoolView({
+  token,
+  onCreated,
 }: {
-  apiHealth: ApiHealth | null;
-  connection: (typeof connectionCopy)[ConnectionState];
-  connectionState: ConnectionState;
-  onCheckApi: () => void;
+  token: string;
+  onCreated: (membership: Membership) => void;
 }) {
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      onCreated(await createTenant(token, name.trim()));
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Standalone>
+      <Card className="app-signin">
+        <div>
+          <p className="app-card-eyebrow">처음 설정</p>
+          <h1>학교 등록</h1>
+          <p className="app-card-description">
+            아직 소속된 학교가 없습니다. 학교를 만들면 관리자 권한으로 시작합니다.
+          </p>
+        </div>
+        <form className="app-form" onSubmit={submit}>
+          <FormField htmlFor="school-name" label="학교 이름" required>
+            <input
+              id="school-name"
+              onChange={(event) => setName(event.target.value)}
+              required
+              value={name}
+            />
+          </FormField>
+          {error ? (
+            <p className="app-form__error" role="alert">
+              {error}
+            </p>
+          ) : null}
+          <div className="app-form__actions">
+            <Button loading={busy} type="submit">
+              학교 만들기
+            </Button>
+          </div>
+        </form>
+      </Card>
+    </Standalone>
+  );
+}
+
+function CollectsView({
+  token,
+  tenantId,
+  role,
+  variant,
+}: {
+  token: string;
+  tenantId: string;
+  role: string;
+  variant: "overview" | "full";
+}) {
+  const [collects, setCollects] = useState<Collect[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const value = await listCollects(token, tenantId);
+      setCollects(value.collects);
+      setError(null);
+    } catch (caught) {
+      setError(messageOf(caught));
+    }
+  }, [tenantId, token]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function run(action: () => Promise<unknown>) {
+    setBusy(true);
+    try {
+      await action();
+      await load();
+      setError(null);
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (openId) {
+    return (
+      <CollectDetailView
+        collectId={openId}
+        onBack={() => setOpenId(null)}
+        role={role}
+        tenantId={tenantId}
+        token={token}
+      />
+    );
+  }
+
+  const visible = collects ?? [];
+
   return (
     <div className="app-page">
-      <div className="app-overview-grid">
-        <section className="app-connection-card">
-          <div className="app-card-heading">
-            <div>
-              <p className="app-card-eyebrow">API 연결</p>
-              <h2>서비스 상태</h2>
-            </div>
-            <Status tone={connection.tone}>{connection.label}</Status>
-          </div>
-          <p className="app-card-description">{connection.description}</p>
-          {apiHealth ? (
-            <dl className="app-health-details">
-              <div>
-                <dt>서비스</dt>
-                <dd>{apiHealth.service}</dd>
-              </div>
-              <div>
-                <dt>상태</dt>
-                <dd>{apiHealth.status}</dd>
-              </div>
-            </dl>
-          ) : null}
-          <Button
-            leadingIcon="refresh"
-            loading={connectionState === "checking"}
-            onClick={onCheckApi}
-            variant="primary"
+      {error ? <ErrorState description={error} title="요청을 처리하지 못했습니다" /> : null}
+
+      {canManage(role) && variant === "full" ? (
+        <Card className="app-create">
+          <h2>새 수합 만들기</h2>
+          <form
+            className="app-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void run(async () => {
+                await createCollect(token, tenantId, title.trim(), description.trim());
+                setTitle("");
+                setDescription("");
+              });
+            }}
           >
-            연결 확인
+            <FormField htmlFor="collect-title" label="제목" required>
+              <input
+                id="collect-title"
+                onChange={(event) => setTitle(event.target.value)}
+                required
+                value={title}
+              />
+            </FormField>
+            <FormField htmlFor="collect-description" label="설명">
+              <textarea
+                id="collect-description"
+                onChange={(event) => setDescription(event.target.value)}
+                rows={3}
+                value={description}
+              />
+            </FormField>
+            <div className="app-form__actions">
+              <Button loading={busy} type="submit">
+                초안 만들기
+              </Button>
+            </div>
+          </form>
+        </Card>
+      ) : null}
+
+      <section className="app-section">
+        <div className="app-section-heading">
+          <h2>{variant === "overview" ? "진행 중인 수합" : "수합 목록"}</h2>
+          <Button onClick={() => void load()} size="small" variant="quiet">
+            새로고침
           </Button>
-        </section>
-      </div>
+        </div>
+        {collects === null ? (
+          <LoadingState description="수합 목록을 불러오고 있습니다." title="불러오는 중" />
+        ) : visible.length === 0 ? (
+          <EmptyState
+            description={
+              canManage(role)
+                ? "위에서 첫 수합을 만들면 여기에 표시됩니다."
+                : "담당자가 수합을 배포하면 여기에 표시됩니다."
+            }
+            title="아직 수합이 없습니다"
+          />
+        ) : (
+          <ListSurface>
+            {visible.map((collect) => (
+              <ListRow
+                action={
+                  <div className="app-row-actions">
+                    <Button
+                      onClick={() => setOpenId(collect.id)}
+                      size="small"
+                      variant="secondary"
+                    >
+                      열기
+                    </Button>
+                    {canManage(role) && collect.status === "draft" ? (
+                      <Button
+                        disabled={busy}
+                        onClick={() =>
+                          void run(() => publishCollect(token, tenantId, collect.id))
+                        }
+                        size="small"
+                      >
+                        배포
+                      </Button>
+                    ) : null}
+                    {canManage(role) && collect.status === "published" ? (
+                      <Button
+                        disabled={busy}
+                        onClick={() =>
+                          void run(() => closeCollect(token, tenantId, collect.id))
+                        }
+                        size="small"
+                        variant="quiet"
+                      >
+                        마감
+                      </Button>
+                    ) : null}
+                  </div>
+                }
+                description={
+                  collect.dueAt
+                    ? `마감 ${new Date(collect.dueAt).toLocaleDateString("ko-KR")}`
+                    : undefined
+                }
+                meta={
+                  collect.submissionStatus ? (
+                    <Status tone={toneOf(collect.submissionStatus)}>
+                      내 제출 {labelOf(collect.submissionStatus)}
+                    </Status>
+                  ) : undefined
+                }
+                status={
+                  <Status tone={toneOf(collect.status)}>
+                    {labelOf(collect.status)}
+                  </Status>
+                }
+                title={collect.title}
+              />
+            ))}
+          </ListSurface>
+        )}
+      </section>
     </div>
   );
 }
 
-function RouteEmptyState({
-  route,
+function CollectDetailView({
+  token,
+  tenantId,
+  role,
+  collectId,
+  onBack,
 }: {
-  route: (typeof routeMeta)[RouteId];
+  token: string;
+  tenantId: string;
+  role: string;
+  collectId: string;
+  onBack: () => void;
 }) {
+  const [detail, setDetail] = useState<CollectDetail | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const value = await fetchCollect(token, tenantId, collectId);
+      setDetail(value);
+      setNote(typeof value.submission?.payload?.note === "string" ? value.submission.payload.note : "");
+      setError(null);
+    } catch (caught) {
+      setError(messageOf(caught));
+    }
+  }, [collectId, tenantId, token]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  if (error && !detail) {
+    return (
+      <div className="app-page">
+        <ErrorState
+          action={
+            <Button onClick={onBack} variant="secondary">
+              목록으로
+            </Button>
+          }
+          description={error}
+          title="수합을 열지 못했습니다"
+        />
+      </div>
+    );
+  }
+
+  if (!detail) {
+    return (
+      <div className="app-page">
+        <LoadingState description="수합을 불러오고 있습니다." title="불러오는 중" />
+      </div>
+    );
+  }
+
+  const submission = detail.submission;
+  const editable = detail.status === "published" && submission?.status !== "submitted";
+
+  async function persist(next: () => Promise<unknown>, message: string) {
+    setBusy(true);
+    setSaved(null);
+    try {
+      await next();
+      await load();
+      setError(null);
+      setSaved(message);
+    } catch (caught) {
+      setError(messageOf(caught));
+      if (caught instanceof ApiError && caught.code === "version_conflict") {
+        await load();
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="app-page">
-      <EmptyState
-        description={route.emptyDescription}
-        title={route.emptyTitle}
-      />
+      <div className="app-detail-head">
+        <Button onClick={onBack} size="small" variant="quiet">
+          ← 목록
+        </Button>
+        <Status tone={toneOf(detail.status)}>{labelOf(detail.status)}</Status>
+      </div>
+
+      <Card>
+        <h2>{detail.title}</h2>
+        {detail.description ? (
+          <p className="app-card-description">{detail.description}</p>
+        ) : null}
+        <dl className="app-meta">
+          <div>
+            <dt>수합 버전</dt>
+            <dd>{detail.version}</dd>
+          </div>
+          <div>
+            <dt>내 제출</dt>
+            <dd>{labelOf(submission?.status ?? null)}</dd>
+          </div>
+        </dl>
+        {canManage(role) && detail.status === "published" ? (
+          <Button
+            disabled={busy}
+            onClick={() =>
+              void persist(
+                () => closeCollect(token, tenantId, detail.id),
+                "수합을 마감했습니다.",
+              )
+            }
+            variant="secondary"
+          >
+            마감하기
+          </Button>
+        ) : null}
+      </Card>
+
+      <Card>
+        <h2>내 제출 내용</h2>
+        {error ? <ErrorState description={error} title="저장하지 못했습니다" /> : null}
+        {saved ? <p className="app-form__notice">{saved}</p> : null}
+        {!editable ? (
+          <p className="app-card-description">
+            {submission?.status === "submitted"
+              ? "제출이 완료되어 더 이상 수정할 수 없습니다."
+              : "수합이 진행 중일 때만 작성할 수 있습니다."}
+          </p>
+        ) : null}
+        <FormField
+          hint="서버가 버전을 확인하므로 다른 기기에서 동시에 저장하면 충돌로 알려줍니다."
+          htmlFor="submission-note"
+          label="내용"
+        >
+          <textarea
+            disabled={!editable}
+            id="submission-note"
+            onChange={(event) => setNote(event.target.value)}
+            rows={6}
+            value={note}
+          />
+        </FormField>
+        <div className="app-form__actions">
+          <Button
+            disabled={!editable || busy}
+            onClick={() =>
+              void persist(
+                () =>
+                  saveDraft(token, tenantId, detail.id, submission?.version ?? 0, {
+                    note,
+                  }),
+                "초안을 저장했습니다.",
+              )
+            }
+          >
+            초안 저장
+          </Button>
+          <Button
+            disabled={!editable || busy || !submission}
+            onClick={() =>
+              void persist(
+                () => sendSubmission(token, tenantId, detail.id),
+                "제출했습니다.",
+              )
+            }
+            variant="secondary"
+          >
+            제출
+          </Button>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function SettingsView({
+  token,
+  tenant,
+  session,
+}: {
+  token: string;
+  tenant: Membership;
+  session: SessionInfo;
+}) {
+  const [health, setHealth] = useState<{ status: string; service: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function check() {
+    setError(null);
+    try {
+      const response = await fetch(
+        `${(import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:3000").replace(/\/$/, "")}/ready`,
+      );
+      const body = (await response.json()) as { status: string; service: string };
+      setHealth(body);
+    } catch {
+      setHealth(null);
+      setError("API에 연결하지 못했습니다.");
+    }
+  }
+
+  return (
+    <div className="app-page">
+      <Card className="app-connection-card">
+        <div className="app-card-heading">
+          <div>
+            <p className="app-card-eyebrow">연결</p>
+            <h2>서버 상태</h2>
+          </div>
+          <Status tone={health ? "success" : error ? "danger" : "neutral"}>
+            {health ? "정상" : error ? "확인 필요" : "확인 전"}
+          </Status>
+        </div>
+        <p className="app-card-description">
+          로그인 토큰이 유효한지 확인하고, 서버가 준비 상태인지 점검합니다.
+        </p>
+        {error ? <p className="app-form__error">{error}</p> : null}
+        {health ? (
+          <p className="app-card-description">
+            {health.service}: {health.status}
+          </p>
+        ) : null}
+        <Button onClick={() => void check()} variant="secondary">
+          연결 확인
+        </Button>
+      </Card>
+
+      <Card>
+        <h2>계정</h2>
+        <dl className="app-meta">
+          <div>
+            <dt>사용자</dt>
+            <dd>{session.user.displayName ?? session.user.subject}</dd>
+          </div>
+          <div>
+            <dt>학교</dt>
+            <dd>{tenant.tenantName}</dd>
+          </div>
+          <div>
+            <dt>권한</dt>
+            <dd>{tenant.role}</dd>
+          </div>
+        </dl>
+        <p className="app-card-description">
+          접근 토큰은 이 창의 메모리에만 보관하며 디스크에 저장하지 않습니다.
+        </p>
+        <p className="app-card-description">세션 토큰 길이 {token.length}자</p>
+      </Card>
     </div>
   );
 }

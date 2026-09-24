@@ -16,6 +16,21 @@ on:
       - "pnpm-workspace.yaml"
       - "pnpm-lock.yaml"
       - ".github/workflows/v2-architecture.yml"
+  push:
+    branches: [develop]
+    paths:
+      - "apps/app/**"
+      - "packages/**"
+      - "services/**"
+      - "crates/**"
+      - "migrations/**"
+      - "infra/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "pnpm-workspace.yaml"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/v2-architecture.yml"
   workflow_dispatch:
 
 permissions:
@@ -113,8 +128,11 @@ jobs:
       - name: Verify migration outcome and absence of demo seed rows
         run: |
           test "$(psql "$DATABASE_URL" -tAc "select schema_version from app_meta")" = "v2-bootstrap"
-          test "$(psql "$DATABASE_URL" -tAc "select count(*) from _sqlx_migrations where success")" = "1"
-          test "$(psql "$DATABASE_URL" -tAc "select count(*) from information_schema.tables where table_schema='public' and table_name in ('schools','users','tasks','submissions')")" = "0"
+          test "$(psql "$DATABASE_URL" -tAc "select count(*) from _sqlx_migrations where success")" = "2"
+          test "$(psql "$DATABASE_URL" -tAc "select count(*) from information_schema.tables where table_schema='school_collect' and table_name in ('tenants','users','memberships','collects','collect_items','collect_assignments','collect_submissions','audit_events','outbox_events')")" = "9"
+          test "$(psql "$DATABASE_URL" -tAc "select count(*) from school_collect.collects")" = "0"
+          test "$(psql "$DATABASE_URL" -tAc "select count(*) from school_collect.users")" = "0"
+          test "$(psql "$DATABASE_URL" -tAc "select count(*) from information_schema.tables where table_schema='public' and table_name in ('tenants','users','memberships','collects','collect_items','collect_assignments','collect_submissions','audit_events','outbox_events')")" = "0"
       - name: Re-running migrations must be a no-op
         run: cargo run -p school-collect-migrator --locked
       - name: Missing configuration must fail startup instead of degrading
@@ -163,6 +181,45 @@ jobs:
           done
           cat /tmp/api.log
           exit 1
+
+  container:
+    name: server-image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the server image
+        run: docker build -f infra/api.Dockerfile -t school-collect-server:ci .
+      - name: Run the migrator and probe readiness in the built image
+        run: |
+          docker network create school-collect-ci
+          docker run -d --name pg --network school-collect-ci \
+            -e POSTGRES_DB=school_collect -e POSTGRES_USER=school_collect \
+            -e POSTGRES_PASSWORD=school_collect_ci postgres:18
+          for _ in $(seq 1 30); do
+            if docker exec pg pg_isready -U school_collect -d school_collect >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          docker run --rm --network school-collect-ci \
+            -e DATABASE_URL=postgres://school_collect:school_collect_ci@pg:5432/school_collect \
+            --entrypoint /usr/local/bin/school-collect-migrator \
+            school-collect-server:ci
+          docker run -d --name api --network school-collect-ci -p 127.0.0.1:3000:3000 \
+            -e APP_ENV=development \
+            -e APP_BIND_ADDR=0.0.0.0:3000 \
+            -e DATABASE_URL=postgres://school_collect:school_collect_ci@pg:5432/school_collect \
+            school-collect-server:ci
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3000/ready >/dev/null; then
+              curl -fsS http://127.0.0.1:3000/health >/dev/null
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs api
+          exit 1
+      - name: Show container logs on failure
+        if: failure()
+        run: docker logs api || docker logs pg || true
 
   tauri-windows-smoke:
     runs-on: windows-latest
