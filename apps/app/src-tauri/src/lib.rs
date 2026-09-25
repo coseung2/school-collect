@@ -138,7 +138,13 @@ fn decode_recipes(content: &str) -> (Vec<AutomationRecipe>, Vec<String>) {
 
 fn quarantine_invalid_lines(directory: &Path, lines: &[String]) -> Result<(), String> {
     let path = directory.join(AUTOMATION_RECIPES_QUARANTINE_FILE);
-    let mut content = fs::read_to_string(&path).unwrap_or_default();
+    let mut content = match fs::read_to_string(&path) {
+        Ok(existing) => existing,
+        // 격리 파일이 아직 없을 때만 빈 파일로 시작합니다.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        // 그 밖의 읽기 오류는 기존 격리 내용을 보존하기 위해 그대로 실패시킵니다.
+        Err(error) => return Err(format!("기존 격리 파일을 읽지 못했습니다: {error}")),
+    };
 
     for line in lines {
         content.push_str(line);
@@ -148,33 +154,84 @@ fn quarantine_invalid_lines(directory: &Path, lines: &[String]) -> Result<(), St
     write_file_atomically(&path, &content)
 }
 
-fn read_automation_recipes(app_handle: &tauri::AppHandle) -> Result<Vec<AutomationRecipe>, String> {
-    let path = automation_recipes_path(app_handle)?;
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
+/// 레시피 파일을 읽은 결과입니다.
+///
+/// `damaged_lines`가 비어 있지 않으면 원본에 손상된 행이 남아 있다는 뜻이며,
+/// 격리에 성공하기 전까지 원본을 덮어쓰면 그 행이 사라집니다.
+struct RecipeFile {
+    recipes: Vec<AutomationRecipe>,
+    damaged_lines: Vec<String>,
+}
 
-    let content = fs::read_to_string(&path)
-        .map_err(|error| format!("자동화 설정을 읽지 못했습니다: {error}"))?;
-    let (recipes, rejected) = decode_recipes(&content);
-
-    if !rejected.is_empty() {
-        let directory = automation_config_dir(app_handle)?;
-        // 손상된 행을 먼저 격리한 뒤에만 원본을 정리합니다.
-        // 격리에 실패하면 원본을 그대로 남겨 값을 잃지 않습니다.
-        if quarantine_invalid_lines(&directory, &rejected).is_ok() {
-            let _ = write_automation_recipes(app_handle, &recipes);
+impl RecipeFile {
+    /// 파일을 읽기만 하고 수정하지 않습니다.
+    fn read(path: &Path) -> Result<Self, String> {
+        if !path.exists() {
+            return Ok(Self {
+                recipes: Vec::new(),
+                damaged_lines: Vec::new(),
+            });
         }
+
+        let content = fs::read_to_string(path)
+            .map_err(|error| format!("자동화 설정을 읽지 못했습니다: {error}"))?;
+        let (recipes, damaged_lines) = decode_recipes(&content);
+
+        Ok(Self {
+            recipes,
+            damaged_lines,
+        })
     }
 
+    /// 손상된 행을 격리한 뒤에만 원본을 정리합니다.
+    /// 격리에 실패하면 원본과 기존 격리 파일을 건드리지 않고 오류를 돌려줍니다.
+    fn recover(&self, path: &Path) -> Result<(), String> {
+        if self.damaged_lines.is_empty() {
+            return Ok(());
+        }
+
+        let directory = path
+            .parent()
+            .ok_or_else(|| "자동화 설정 경로를 확인하지 못했습니다.".to_string())?;
+        quarantine_invalid_lines(directory, &self.damaged_lines)?;
+        write_automation_recipes(path, &self.recipes)
+    }
+}
+
+/// 원본을 덮어쓰는 명령의 사전 조건입니다.
+/// 손상된 행을 격리하지 못하면 오류를 돌려주고 원본을 건드리지 않습니다.
+fn load_recipes_for_update(path: &Path) -> Result<Vec<AutomationRecipe>, String> {
+    let file = RecipeFile::read(path)?;
+    file.recover(path)?;
+    Ok(file.recipes)
+}
+
+fn upsert_automation_recipe(
+    path: &Path,
+    recipe: AutomationRecipe,
+) -> Result<Vec<AutomationRecipe>, String> {
+    let mut recipes = load_recipes_for_update(path)?;
+
+    if let Some(existing) = recipes.iter_mut().find(|item| item.id == recipe.id) {
+        *existing = recipe;
+    } else {
+        recipes.push(recipe);
+    }
+    recipes.sort_by(|left, right| left.name.cmp(&right.name));
+
+    write_automation_recipes(path, &recipes)?;
     Ok(recipes)
 }
 
-fn write_automation_recipes(
-    app_handle: &tauri::AppHandle,
-    recipes: &[AutomationRecipe],
-) -> Result<(), String> {
-    let path = automation_recipes_path(app_handle)?;
+fn remove_automation_recipe(path: &Path, recipe_id: &str) -> Result<Vec<AutomationRecipe>, String> {
+    let mut recipes = load_recipes_for_update(path)?;
+    recipes.retain(|recipe| recipe.id != recipe_id);
+
+    write_automation_recipes(path, &recipes)?;
+    Ok(recipes)
+}
+
+fn write_automation_recipes(path: &Path, recipes: &[AutomationRecipe]) -> Result<(), String> {
     let mut content = recipes
         .iter()
         .map(encode_recipe)
@@ -184,7 +241,7 @@ fn write_automation_recipes(
         content.push('\n');
     }
 
-    write_file_atomically(&path, &content)
+    write_file_atomically(path, &content)
 }
 
 fn write_temp_file(path: &Path, content: &str) -> std::io::Result<()> {
@@ -217,7 +274,17 @@ fn write_file_atomically(path: &Path, content: &str) -> Result<(), String> {
 
 #[tauri::command]
 fn list_automation_recipes(app_handle: tauri::AppHandle) -> Result<Vec<AutomationRecipe>, String> {
-    read_automation_recipes(&app_handle)
+    let path = automation_recipes_path(&app_handle)?;
+    let file = RecipeFile::read(&path)?;
+
+    // 조회는 파일을 덮어쓰지 않으므로 격리 실패가 목록 표시를 막지 않습니다.
+    // 손상된 행은 원본에 남고 다음 조회에서 복구를 다시 시도합니다.
+    // 원본을 덮어쓰는 등록/삭제는 격리 성공을 사전 조건으로 요구합니다.
+    if let Err(error) = file.recover(&path) {
+        eprintln!("자동화 설정 복구를 미뤘습니다: {error}");
+    }
+
+    Ok(file.recipes)
 }
 
 #[tauri::command]
@@ -230,16 +297,8 @@ fn save_automation_recipe(
     recipe.target_url = recipe.target_url.trim().to_string();
     validate_recipe(&recipe)?;
 
-    let mut recipes = read_automation_recipes(&app_handle)?;
-    if let Some(existing) = recipes.iter_mut().find(|item| item.id == recipe.id) {
-        *existing = recipe;
-    } else {
-        recipes.push(recipe);
-    }
-    recipes.sort_by(|left, right| left.name.cmp(&right.name));
-
-    write_automation_recipes(&app_handle, &recipes)?;
-    Ok(recipes)
+    let path = automation_recipes_path(&app_handle)?;
+    upsert_automation_recipe(&path, recipe)
 }
 
 #[tauri::command]
@@ -253,10 +312,8 @@ fn delete_automation_recipe(
     }
     validate_plain_field(recipe_id)?;
 
-    let mut recipes = read_automation_recipes(&app_handle)?;
-    recipes.retain(|recipe| recipe.id != recipe_id);
-    write_automation_recipes(&app_handle, &recipes)?;
-    Ok(recipes)
+    let path = automation_recipes_path(&app_handle)?;
+    remove_automation_recipe(&path, recipe_id)
 }
 
 #[cfg(target_os = "windows")]
@@ -431,5 +488,111 @@ mod tests {
         );
 
         fs::remove_dir_all(&directory).unwrap();
+    }
+
+    fn test_directory(name: &str) -> PathBuf {
+        let directory =
+            std::env::temp_dir().join(format!("school-collect-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        directory
+    }
+
+    const INVALID_UTF8_BYTES: [u8; 4] = [0xFF, 0xFE, 0x62, 0x72];
+
+    fn shortcut_recipe(id: &str, name: &str, target_url: &str) -> AutomationRecipe {
+        AutomationRecipe {
+            id: id.to_string(),
+            name: name.to_string(),
+            target_url: target_url.to_string(),
+            kind: AutomationKind::Shortcut,
+        }
+    }
+
+    fn damaged_recipes_file() -> &'static str {
+        concat!(
+            "recipe-1\tshortcut\t기안\thttps://example.invalid/draft\n",
+            "damaged-line\n",
+        )
+    }
+
+    #[test]
+    fn quarantine_read_failure_keeps_existing_quarantine_bytes() {
+        let directory = test_directory("quarantine-read-failure");
+        let quarantine_path = directory.join(AUTOMATION_RECIPES_QUARANTINE_FILE);
+        fs::write(&quarantine_path, INVALID_UTF8_BYTES).unwrap();
+
+        let result = quarantine_invalid_lines(&directory, &["damaged-line".to_string()]);
+
+        assert!(result.is_err());
+        assert_eq!(fs::read(&quarantine_path).unwrap(), INVALID_UTF8_BYTES);
+    }
+
+    #[test]
+    fn quarantine_failure_keeps_original_bytes_for_save_and_delete() {
+        let directory = test_directory("quarantine-failure");
+        let recipes_path = directory.join(AUTOMATION_RECIPES_FILE);
+        let quarantine_path = directory.join(AUTOMATION_RECIPES_QUARANTINE_FILE);
+        let original = damaged_recipes_file();
+        fs::write(&recipes_path, original).unwrap();
+        // 격리 경로를 디렉터리로 만들어 격리를 실패시킵니다.
+        fs::create_dir(&quarantine_path).unwrap();
+
+        let saved = upsert_automation_recipe(
+            &recipes_path,
+            shortcut_recipe("recipe-2", "품의", "https://example.invalid/approval"),
+        );
+        let removed = remove_automation_recipe(&recipes_path, "recipe-1");
+
+        assert!(saved.is_err());
+        assert!(removed.is_err());
+        assert_eq!(fs::read(&recipes_path).unwrap(), original.as_bytes());
+        assert!(quarantine_path.is_dir());
+    }
+
+    #[test]
+    fn listing_keeps_valid_recipes_when_recovery_is_blocked() {
+        let directory = test_directory("list-blocked-recovery");
+        let recipes_path = directory.join(AUTOMATION_RECIPES_FILE);
+        let original = damaged_recipes_file();
+        fs::write(&recipes_path, original).unwrap();
+        fs::create_dir(directory.join(AUTOMATION_RECIPES_QUARANTINE_FILE)).unwrap();
+
+        let file = RecipeFile::read(&recipes_path).unwrap();
+
+        assert_eq!(file.recipes.len(), 1);
+        assert_eq!(file.damaged_lines.len(), 1);
+        assert!(file.recover(&recipes_path).is_err());
+        // 조회 경로는 원본을 덮어쓰지 않습니다.
+        assert_eq!(fs::read(&recipes_path).unwrap(), original.as_bytes());
+    }
+
+    #[test]
+    fn recovery_then_save_succeeds() {
+        let directory = test_directory("recovery-then-save");
+        let recipes_path = directory.join(AUTOMATION_RECIPES_FILE);
+        let quarantine_path = directory.join(AUTOMATION_RECIPES_QUARANTINE_FILE);
+        fs::write(&recipes_path, damaged_recipes_file()).unwrap();
+
+        let recipes = upsert_automation_recipe(
+            &recipes_path,
+            shortcut_recipe("recipe-2", "품의", "https://example.invalid/approval"),
+        )
+        .unwrap();
+
+        assert_eq!(recipes.len(), 2);
+        assert_eq!(
+            fs::read_to_string(&quarantine_path).unwrap(),
+            "damaged-line\n"
+        );
+
+        let stored = fs::read_to_string(&recipes_path).unwrap();
+        assert!(stored.contains("recipe-1"));
+        assert!(stored.contains("recipe-2"));
+        assert!(!stored.contains("damaged-line"));
+
+        let remaining = remove_automation_recipe(&recipes_path, "recipe-1").unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, "recipe-2");
     }
 }
