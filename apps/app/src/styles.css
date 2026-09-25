@@ -3,6 +3,10 @@
   gap: var(--sc-space-6);
 }
 
+.app-page--narrow {
+  max-width: 560px;
+}
+
 .app-page > h2 {
   margin: 0;
   font-size: 18px;

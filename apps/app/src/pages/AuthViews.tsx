@@ -18,8 +18,10 @@ export function Standalone({ children }: { children: ReactNode }) {
 }
 
 export function SignInView({
+  onBack,
   onSignedIn,
 }: {
+  onBack?: () => void;
   onSignedIn: (token: string) => void;
 }) {
   const [email, setEmail] = useState("");
@@ -120,12 +122,19 @@ export function SignInView({
             </div>
           </form>
         )}
+        {onBack ? (
+          <div className="app-form__actions">
+            <Button onClick={onBack} type="button" variant="quiet">
+              돌아가기
+            </Button>
+          </div>
+        ) : null}
       </Card>
     </Standalone>
   );
 }
 
-export function CreateSchoolView({
+export function CreateSchoolCard({
   onCreated,
   token,
 }: {
@@ -150,36 +159,34 @@ export function CreateSchoolView({
   }
 
   return (
-    <Standalone>
-      <Card className="app-signin">
-        <div>
-          <p className="app-card-eyebrow">처음 설정</p>
-          <h1>학교 등록</h1>
-          <p className="app-card-description">
-            아직 소속된 학교가 없습니다. 학교를 만들면 관리자 권한으로 시작합니다.
+    <Card className="app-signin">
+      <div>
+        <p className="app-card-eyebrow">처음 설정</p>
+        <h1>학교 등록</h1>
+        <p className="app-card-description">
+          아직 소속된 학교가 없습니다. 학교를 만들면 관리자 권한으로 시작합니다.
+        </p>
+      </div>
+      <form className="app-form" onSubmit={submit}>
+        <FormField htmlFor="school-name" label="학교 이름" required>
+          <input
+            id="school-name"
+            onChange={(event) => setName(event.target.value)}
+            required
+            value={name}
+          />
+        </FormField>
+        {error ? (
+          <p className="app-form__error" role="alert">
+            {error}
           </p>
+        ) : null}
+        <div className="app-form__actions">
+          <Button loading={busy} type="submit">
+            학교 만들기
+          </Button>
         </div>
-        <form className="app-form" onSubmit={submit}>
-          <FormField htmlFor="school-name" label="학교 이름" required>
-            <input
-              id="school-name"
-              onChange={(event) => setName(event.target.value)}
-              required
-              value={name}
-            />
-          </FormField>
-          {error ? (
-            <p className="app-form__error" role="alert">
-              {error}
-            </p>
-          ) : null}
-          <div className="app-form__actions">
-            <Button loading={busy} type="submit">
-              학교 만들기
-            </Button>
-          </div>
-        </form>
-      </Card>
-    </Standalone>
+      </form>
+    </Card>
   );
 }

@@ -4,13 +4,15 @@ import { type Membership, type SessionInfo } from "../api";
 import { roleOf } from "../helpers";
 
 export function SettingsPage({
+  onSignIn,
   session,
   tenant,
   token,
 }: {
-  session: SessionInfo;
-  tenant: Membership;
-  token: string;
+  onSignIn: () => void;
+  session: SessionInfo | null;
+  tenant: Membership | null;
+  token: string | null;
 }) {
   const [health, setHealth] = useState<{ status: string; service: string } | null>(
     null,
@@ -44,7 +46,7 @@ export function SettingsPage({
           </Status>
         </div>
         <p className="app-card-description">
-          로그인 토큰이 유효한지 확인하고, 서버가 준비 상태인지 점검합니다.
+          서버가 준비 상태인지 확인합니다. 로그인 없이도 점검할 수 있습니다.
         </p>
         {error ? <p className="app-form__error">{error}</p> : null}
         {health ? (
@@ -57,27 +59,45 @@ export function SettingsPage({
         </Button>
       </Card>
 
-      <Card>
-        <h2>계정</h2>
-        <dl className="app-meta">
-          <div>
-            <dt>사용자</dt>
-            <dd>{session.user.displayName ?? session.user.subject}</dd>
-          </div>
-          <div>
-            <dt>학교</dt>
-            <dd>{tenant.tenantName}</dd>
-          </div>
-          <div>
-            <dt>권한</dt>
-            <dd>{roleOf(tenant.role)}</dd>
-          </div>
-        </dl>
-        <p className="app-card-description">
-          접근 토큰은 이 창의 메모리에만 보관하며 디스크에 저장하지 않습니다.
-        </p>
-        <p className="app-card-description">세션 토큰 길이 {token.length}자</p>
-      </Card>
+      {session && tenant && token ? (
+        <Card>
+          <h2>계정</h2>
+          <dl className="app-meta">
+            <div>
+              <dt>사용자</dt>
+              <dd>{session.user.displayName ?? session.user.subject}</dd>
+            </div>
+            <div>
+              <dt>학교</dt>
+              <dd>{tenant.tenantName}</dd>
+            </div>
+            <div>
+              <dt>권한</dt>
+              <dd>{roleOf(tenant.role)}</dd>
+            </div>
+          </dl>
+          <p className="app-card-description">
+            접근 토큰은 이 창의 메모리에만 보관하며 디스크에 저장하지 않습니다.
+          </p>
+          <p className="app-card-description">세션 토큰 길이 {token.length}자</p>
+        </Card>
+      ) : (
+        <Card>
+          <h2>계정</h2>
+          {token ? (
+            <p className="app-card-description">계정 정보를 불러오는 중입니다.</p>
+          ) : (
+            <>
+              <p className="app-card-description">
+                로그인하면 학교와 권한 정보를 확인할 수 있습니다.
+              </p>
+              <Button onClick={onSignIn} variant="secondary">
+                로그인
+              </Button>
+            </>
+          )}
+        </Card>
+      )}
     </div>
   );
 }

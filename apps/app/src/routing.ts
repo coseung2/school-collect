@@ -7,6 +7,20 @@ export type AppRoute =
   | { page: "members" }
   | { page: "settings" };
 
+/**
+ * 라우트별로 학교 멤버십(서버 데이터)이 필요한지 여부입니다.
+ * 로그인 없이 쓸 수 있는 화면은 false로 두고, App.tsx의 로컬 화면 분기와 함께 갱신합니다.
+ */
+const membershipRoutes: Record<AppRoute["page"], boolean> = {
+  overview: true,
+  collects: true,
+  collect: true,
+  assignments: true,
+  assignment: true,
+  members: true,
+  settings: false,
+};
+
 export function parseHash(hash: string): AppRoute {
   const path = hash.replace(/^#/, "").replace(/^\/+|\/+$/g, "");
   if (!path || path === "overview") {
@@ -74,4 +88,8 @@ export function navIdFor(route: AppRoute): string {
     return "assignments";
   }
   return route.page;
+}
+
+export function routeNeedsMembership(route: AppRoute): boolean {
+  return membershipRoutes[route.page];
 }
