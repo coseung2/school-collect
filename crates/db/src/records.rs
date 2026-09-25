@@ -61,6 +61,56 @@ pub struct SubmissionRecord {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct CollectItemRecord {
+    pub item_key: String,
+    pub label: String,
+    pub required: bool,
+    pub position: i32,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct MemberRecord {
+    pub user_id: Uuid,
+    pub display_name: Option<String>,
+    pub role: String,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct CollectStatusRowRecord {
+    pub user_id: Uuid,
+    pub display_name: Option<String>,
+    pub role: String,
+    pub assignment_status: Option<String>,
+    pub submission_status: Option<String>,
+    pub submitted_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct AssignmentListRow {
+    pub collect_id: Uuid,
+    pub title: String,
+    pub status: String,
+    pub due_at: Option<DateTime<Utc>>,
+    pub assignment_status: String,
+    pub submission_status: Option<String>,
+    pub submission_version: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, sqlx::FromRow)]
+pub struct CollectProgress {
+    pub assigned: i64,
+    pub submitted: i64,
+}
+
+/// Item definition supplied when a draft is created.
+#[derive(Debug, Clone)]
+pub struct NewCollectItem {
+    pub key: String,
+    pub label: String,
+    pub required: bool,
+}
+
 /// Result of persisting a draft, expressed as data rather than an HTTP concern.
 #[derive(Debug)]
 pub enum SaveDraftOutcome {
@@ -176,13 +226,20 @@ pub async fn create_tenant(
     Ok(tenant)
 }
 
+/// Draft fields supplied by the API layer when a collect is created.
+pub struct NewCollect<'a> {
+    pub title: &'a str,
+    pub description: &'a str,
+    pub due_at: Option<DateTime<Utc>>,
+    pub items: &'a [NewCollectItem],
+    pub assignee_ids: Option<&'a [Uuid]>,
+}
+
 pub async fn create_collect(
     pool: &PgPool,
     tenant_id: Uuid,
     user_id: Uuid,
-    title: &str,
-    description: &str,
-    due_at: Option<DateTime<Utc>>,
+    input: &NewCollect<'_>,
 ) -> anyhow::Result<CollectRecord> {
     let mut tx = pool.begin().await?;
 
@@ -194,12 +251,64 @@ pub async fn create_collect(
     )
     .bind(Uuid::now_v7())
     .bind(tenant_id)
-    .bind(title)
-    .bind(description)
-    .bind(due_at)
+    .bind(input.title)
+    .bind(input.description)
+    .bind(input.due_at)
     .bind(user_id)
     .fetch_one(&mut *tx)
     .await?;
+
+    for (position, item) in input.items.iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO school_collect.collect_items
+               (id, collect_id, item_key, label, required, position)
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(Uuid::now_v7())
+        .bind(collect.id)
+        .bind(&item.key)
+        .bind(&item.label)
+        .bind(item.required)
+        .bind(position as i32)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    // Assignment rows decide who owes a submission. Targets are resolved against
+    // memberships, so a client cannot assign work to a foreign user.
+    match input.assignee_ids {
+        Some(ids) => {
+            for assignee in ids {
+                sqlx::query(
+                    "INSERT INTO school_collect.collect_assignments
+                       (collect_id, user_id, tenant_id, status)
+                     SELECT $1, m.user_id, $2, 'assigned'
+                     FROM school_collect.memberships m
+                     WHERE m.tenant_id = $2 AND m.user_id = $3
+                     ON CONFLICT DO NOTHING",
+                )
+                .bind(collect.id)
+                .bind(tenant_id)
+                .bind(assignee)
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
+        None => {
+            sqlx::query(
+                "INSERT INTO school_collect.collect_assignments
+                   (collect_id, user_id, tenant_id, status)
+                 SELECT $1, m.user_id, $2, 'assigned'
+                 FROM school_collect.memberships m
+                 WHERE m.tenant_id = $2 AND m.role <> 'viewer'
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(collect.id)
+            .bind(tenant_id)
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
 
     insert_audit(
         &mut tx,
@@ -308,6 +417,27 @@ pub async fn transition_collect(
     .fetch_one(&mut *tx)
     .await?;
 
+    if to == "published" {
+        // A collect published without an explicit target list still needs a
+        // known set of submitters, so the first publish resolves the default.
+        sqlx::query(
+            "INSERT INTO school_collect.collect_assignments
+               (collect_id, user_id, tenant_id, status)
+             SELECT $1, m.user_id, $2, 'assigned'
+             FROM school_collect.memberships m
+             WHERE m.tenant_id = $2 AND m.role <> 'viewer'
+               AND NOT EXISTS (
+                 SELECT 1 FROM school_collect.collect_assignments a
+                 WHERE a.collect_id = $1
+               )
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(collect_id)
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+
     insert_audit(
         &mut tx,
         tenant_id,
@@ -390,6 +520,7 @@ pub async fn save_draft(
             .bind(payload)
             .fetch_one(&mut *tx)
             .await?;
+            mark_assignment_started(&mut tx, collect_id, user_id).await?;
             insert_audit(
                 &mut tx,
                 tenant_id,
@@ -424,6 +555,7 @@ pub async fn save_draft(
             .bind(payload)
             .fetch_one(&mut *tx)
             .await?;
+            mark_assignment_started(&mut tx, collect_id, user_id).await?;
             insert_audit(
                 &mut tx,
                 tenant_id,
@@ -498,6 +630,15 @@ pub async fn submit(
             .fetch_one(&mut *tx)
             .await?;
 
+            sqlx::query(
+                "UPDATE school_collect.collect_assignments SET status = 'submitted'
+                 WHERE collect_id = $1 AND user_id = $2",
+            )
+            .bind(collect_id)
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+
             insert_audit(
                 &mut tx,
                 tenant_id,
@@ -531,6 +672,129 @@ pub async fn get_submission(
     .fetch_optional(pool)
     .await?;
     Ok(record)
+}
+
+pub async fn list_collect_items(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    collect_id: Uuid,
+) -> anyhow::Result<Vec<CollectItemRecord>> {
+    let rows = sqlx::query_as::<_, CollectItemRecord>(
+        "SELECT i.item_key, i.label, i.required, i.position
+         FROM school_collect.collect_items i
+         JOIN school_collect.collects c ON c.id = i.collect_id
+         WHERE c.tenant_id = $1 AND i.collect_id = $2
+         ORDER BY i.position",
+    )
+    .bind(tenant_id)
+    .bind(collect_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn collect_progress(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    collect_id: Uuid,
+) -> anyhow::Result<CollectProgress> {
+    let progress = sqlx::query_as::<_, CollectProgress>(
+        "SELECT
+           (SELECT count(*) FROM school_collect.collect_assignments a
+              WHERE a.tenant_id = $1 AND a.collect_id = $2) AS assigned,
+           (SELECT count(*) FROM school_collect.collect_submissions s
+              WHERE s.tenant_id = $1 AND s.collect_id = $2
+                AND s.status = 'submitted') AS submitted",
+    )
+    .bind(tenant_id)
+    .bind(collect_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(progress)
+}
+
+pub async fn list_members(pool: &PgPool, tenant_id: Uuid) -> anyhow::Result<Vec<MemberRecord>> {
+    let rows = sqlx::query_as::<_, MemberRecord>(
+        "SELECT u.id AS user_id, u.display_name, m.role
+         FROM school_collect.memberships m
+         JOIN school_collect.users u ON u.id = m.user_id
+         WHERE m.tenant_id = $1
+         ORDER BY (m.role = 'admin') DESC, m.role, u.display_name NULLS LAST, u.id",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Submission status per assigned member. Members without an assignment are
+/// absent on purpose: this answers "who still owes this collect".
+pub async fn list_collect_status(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    collect_id: Uuid,
+) -> anyhow::Result<Vec<CollectStatusRowRecord>> {
+    let rows = sqlx::query_as::<_, CollectStatusRowRecord>(
+        "SELECT u.id AS user_id, u.display_name, m.role,
+                a.status AS assignment_status,
+                s.status AS submission_status,
+                s.submitted_at
+         FROM school_collect.collect_assignments a
+         JOIN school_collect.memberships m
+           ON m.tenant_id = a.tenant_id AND m.user_id = a.user_id
+         JOIN school_collect.users u ON u.id = a.user_id
+         LEFT JOIN school_collect.collect_submissions s
+           ON s.collect_id = a.collect_id AND s.user_id = a.user_id
+         WHERE a.tenant_id = $1 AND a.collect_id = $2
+         ORDER BY (s.status = 'submitted') ASC, u.display_name NULLS LAST, u.id",
+    )
+    .bind(tenant_id)
+    .bind(collect_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn list_assignments(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    user_id: Uuid,
+) -> anyhow::Result<Vec<AssignmentListRow>> {
+    let rows = sqlx::query_as::<_, AssignmentListRow>(
+        "SELECT a.collect_id, c.title, c.status, c.due_at,
+                a.status AS assignment_status,
+                s.status AS submission_status,
+                s.version AS submission_version
+         FROM school_collect.collect_assignments a
+         JOIN school_collect.collects c ON c.id = a.collect_id
+         LEFT JOIN school_collect.collect_submissions s
+           ON s.collect_id = a.collect_id AND s.user_id = a.user_id
+         WHERE a.tenant_id = $1 AND a.user_id = $2
+         ORDER BY (s.status = 'submitted') ASC, c.due_at NULLS LAST, c.updated_at DESC",
+    )
+    .bind(tenant_id)
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Records that the assignee has begun work. Collects that were never assigned
+/// to this user are left untouched.
+async fn mark_assignment_started(
+    tx: &mut sqlx::PgConnection,
+    collect_id: Uuid,
+    user_id: Uuid,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE school_collect.collect_assignments SET status = 'started'
+         WHERE collect_id = $1 AND user_id = $2 AND status = 'assigned'",
+    )
+    .bind(collect_id)
+    .bind(user_id)
+    .execute(tx)
+    .await?;
+    Ok(())
 }
 
 async fn insert_audit(

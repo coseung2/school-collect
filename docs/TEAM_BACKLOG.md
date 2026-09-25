@@ -54,6 +54,8 @@
 
 완료 기준: `draft -> published -> closed`만 허용하고, 다른 tenant와 contributor가 관리자 mutation을 수행하지 못함.
 
+현재: 통합됨. 수합 생성 시 항목과 대상이 한 transaction으로 기록되고, publish·close와 제출 현황(`/v1/collects/{id}/status`)이 동작합니다. 남은 것: 배포 후 항목 변경 규칙, 대상 변경 UI.
+
 ### 4. Collect contributor flow
 
 권장 브랜치: `feat/collect-submission-flow`
@@ -65,6 +67,22 @@
 범위: draft 저장, 재개, version conflict, submit, closed 이후 차단.
 
 완료 기준: 중복 요청과 오래된 version이 안전하게 거부되고, 재시작 후 draft를 다시 읽을 수 있음.
+
+현재: 통합됨. 저장 시 assignment가 `started`, 제출 시 `submitted`로 바뀌고 마감 후에는 서버가 거부합니다. 남은 것: offline 초안(SQLite)과 재연결 병합.
+
+### 7. Membership invitation
+
+권장 브랜치: `feat/membership-invitation`
+
+소유 경로: `crates/db`, `services/api`, `crates/contracts`, `migrations/v2`, `apps/app`
+
+선행: Collect admin flow
+
+범위: 관리자가 이메일로 구성원을 초대하고, 초대받은 사람이 처음 로그인할 때 membership이 만들어집니다. 구성원 화면에는 초대 대기 상태를 표시합니다.
+
+완료 기준: 초대한 이메일로 로그인한 사용자가 그 학교에서 `contributor`로 배정된 수합을 제출할 수 있고, 다른 학교의 초대에는 권한이 생기지 않습니다.
+
+필요 이유: 교사가 학교에 합류하는 경로가 없으면 교사 화면(내 제출)을 실제로 쓸 수 없습니다.
 
 ### 5. Outbox and worker
 

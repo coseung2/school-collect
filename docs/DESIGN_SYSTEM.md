@@ -75,6 +75,7 @@ Desktop:
 - Status
 - Card / Attention
 - Card / Standalone Featured
+- State panel: Empty / Loading / Error / Permission / Offline
 - List Row: Default / Urgent
 - List Surface
 - Tabs reference
@@ -101,6 +102,8 @@ Screen은 default screenshot 하나가 아니라 state set으로 설계합니다
 - Error
 - Permission
 - Offline
+
+로그인 없이 쓸 수 있는 화면(로컬 도구)과 학교 멤버십이 필요한 화면을 구분합니다. 멤버십이 필요한 화면을 로그인 전에 열면 Permission 상태로 이유와 로그인 action 하나를 보여주고, 로컬 화면은 로그인 없이 그대로 동작합니다.
 
 업무 flow에서는 추가로 확인:
 - data = 0
