@@ -29,6 +29,19 @@ export async function openAutomationTarget(targetUrl: string): Promise<void> {
   return invoke<void>("open_automation_target", { targetUrl });
 }
 
+const UNKNOWN_AUTOMATION_ERROR = "알 수 없는 오류가 발생했습니다.";
+
+/**
+ * Tauri 명령이 거부되면 Rust에서 만든 한국어 문구가 문자열로 전달됩니다.
+ * 그 밖의 내부 오류(TypeError 등)는 사용자 화면에 그대로 노출하지 않습니다.
+ */
+export function automationErrorMessage(error: unknown): string {
+  if (typeof error === "string" && error.trim() !== "") {
+    return error.trim();
+  }
+  return UNKNOWN_AUTOMATION_ERROR;
+}
+
 export function createShortcutRecipe(
   name: string,
   targetUrl: string,

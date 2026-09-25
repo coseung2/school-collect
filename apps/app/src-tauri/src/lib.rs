@@ -1,8 +1,13 @@
 use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
+};
 use tauri::Manager;
 
 const AUTOMATION_RECIPES_FILE: &str = "automation-recipes.tsv";
+const AUTOMATION_RECIPES_QUARANTINE_FILE: &str = "automation-recipes.invalid.tsv";
 const MAX_RECIPE_NAME_LEN: usize = 80;
 const MAX_RECIPE_ID_LEN: usize = 128;
 const MAX_TARGET_URL_LEN: usize = 2048;
@@ -70,7 +75,7 @@ fn validate_recipe(recipe: &AutomationRecipe) -> Result<(), String> {
     Ok(())
 }
 
-fn automation_recipes_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+fn automation_config_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
     let directory = app_handle
         .path()
         .app_config_dir()
@@ -79,7 +84,11 @@ fn automation_recipes_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, Str
     fs::create_dir_all(&directory)
         .map_err(|error| format!("자동화 설정 디렉터리를 만들지 못했습니다: {error}"))?;
 
-    Ok(directory.join(AUTOMATION_RECIPES_FILE))
+    Ok(directory)
+}
+
+fn automation_recipes_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    Ok(automation_config_dir(app_handle)?.join(AUTOMATION_RECIPES_FILE))
 }
 
 fn encode_recipe(recipe: &AutomationRecipe) -> String {
@@ -110,19 +119,55 @@ fn decode_recipe(line: &str) -> Result<AutomationRecipe, String> {
     Ok(recipe)
 }
 
+fn decode_recipes(content: &str) -> (Vec<AutomationRecipe>, Vec<String>) {
+    let mut recipes = Vec::new();
+    let mut rejected = Vec::new();
+
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        match decode_recipe(line) {
+            Ok(recipe) => recipes.push(recipe),
+            Err(_) => rejected.push(line.to_string()),
+        }
+    }
+
+    (recipes, rejected)
+}
+
+fn quarantine_invalid_lines(directory: &Path, lines: &[String]) -> Result<(), String> {
+    let path = directory.join(AUTOMATION_RECIPES_QUARANTINE_FILE);
+    let mut content = fs::read_to_string(&path).unwrap_or_default();
+
+    for line in lines {
+        content.push_str(line);
+        content.push('\n');
+    }
+
+    write_file_atomically(&path, &content)
+}
+
 fn read_automation_recipes(app_handle: &tauri::AppHandle) -> Result<Vec<AutomationRecipe>, String> {
     let path = automation_recipes_path(app_handle)?;
     if !path.exists() {
         return Ok(Vec::new());
     }
 
-    let content = fs::read_to_string(path)
+    let content = fs::read_to_string(&path)
         .map_err(|error| format!("자동화 설정을 읽지 못했습니다: {error}"))?;
-    content
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(decode_recipe)
-        .collect()
+    let (recipes, rejected) = decode_recipes(&content);
+
+    if !rejected.is_empty() {
+        let directory = automation_config_dir(app_handle)?;
+        // 손상된 행을 먼저 격리한 뒤에만 원본을 정리합니다.
+        // 격리에 실패하면 원본을 그대로 남겨 값을 잃지 않습니다.
+        if quarantine_invalid_lines(&directory, &rejected).is_ok() {
+            let _ = write_automation_recipes(app_handle, &recipes);
+        }
+    }
+
+    Ok(recipes)
 }
 
 fn write_automation_recipes(
@@ -139,7 +184,35 @@ fn write_automation_recipes(
         content.push('\n');
     }
 
-    fs::write(path, content).map_err(|error| format!("자동화 설정을 저장하지 못했습니다: {error}"))
+    write_file_atomically(&path, &content)
+}
+
+fn write_temp_file(path: &Path, content: &str) -> std::io::Result<()> {
+    let mut file = fs::File::create(path)?;
+    file.write_all(content.as_bytes())?;
+    file.sync_all()
+}
+
+fn write_file_atomically(path: &Path, content: &str) -> Result<(), String> {
+    let directory = path
+        .parent()
+        .ok_or_else(|| "자동화 설정 경로를 확인하지 못했습니다.".to_string())?;
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| "자동화 설정 경로를 확인하지 못했습니다.".to_string())?;
+    let temp_path = directory.join(format!("{}.tmp", file_name.to_string_lossy()));
+
+    if let Err(error) = write_temp_file(&temp_path, content) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(format!("자동화 설정을 저장하지 못했습니다: {error}"));
+    }
+
+    if let Err(error) = fs::rename(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(format!("자동화 설정을 저장하지 못했습니다: {error}"));
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -291,5 +364,72 @@ mod tests {
         };
         let decoded = decode_recipe(&encode_recipe(&recipe)).unwrap();
         assert_eq!(decoded, recipe);
+    }
+
+    #[test]
+    fn keeps_valid_lines_and_reports_damaged_lines() {
+        let content = concat!(
+            "recipe-1\tshortcut\t기안\thttps://example.invalid/draft\n",
+            "damaged-line-without-fields\n",
+            "\n",
+            "recipe-2\tshortcut\t품의\thttps://example.invalid/approval\n",
+        );
+
+        let (recipes, rejected) = decode_recipes(content);
+
+        assert_eq!(recipes.len(), 2);
+        assert_eq!(recipes[0].id, "recipe-1");
+        assert_eq!(recipes[1].id, "recipe-2");
+        assert_eq!(rejected, vec!["damaged-line-without-fields".to_string()]);
+    }
+
+    #[test]
+    fn damaged_line_does_not_hide_other_recipes() {
+        let content = concat!(
+            "recipe-1\tshortcut\t기안\thttps://user:secret@example.invalid/draft\n",
+            "recipe-2\tshortcut\t품의\thttps://example.invalid/approval\n",
+        );
+
+        let (recipes, rejected) = decode_recipes(content);
+
+        assert_eq!(recipes.len(), 1);
+        assert_eq!(recipes[0].id, "recipe-2");
+        assert_eq!(rejected.len(), 1);
+    }
+
+    #[test]
+    fn quarantine_appends_damaged_lines() {
+        let directory =
+            std::env::temp_dir().join(format!("school-collect-quarantine-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+
+        quarantine_invalid_lines(&directory, &["broken-1".to_string()]).unwrap();
+        quarantine_invalid_lines(&directory, &["broken-2".to_string()]).unwrap();
+
+        let content =
+            fs::read_to_string(directory.join(AUTOMATION_RECIPES_QUARANTINE_FILE)).unwrap();
+        assert_eq!(content, "broken-1\nbroken-2\n");
+
+        fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn atomic_write_replaces_file_without_leaving_temp_file() {
+        let directory =
+            std::env::temp_dir().join(format!("school-collect-atomic-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join(AUTOMATION_RECIPES_FILE);
+        fs::write(&path, "stale-content\n").unwrap();
+
+        write_file_atomically(&path, "fresh-content\n").unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "fresh-content\n");
+        assert!(
+            !directory
+                .join(format!("{AUTOMATION_RECIPES_FILE}.tmp"))
+                .exists()
+        );
+
+        fs::remove_dir_all(&directory).unwrap();
     }
 }

@@ -33,6 +33,7 @@ import {
   type SessionInfo,
 } from "./api";
 import {
+  automationErrorMessage,
   createShortcutRecipe,
   deleteAutomationRecipe,
   describeAutomationTarget,
@@ -86,13 +87,7 @@ function canManage(role: string): boolean {
 }
 
 function messageOf(error: unknown): string {
-  if (error instanceof ApiError || error instanceof Error) {
-    return error.message;
-  }
-  if (typeof error === "string") {
-    return error;
-  }
-  return "알 수 없는 오류가 발생했습니다.";
+  return error instanceof ApiError ? error.message : "알 수 없는 오류가 발생했습니다.";
 }
 
 export default function App() {
@@ -756,9 +751,10 @@ function CollectDetailView({
   );
 }
 
-
 function AutomationView() {
   const [recipes, setRecipes] = useState<AutomationRecipe[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const [name, setName] = useState("");
   const [targetUrl, setTargetUrl] = useState("");
   const [busy, setBusy] = useState(false);
@@ -766,11 +762,15 @@ function AutomationView() {
   const [notice, setNotice] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    setLoading(true);
     try {
       setRecipes(await listAutomationRecipes());
-      setError(null);
+      setLoadError(null);
     } catch (caught) {
-      setError(messageOf(caught));
+      setRecipes(null);
+      setLoadError(automationErrorMessage(caught));
+    } finally {
+      setLoading(false);
     }
   }, []);
 
@@ -786,11 +786,12 @@ function AutomationView() {
     try {
       const next = await saveAutomationRecipe(createShortcutRecipe(name, targetUrl));
       setRecipes(next);
+      setLoadError(null);
       setName("");
       setTargetUrl("");
       setNotice("업무 버튼을 등록했습니다.");
     } catch (caught) {
-      setError(messageOf(caught));
+      setError(automationErrorMessage(caught));
     } finally {
       setBusy(false);
     }
@@ -802,9 +803,10 @@ function AutomationView() {
     setNotice(null);
     try {
       setRecipes(await deleteAutomationRecipe(recipeId));
+      setLoadError(null);
       setNotice("업무 버튼을 삭제했습니다.");
     } catch (caught) {
-      setError(messageOf(caught));
+      setError(automationErrorMessage(caught));
     } finally {
       setBusy(false);
     }
@@ -817,7 +819,7 @@ function AutomationView() {
     try {
       await openAutomationTarget(recipe.targetUrl);
     } catch (caught) {
-      setError(messageOf(caught));
+      setError(automationErrorMessage(caught));
     } finally {
       setBusy(false);
     }
@@ -886,14 +888,24 @@ function AutomationView() {
               연결합니다.
             </p>
           </div>
-          <Button onClick={() => void load()} size="small" variant="quiet">
+          <Button disabled={loading} onClick={() => void load()} size="small" variant="quiet">
             새로고침
           </Button>
         </div>
 
-        {recipes === null ? (
+        {loading ? (
           <LoadingState description="로컬 자동화 설정을 불러오고 있습니다." title="불러오는 중" />
-        ) : recipes.length === 0 ? (
+        ) : loadError ? (
+          <ErrorState
+            action={
+              <Button onClick={() => void load()} variant="secondary">
+                다시 시도
+              </Button>
+            }
+            description={loadError}
+            title="업무 버튼을 불러오지 못했습니다"
+          />
+        ) : !recipes || recipes.length === 0 ? (
           <EmptyState
             description="위에서 기안, 품의, 출결처럼 자주 쓰는 화면을 첫 버튼으로 등록하세요."
             title="등록한 업무 버튼이 없습니다"

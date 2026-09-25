@@ -43,6 +43,12 @@ School Collect
 
 레시피는 서버에 업로드하지 않고 Tauri 앱의 사용자별 로컬 설정 디렉터리에 저장합니다.
 
+저장 파일과 복구 동작:
+
+- `automation-recipes.tsv`에 탭으로 구분해 `id`, `kind`, `name`, `targetUrl`을 기록합니다.
+- 저장은 임시 파일에 쓴 뒤 rename으로 교체합니다. 쓰기 도중 중단되어도 기존 파일이 손상되지 않습니다.
+- 읽는 중 형식이 어긋난 행을 만나면 그 행을 `automation-recipes.invalid.tsv`로 옮겨 보관하고 나머지 레시피는 그대로 사용합니다. 손상된 행을 먼저 격리한 뒤에만 원본을 정리하므로, 격리에 실패하면 원본을 그대로 둡니다.
+
 ### 저장하지 않는 것
 
 - 브라우저 쿠키
@@ -218,3 +224,15 @@ School Collect (Tauri)
 - AI 기반 화면 인식
 
 이 기능들은 브라우저 동반 확장과 검증 가능한 레시피 실행기가 먼저 들어온 뒤 추가합니다.
+
+## 후속 개선
+
+첫 수직 슬라이스 리뷰에서 확인했지만 이번 수정에 넣지 않은 항목입니다.
+
+- URL 검증: `url` crate(이미 workspace dependency)로 호스트 필수와 스킴 정규화를 적용합니다. 현재는 `https://:8080` 같은 값이 통과하고 `HTTPS://`는 거부됩니다.
+- 실행 경계: `open_automation_target(url)`을 레시피 id 기반 명령으로 바꿔 렌더러가 임의 URL을 열지 못하게 합니다.
+- 브라우저 열기: `tauri-plugin-opener` 또는 비동기 spawn으로 교체합니다. 현재는 `rundll32 url.dll,FileProtocolHandler`를 동기 실행하고 종료를 기다립니다.
+- 레시피 파일 권한을 0600으로 좁히고 격리 파일 크기에 상한을 둡니다.
+- 삭제 확인과 실행 취소, 레시피별 `aria-label`, 레시피 개수 상한.
+- `decode_recipe`에서도 값을 trim합니다(현재는 검증만 trim).
+- 레시피 범위는 School Collect 계정이 아니라 OS 사용자 단위입니다. 같은 Windows 계정으로 다른 학교 계정에 로그인하면 이전 사용자의 버튼이 보입니다.
