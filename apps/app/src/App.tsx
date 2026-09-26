@@ -821,6 +821,10 @@ function AutomationView() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
+  const [listNotice, setListNotice] = useState<string | null>(null);
+  const [undoRecipe, setUndoRecipe] = useState<AutomationRecipe | null>(null);
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -851,6 +855,9 @@ function AutomationView() {
       setName("");
       setTargetUrl("");
       setNotice("업무 버튼을 등록했습니다.");
+      setPendingDeleteId(null);
+      setUndoRecipe(null);
+      setListNotice(null);
     } catch (caught) {
       setError(automationErrorMessage(caught));
     } finally {
@@ -858,16 +865,45 @@ function AutomationView() {
     }
   }
 
-  async function remove(recipeId: string) {
+  /**
+   * 삭제는 두 번 눌러 확인합니다. 확인 전에는 파일을 건드리지 않고,
+   * 삭제한 뒤에는 같은 id로 되돌릴 수 있게 레시피를 보관합니다.
+   */
+  async function remove(recipe: AutomationRecipe) {
+    if (pendingDeleteId !== recipe.id) {
+      setPendingDeleteId(recipe.id);
+      setListError(null);
+      setListNotice(null);
+      return;
+    }
+
     setBusy(true);
-    setError(null);
-    setNotice(null);
+    setListError(null);
+    setListNotice(null);
     try {
-      setRecipes(await deleteAutomationRecipe(recipeId));
+      setRecipes(await deleteAutomationRecipe(recipe.id));
       setLoadError(null);
-      setNotice("업무 버튼을 삭제했습니다.");
+      setUndoRecipe(recipe);
+      setListNotice("업무 버튼을 삭제했습니다.");
+      setPendingDeleteId(null);
     } catch (caught) {
-      setError(automationErrorMessage(caught));
+      setListError(automationErrorMessage(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function restore(recipe: AutomationRecipe) {
+    setBusy(true);
+    setListError(null);
+    setListNotice(null);
+    try {
+      setRecipes(await saveAutomationRecipe(recipe));
+      setLoadError(null);
+      setUndoRecipe(null);
+      setListNotice("업무 버튼을 되돌렸습니다.");
+    } catch (caught) {
+      setListError(automationErrorMessage(caught));
     } finally {
       setBusy(false);
     }
@@ -875,13 +911,14 @@ function AutomationView() {
 
   async function open(recipe: AutomationRecipe) {
     setBusy(true);
-    setError(null);
-    setNotice(null);
+    setListError(null);
+    setListNotice(null);
+    setUndoRecipe(null);
     try {
       await openAutomationRecipe(recipe.id);
-      setNotice("브라우저 열기를 요청했습니다.");
+      setListNotice("브라우저 열기를 요청했습니다.");
     } catch (caught) {
-      setError(automationErrorMessage(caught));
+      setListError(automationErrorMessage(caught));
     } finally {
       setBusy(false);
     }
@@ -960,6 +997,31 @@ function AutomationView() {
           </Button>
         </div>
 
+        {listError ? (
+          <p className="app-form__error" role="alert">
+            {listError}
+          </p>
+        ) : null}
+        {listNotice ? (
+          <p className="app-form__notice">
+            {listNotice}
+            {undoRecipe ? (
+              <>
+                {" "}
+                <Button
+                  aria-label={`${undoRecipe.name} 삭제 되돌리기`}
+                  disabled={busy}
+                  onClick={() => void restore(undoRecipe)}
+                  size="small"
+                  variant="quiet"
+                >
+                  실행 취소
+                </Button>
+              </>
+            ) : null}
+          </p>
+        ) : null}
+
         {loading ? (
           <LoadingState description="로컬 자동화 설정을 불러오고 있습니다." title="불러오는 중" />
         ) : loadError ? (
@@ -982,24 +1044,48 @@ function AutomationView() {
             {recipes.map((recipe) => (
               <ListRow
                 action={
-                  <div className="app-row-actions">
-                    <Button
-                      disabled={busy}
-                      onClick={() => void open(recipe)}
-                      size="small"
-                      variant="secondary"
-                    >
-                      열기
-                    </Button>
-                    <Button
-                      disabled={busy}
-                      onClick={() => void remove(recipe.id)}
-                      size="small"
-                      variant="quiet"
-                    >
-                      삭제
-                    </Button>
-                  </div>
+                  pendingDeleteId === recipe.id ? (
+                    <div className="app-row-actions">
+                      <Button
+                        aria-label={`${recipe.name} 삭제 확인`}
+                        disabled={busy}
+                        onClick={() => void remove(recipe)}
+                        size="small"
+                      >
+                        삭제 확인
+                      </Button>
+                      <Button
+                        aria-label={`${recipe.name} 삭제 취소`}
+                        disabled={busy}
+                        onClick={() => setPendingDeleteId(null)}
+                        size="small"
+                        variant="quiet"
+                      >
+                        취소
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="app-row-actions">
+                      <Button
+                        aria-label={`${recipe.name} 열기`}
+                        disabled={busy}
+                        onClick={() => void open(recipe)}
+                        size="small"
+                        variant="secondary"
+                      >
+                        열기
+                      </Button>
+                      <Button
+                        aria-label={`${recipe.name} 삭제`}
+                        disabled={busy}
+                        onClick={() => void remove(recipe)}
+                        size="small"
+                        variant="quiet"
+                      >
+                        삭제
+                      </Button>
+                    </div>
+                  )
                 }
                 description={describeAutomationTarget(recipe.targetUrl)}
                 key={recipe.id}
