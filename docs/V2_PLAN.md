@@ -1,161 +1,83 @@
-# School Collect v2: 7단계 실행 계획
+# School Collect 작업 계획
 
-기준일: 2026-09-22. 상위 이슈: #1.
+기준일: 2026-09-27 (Asia/Seoul). 상위 이슈: #1.
 
-v2는 MVP나 임시 프로토타입을 목표로 하지 않습니다. 각 단계에서 구현하는 범위는 작게 유지할 수 있지만, 구조는 production 기준의 최종 방향과 호환되어야 합니다.
+학교 구성원이 함께 처리하는 **학교업무**와 자기 컴퓨터에서 쓰는 **개인기능**을 별도 작업 흐름으로 관리합니다. 두 영역은 같은 앱과 Design System을 사용하지만 로그인, 데이터 소유권, 완료 조건은 구분합니다.
 
-## 상태 표현
+## 분류 기준
 
-`계획` / `구현 중` / `검증 중` / `리뷰 대기` / `완료`를 구분합니다.
-
-설정 파일, scaffold, mock, 문서만으로 실행 완료를 주장하지 않습니다. 단계별로 PR, 검증 commit SHA, 실제 실행 명령/결과, 리뷰 기록, 남은 위험을 남깁니다. 현재 사실 상태는 [STATUS.md](STATUS.md)를 기준으로 합니다.
-
-## 단계와 게이트
-
-| 단계 | 이슈 | 결과물 | 완료 게이트 |
+| 구분 | 학교업무 | 개인기능 | 공통 기반 |
 | --- | --- | --- | --- |
-| 1. 기준점·보안 | #2 | public OSS에 적합한 저장소/history 정리 | credential 폐기/회전, 실자료 history 처리, 보존 결정 |
-| 2. 공동작업 | #3 | develop, 규칙, templates, CODEOWNERS, CI | 실제 branch protection/ruleset 및 리뷰 차단 확인 |
-| 3. 실행 기반 | #4 | Tauri/Rust/PostgreSQL workspace | reproducible install/build/test, migration/native smoke |
-| 4. Figma | #5 | Design System + Product 기준안 | 실제 Figma 파일 검수와 사용자 승인 |
-| 5. Code DS / AppShell | #6 | code tokens/UI/AppShell | native smoke, accessibility/state 검수 |
-| 6. Auth/Data/Operations | #7 | authz/data/jobs/offline/backup 기반 | 보안 부정 테스트, 장애/복원 검증 |
-| 7. Collect reference implementation | #8 | end-to-end 기준 구현 | 통합 SHA + native/API/DB/E2E 검증 |
+| 목적 | 학교 단위 자료수합·배정·제출·현황 관리 | 내 바로가기·반복 입력·새 항목 확인 | 앱과 배포 기반 |
+| 사용 조건 | 로그인 + 학교 membership + 서버 권한 확인 | School Collect 로그인·학교 가입 없이 사용 | 기능별로 필요한 권한만 요구 |
+| 데이터 기준 | 서버의 학교·사용자·역할·업무 데이터 | 사용자 컴퓨터의 개인 설정·레시피 | UI token, 앱 설정, 진단 등 |
+| 포함 기능 | 학교 현황, 자료수합, **내 제출**, 구성원, 첨부·결과 내보내기 | 업무 바로가기, 브라우저 확장, 자동입력, 개인 감시·알림 | AppShell, Design System, 설치·업데이트, 보안 |
+| 연결 범위 | API -> PostgreSQL, 파일·작업 서버 | 로컬 저장소와 사용자의 브라우저 | 서버/클라이언트 설정 분리 |
 
-사용자 결정에 따라 Figma 기준안을 실행 기반과 병행하여 먼저 확정했으며, Stage 4 시안은 승인되었습니다. Stage 3 실행 기반은 PR #11에서 CI 검증 중/완료 항목을 축적하고 있습니다.
+화면 이름보다 데이터의 소유권과 권한으로 분류합니다. `내 제출`과 offline 제출 초안은 개인이 작성하더라도 학교업무입니다. 나이스 등 업무 사이트를 여는 버튼은 개인 설정이므로 개인기능입니다. 외부 사이트의 로그인은 해당 사이트의 브라우저에서 진행합니다.
 
-## 1. 기준점·보안
+학교 계정 로그아웃 시 학교 세션·캐시·초안 정리 정책을 적용합니다. 개인 바로가기는 학교 계정과 분리해 유지하며 사용자가 별도로 삭제할 수 있어야 합니다. 학교 데이터를 개인 자동화에 연결할 때는 별도 권한과 데이터 보존 계약을 먼저 정합니다.
 
-저장소는 public 오픈소스 상태를 유지합니다. 목표는 private 전환이 아니라 public에 적합하지 않은 legacy credential과 실제 업무 source/derived artifact를 안전하게 제거하는 것입니다.
+## 문서와 상태 기준
 
-- 신규 secret/실자료 유입 차단
-- 현재 HEAD sanitization
-- 과거 Git history 대상 분류
-- 외부 credential 폐기/회전
-- history rewrite 필요 범위 확정
-- rewrite 시 백업/협업자 재동기화/공개 캐시 한계 기록
+- [학교업무 계획](SCHOOL_WORK_PLAN.md): S-01~S-07, 학교 구성원 흐름과 완료 조건.
+- [개인기능 계획](PERSONAL_PLAN.md): P-01~P-07, 로컬 도구와 브라우저 자동화.
+- [팀 작업 순서](TEAM_BACKLOG.md): C-01~C-05 공통 기반, 선행 관계와 변경 경계.
+- [실행 상태](STATUS.md): 통합 SHA, 열린 PR, 검증 기록과 미검증 범위.
 
-production용 seed에 demo data를 넣지 않습니다. 테스트 데이터는 테스트 실행 중 생성하고 종료 시 제거합니다.
+| 상태 | 의미 |
+| --- | --- |
+| 계획 | 구현 또는 완료 근거가 아직 없음 |
+| 구현 중 | 해당 범위의 일부 코드가 있음 |
+| 검증 중 | 코드가 있으나 완료 조건 확인이 남음 |
+| 리뷰 대기 | PR이 열려 있고 통합 전임 |
+| 완료 | 정의한 범위가 develop에 통합되고 필요한 검증 근거가 있음 |
 
-## 2. 공동작업
+상태에는 적용 범위를 함께 적습니다. 기능 브랜치의 구현, CI 성공, develop 통합, production 배포는 각각 구분합니다. 이번 최신화는 문서·코드·GitHub PR 상태 대조이며 과거 native/API/DB 검증을 다시 실행한 것은 아닙니다.
 
-`feat/fix/refactor/chore/docs -> develop -> main`을 기본으로 합니다.
+## 현재 기준점
 
-- 작업 브랜치 -> develop: squash
-- develop -> main: merge commit
-- main -> develop: release/hotfix 이후 merge commit sync
-- hotfix: main에서 분기
+2026-09-27 원격 조회 기준 `origin/develop`은 `26aa851`, `origin/main`은 `49f856a`입니다.
 
-repository ruleset/branch protection은 문서가 아니라 GitHub 서버 설정으로 검증합니다. 현재 사실 상태는 STATUS/BRANCH_PROTECTION 문서를 따릅니다.
+| 범위 | 현재 상태 | 다음 작업 |
+| --- | --- | --- |
+| 학교업무 기본 흐름 | PR #19로 로그인·학교 등록·수합 생성/배포/작성/제출/마감 통합 | S-01 수합 항목·대상·현황 확장 검토 |
+| 학교업무 화면 확장 | PR #24 OPEN, head `1dd656f`, 6개 CI check 성공 | 통합 후 S-02 구성원 초대 |
+| 개인 바로가기 | PR #25 OPEN, head `fc944b9`, 6개 CI check 성공 | P-01 로컬 후속 구현 비교·안정화·native 검증 |
+| 로그인 없는 개인 화면 | 로컬 `feat/personal-automation`의 `c31b9d9`에 구현, develop 미통합 | C-01 공통 경계와 P-01 통합 |
+| Code DS/AppShell | PR #17로 기본 구현 통합 | C-01 영역 구분, 접근성·Figma 세부 대응 |
 
-## 3. 실행 기반
+PR #24/#25는 서로 다른 가지입니다. 로컬 `c31b9d9`에는 학교 화면 확장과 개인기능이 함께 들어 있으므로 통합 완료로 취급하거나 중복 병합하지 않습니다.
 
-목표는 modular monolith API + 별도 worker + migration-only process입니다.
+## 다음 작업 순서
 
-현재 실행 기반 방향:
-- `apps/app`: React/Vite + Tauri 2
-- `services/api`: Axum
-- `services/worker`: async worker seam
-- `services/migrator`: migration-only
-- `crates/domain|application|db|auth|contracts|observability`
-- PostgreSQL 18
-- v2 migration: `migrations/v2/`
-- liveness `/health`, dependency readiness `/ready`
-- generated OpenAPI
+1. C-01에서 학교업무/개인기능의 진입·로그인·설정·offline 표시 경계를 확정하고 S-01과 P-01의 겹치는 AppShell 변경을 대조합니다.
+2. 학교업무는 S-01 통합 검증 -> S-02 구성원 초대를 우선합니다. 항목·대상 변경, 첨부, 세션·offline 초안, 비동기 처리·결과 내보내기는 각 선행 조건에 따라 진행합니다.
+3. 개인기능은 P-01 바로가기 안정화·native 검증 -> P-02 현재 화면 등록 -> P-03 자동입력 엔진을 우선합니다. 행렬 입력·데이터 연결·감시는 그 위에 추가하고 AI 보조는 선택 후속으로 둡니다.
+4. C-02~C-05 보안·운영·배포 검증은 영향받는 기능의 출시 전에 완료합니다. 학교 서버 구축이나 구성원 초대가 순수 로컬 도구 개발의 선행 조건은 아닙니다.
 
-완료 게이트:
-- pnpm/Cargo lockfile 고정과 frozen/locked CI
-- TS build/typecheck
-- Rust fmt/clippy/test
-- 빈 PostgreSQL 18에 v2 migration
-- API readiness
-- Windows native Tauri smoke
-- 실제 개발 환경 `tauri dev` smoke
-- mobile target/plugin compatibility 확인
+## 기존 7단계와의 관계
 
-테스트용 DB 레코드는 실행 중 생성·정리하며 저장소에 상시 seed하지 않습니다.
+기존 이슈와 검증 이력을 유지합니다. 제품 영역 분리로 운영 요건을 폐기하지 않습니다.
 
-## 4. Figma
+| 기존 단계 / 이슈 | 관리 위치 | 남은 게이트 |
+| --- | --- | --- |
+| 1. 기준점·보안 / #2 | C-04 | 나머지 credential, history 범위·보존·정리 검증 |
+| 2. 공동작업 / #3 | 공통 Git 규칙, C-04 | 독립 리뷰, 협업자 추가 시 보호 강화, 미검증 차단 동작 |
+| 3. 실행 기반 / #4 | C-03, C-05 | 배포 설정, 대상 플랫폼 build/native 검증 |
+| 4. Figma / #5 | C-01 | interaction/accessibility, Library/Code Connect |
+| 5. Code DS/AppShell / #6 | C-01 | 기본 구현 완료, 두 영역의 진입·상태 표현 보강 |
+| 6. Auth/Data/Operations / #7 | C-02~C-05, S-04~S-06 | 세션·파일·jobs·offline·환경 분리·복구 |
+| 7. Collect / #8 | S-01~S-07 | 교사 합류부터 결과 내보내기까지 통합 E2E |
 
-파일:
-- `School Collect — Design System`
-- `School Collect — Product`
+개인기능 P-01~P-07은 별도 계획이며 Stage 7 Collect의 완료 조건에 포함하지 않습니다.
 
-시안은 사용자 승인 완료 상태입니다.
+## 유지할 기술·데이터 원칙
 
-핵심 승인 규칙:
-- light compact sidebar, vertical active indicator 없음
-- one primary action hierarchy
-- radius <= 8px
-- decorative shadow 없음
-- Card는 독립 정보/행동 객체
-- 카드 크기는 정보/행동 밀도에 비례
-- peer collection 안에서 한 항목만 Card로 승격하지 않음
-- shared List Surface + uniform List Row
-- urgency는 semantic state로 표현
-- Default/Loading/Empty/Error/Permission/Offline 상태 포함
-
-남은 항목은 code mapping, interaction/accessibility detail, Library/Code Connect 등이며 Stage 5와 연결합니다.
-
-## 5. Code Design System / AppShell
-
-승인 Figma를 저장소 token과 `packages/ui`로 옮깁니다.
-
-기준 컴포넌트:
-Button, FormField, Status, Card, ListSurface, ListRow, Sidebar, Header, Tabs, Table, Dialog, Sheet, Toast, Empty/Loading/Error/Permission/Offline.
-
-화면별 임의 값보다 token/component를 우선합니다. 제품 화면에서 새 reusable rule이 생기면 Design System에 함께 반영합니다.
-
-AppShell은 실제 Tauri 창, routing, navigation, error/offline state와 native capability 최소화를 포함합니다.
-
-## 6. Auth / Data / Operations
-
-### 6A Authentication
-ZITADEL OIDC, external browser, Authorization Code + PKCE, state/nonce/redirect 검증, API token validation, secure token storage.
-
-### 6B Authorization / PostgreSQL
-organization/school membership, RBAC, tenant-scoped invariant, runtime/migrator role 분리, audit, 필요 시 RLS defense-in-depth.
-
-### 6C Files
-private R2, 서버 권한 확인, 제한된 upload/download, lifecycle/retention.
-
-### 6D Async
-업무 DB 변경과 outbox INSERT를 한 transaction으로 commit. relay -> NATS JetStream -> idempotent worker. ACK는 side effect commit 후 수행합니다.
-
-### 6E Local/offline
-SQLite는 draft/cache/outbox 역할만 가집니다. 서버가 최종 데이터 기준입니다. idempotency/version/conflict/logout cleanup을 설계합니다.
-
-### 6F Operations
-staging/production 분리, tracing/metrics/log redaction, backup/restore drill, signed release/update.
-
-운영 리소스는 대상 계정과 권한이 확정되기 전 임의로 생성하지 않습니다.
-
-## 7. Collect reference implementation
-
-Collect는 “MVP”가 아니라 이후 기능이 따라야 할 **production-grade reference implementation**입니다.
-
-관리자 생성 -> 배포 -> 교사 draft -> 제출 -> 담당자 status -> 마감 -> 결과/export 흐름을 DB/domain/API/client/offline/UI/audit/security/test까지 수직으로 구현합니다.
-
-검증 항목:
-- tenant A/B 격리
-- 교사/담당자/관리자 권한
-- 마감 이후 제출
-- 중복 요청/idempotency
-- 동시 수정
-- 네트워크 단절/재전송
-- 재시작 draft 복구
-- export 재처리
-- 서버 기준 시간/상태 전이
-
-테스트 데이터는 테스트 수명 동안만 존재해야 합니다.
-
-## 공통 원칙
-
-- production-first
-- server-authoritative security
-- public repository에 secret/실자료 없음
-- persistent demo seed 없음
-- runtime-generated test data + cleanup
-- 실제 실행한 검증만 기록
-- 운영 변경은 별도 권한
-- 데이터 삭제/history rewrite는 별도 보안 작업
+- Tauri 2 + React/Vite + strict TypeScript, Rust/Axum, SQLx, 전용 migrator를 유지합니다.
+- 인증 provider는 accepted [ADR-0002](ADR/0002-supabase-identity-and-database.md)의 Supabase Auth입니다. ZITADEL 구축은 현재 목록에서 제외합니다. 외부 브라우저 PKCE와 OS 보안 저장소는 S-05 후속입니다.
+- 로컬/CI는 PostgreSQL 18이며 기존 외부 DB 검증 기록은 ADR-0002의 PostgreSQL 17 대상입니다. 이를 동일한 환경이나 production 배포 근거로 표시하지 않습니다.
+- 서버가 학교 데이터·권한의 최종 기준입니다. private R2와 transactional outbox -> NATS JetStream -> idempotent worker는 학교업무의 목표 구조입니다.
+- SQLite draft/cache/outbox는 학교업무의 로컬 보조 저장소 계획입니다. 개인 바로가기의 현재 TSV 저장을 SQLite 구현 완료로 표시하지 않습니다.
+- 실제 업무자료·개인정보·credential·영구 demo seed를 저장소에 넣지 않습니다. 테스트 데이터는 실행 수명 안에서 생성·정리합니다.
+- production 배포/migration, 유료 자원·DNS·서명키 변경, credential 회전, 파괴적 데이터/history 작업은 별도 명시적 권한이 필요합니다.

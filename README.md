@@ -18,12 +18,15 @@ School Collect는 학교의 반복 행정업무를 수합·검증·자동화하�
 | Code Design System / AppShell | Stage 5 완료 |
 | Rust/Axum API | 실행 기반 CI 검증 완료 |
 | PostgreSQL 18 | migration + readiness CI 검증 완료 |
-| 인증/권한 | OIDC/JWKS 요청 경계 기반 구현, membership RBAC 후속 |
-| Collect | production-grade reference implementation 예정 |
+| 인증/권한 | Supabase Auth 토큰 검증·membership RBAC 기본 흐름 통합 |
+| 학교업무 | 수합 기본 흐름 통합, 항목·대상·현황 확장 PR #24 리뷰 대기 |
+| 개인기능 | 로컬 바로가기 PR #25 리뷰 대기, 로그인 없는 개인 화면은 로컬 후속 구현 |
 | 보안 정리 | 추적 파일 정리 완료. Git history 정리는 별도 판단 |
 | Branch protection | main/develop 적용 완료 |
 
 자세한 현재 상태는 [docs/STATUS.md](docs/STATUS.md)를 봅니다.
+
+작업 계획은 [학교업무](docs/SCHOOL_WORK_PLAN.md), [개인기능](docs/PERSONAL_PLAN.md), [공통 기반](docs/TEAM_BACKLOG.md)으로 나눕니다. `내 제출`은 학교업무이며 개인 바로가기·자동입력·감시는 학교 가입 없이 쓰는 개인기능입니다. 구현·통합 범위는 각 계획에 표시합니다.
 
 ### 기술 방향
 
@@ -32,7 +35,7 @@ School Collect는 학교의 반복 행정업무를 수합·검증·자동화하�
 | Desktop | Tauri 2 + React 19 + Vite + strict TypeScript |
 | Server | Rust + Axum + Tokio + Tower + Serde |
 | Database | PostgreSQL 18 + SQLx |
-| Authentication | ZITADEL / OIDC Authorization Code + PKCE |
+| Authentication | Supabase Auth + API OIDC/JWKS 검증, 외부 브라우저 PKCE 후속 (ADR-0002) |
 | Async | PostgreSQL transactional outbox + NATS JetStream + idempotent worker |
 | Files | Private Cloudflare R2, 서버 권한 확인 후 접근 |
 | Local state | SQLite draft/cache/outbox, 서버 데이터가 최종 기준 |
@@ -120,7 +123,10 @@ feat/* / fix/* / refactor/* / chore/* / docs/*
 ### 문서
 
 - [현재 상태](docs/STATUS.md)
-- [7단계 실행 계획](docs/V2_PLAN.md)
+- [전체 작업 계획](docs/V2_PLAN.md)
+- [학교업무 계획](docs/SCHOOL_WORK_PLAN.md)
+- [개인기능 계획](docs/PERSONAL_PLAN.md)
+- [팀 작업 순서와 공통 기반](docs/TEAM_BACKLOG.md)
 - [목표 아키텍처](docs/ARCHITECTURE.md)
 - [아키텍처 결정](docs/ADR/0001-v2-platform.md)
 - [Design System 계약](docs/DESIGN_SYSTEM.md)
@@ -155,12 +161,15 @@ School Collect is an **open-source work platform** for collecting, validating, a
 | Code Design System / AppShell | Stage 5 complete |
 | Rust/Axum API | Executable foundation validated in CI |
 | PostgreSQL 18 | Migrations and readiness validated in CI |
-| Authentication/authorization | OIDC/JWKS request boundary implemented; membership RBAC follows |
-| Collect | Planned as a production-grade reference implementation |
+| Authentication/authorization | Supabase Auth token validation and membership RBAC integrated |
+| School workflows | Core Collect flow integrated; items/assignments/status expansion in open PR #24 |
+| Personal tools | Local shortcuts in open PR #25; login-free personal screens in a local follow-up branch |
 | Security cleanup | Tracked files cleaned; Git history remains a separate decision |
 | Branch protection | Enabled on main and develop |
 
 See [docs/STATUS.md](docs/STATUS.md) for the current verified state.
+
+Plans separate [school workflows](docs/SCHOOL_WORK_PLAN.md), [personal tools](docs/PERSONAL_PLAN.md), and [shared foundations](docs/TEAM_BACKLOG.md). My submissions belong to school workflows. Personal shortcuts, form filling, and monitoring are planned to work without School Collect membership; implementation and integration status are tracked separately.
 
 ### Technology direction
 
@@ -169,7 +178,7 @@ See [docs/STATUS.md](docs/STATUS.md) for the current verified state.
 | Desktop | Tauri 2 + React 19 + Vite + strict TypeScript |
 | Server | Rust + Axum + Tokio + Tower + Serde |
 | Database | PostgreSQL 18 + SQLx |
-| Authentication | ZITADEL / OIDC Authorization Code + PKCE |
+| Authentication | Supabase Auth + API OIDC/JWKS validation; external-browser PKCE planned (ADR-0002) |
 | Async | PostgreSQL transactional outbox + NATS JetStream + idempotent workers |
 | Files | Private Cloudflare R2 with server-side authorization |
 | Local state | SQLite draft/cache/outbox; server data remains authoritative |
@@ -249,7 +258,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete workflow.
 ### Documentation
 
 - [Current status](docs/STATUS.md)
-- [7-stage execution plan](docs/V2_PLAN.md)
+- [Execution plan](docs/V2_PLAN.md)
+- [School workflow plan](docs/SCHOOL_WORK_PLAN.md)
+- [Personal tools plan](docs/PERSONAL_PLAN.md)
+- [Work order and shared foundations](docs/TEAM_BACKLOG.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Architecture decision](docs/ADR/0001-v2-platform.md)
 - [Design System contract](docs/DESIGN_SYSTEM.md)
