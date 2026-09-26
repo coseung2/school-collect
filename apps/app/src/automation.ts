@@ -25,8 +25,12 @@ export async function deleteAutomationRecipe(
   return invoke<AutomationRecipe[]>("delete_automation_recipe", { recipeId });
 }
 
-export async function openAutomationTarget(targetUrl: string): Promise<void> {
-  return invoke<void>("open_automation_target", { targetUrl });
+/**
+ * 렌더러는 URL을 직접 넘기지 않고 저장된 레시피 id만 지정합니다.
+ * 실제로 열 주소는 native 쪽에서 레시피 파일을 다시 읽어 결정합니다.
+ */
+export async function openAutomationRecipe(recipeId: string): Promise<void> {
+  return invoke<void>("open_automation_recipe", { recipeId });
 }
 
 const UNKNOWN_AUTOMATION_ERROR = "알 수 없는 오류가 발생했습니다.";

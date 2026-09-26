@@ -3,14 +3,20 @@ use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
+    process::{Command, Stdio},
 };
 use tauri::Manager;
+use url::Url;
 
 const AUTOMATION_RECIPES_FILE: &str = "automation-recipes.tsv";
 const AUTOMATION_RECIPES_QUARANTINE_FILE: &str = "automation-recipes.invalid.tsv";
 const MAX_RECIPE_NAME_LEN: usize = 80;
 const MAX_RECIPE_ID_LEN: usize = 128;
 const MAX_TARGET_URL_LEN: usize = 2048;
+/// 한 사용자 계정이 보관할 수 있는 업무 버튼 수입니다.
+const MAX_RECIPES: usize = 100;
+/// 손상된 행을 보관하는 격리 파일의 상한입니다. 넘으면 복구를 멈추고 원본을 보존합니다.
+const MAX_QUARANTINE_BYTES: usize = 512 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -34,28 +40,37 @@ fn validate_plain_field(value: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_target_url(value: &str) -> Result<(), String> {
+/// 저장·실행에 쓸 주소를 해석합니다.
+///
+/// `url` crate를 쓰면 스킴이 소문자로 정규화되고 기본 포트가 정리되므로,
+/// `HTTPS://` 같은 표기와 `https://:8080` 같은 호스트 없는 값이 일관되게 처리됩니다.
+fn parse_target_url(value: &str) -> Result<Url, String> {
     if value.len() > MAX_TARGET_URL_LEN {
         return Err("대상 URL이 너무 깁니다.".to_string());
     }
     validate_plain_field(value)?;
 
-    let authority = value
-        .strip_prefix("https://")
-        .or_else(|| value.strip_prefix("http://"))
-        .ok_or_else(|| "http 또는 https URL만 등록할 수 있습니다.".to_string())?
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or("");
-
-    if authority.is_empty() {
+    let url = Url::parse(value).map_err(|_| "대상 URL을 해석하지 못했습니다.".to_string())?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("http 또는 https URL만 등록할 수 있습니다.".to_string());
+    }
+    if url.host_str().is_none() {
         return Err("대상 URL에 호스트가 없습니다.".to_string());
     }
-    if authority.contains('@') {
+    if !url.username().is_empty() || url.password().is_some() {
         return Err("계정 정보가 포함된 URL은 등록할 수 없습니다.".to_string());
     }
 
-    Ok(())
+    Ok(url)
+}
+
+fn validate_target_url(value: &str) -> Result<(), String> {
+    parse_target_url(value).map(|_| ())
+}
+
+/// 저장할 때는 해석한 주소를 그대로 직렬화해 표기를 통일합니다.
+fn normalize_target_url(value: &str) -> Result<String, String> {
+    Ok(parse_target_url(value)?.to_string())
 }
 
 fn validate_recipe(recipe: &AutomationRecipe) -> Result<(), String> {
@@ -100,10 +115,11 @@ fn encode_recipe(recipe: &AutomationRecipe) -> String {
 
 fn decode_recipe(line: &str) -> Result<AutomationRecipe, String> {
     let mut fields = line.splitn(4, '\t');
-    let id = fields.next().unwrap_or("");
-    let kind = fields.next().unwrap_or("");
-    let name = fields.next().unwrap_or("");
-    let target_url = fields.next().unwrap_or("");
+    // 저장·검증과 같은 기준을 쓰도록 읽을 때도 값을 trim합니다.
+    let id = fields.next().unwrap_or("").trim();
+    let kind = fields.next().unwrap_or("").trim();
+    let name = fields.next().unwrap_or("").trim();
+    let target_url = fields.next().unwrap_or("").trim();
 
     if kind != "shortcut" || id.is_empty() || name.is_empty() || target_url.is_empty() {
         return Err("자동화 설정 형식이 올바르지 않습니다.".to_string());
@@ -145,6 +161,13 @@ fn quarantine_invalid_lines(directory: &Path, lines: &[String]) -> Result<(), St
         // 그 밖의 읽기 오류는 기존 격리 내용을 보존하기 위해 그대로 실패시킵니다.
         Err(error) => return Err(format!("기존 격리 파일을 읽지 못했습니다: {error}")),
     };
+
+    let added: usize = lines.iter().map(|line| line.len() + 1).sum();
+    if content.len() + added > MAX_QUARANTINE_BYTES {
+        return Err(format!(
+            "격리 파일이 상한({MAX_QUARANTINE_BYTES} bytes)을 넘어 복구를 멈췄습니다. {AUTOMATION_RECIPES_QUARANTINE_FILE} 파일을 정리한 뒤 다시 시도하세요."
+        ));
+    }
 
     for line in lines {
         content.push_str(line);
@@ -212,10 +235,14 @@ fn upsert_automation_recipe(
 ) -> Result<Vec<AutomationRecipe>, String> {
     let mut recipes = load_recipes_for_update(path)?;
 
-    if let Some(existing) = recipes.iter_mut().find(|item| item.id == recipe.id) {
-        *existing = recipe;
-    } else {
-        recipes.push(recipe);
+    match recipes.iter().position(|item| item.id == recipe.id) {
+        Some(index) => recipes[index] = recipe,
+        None if recipes.len() >= MAX_RECIPES => {
+            return Err(format!(
+                "업무 버튼은 최대 {MAX_RECIPES}개까지 등록할 수 있습니다."
+            ));
+        }
+        None => recipes.push(recipe),
     }
     recipes.sort_by(|left, right| left.name.cmp(&right.name));
 
@@ -264,6 +291,8 @@ fn write_file_atomically(path: &Path, content: &str) -> Result<(), String> {
         return Err(format!("자동화 설정을 저장하지 못했습니다: {error}"));
     }
 
+    restrict_file_permissions(&temp_path);
+
     if let Err(error) = fs::rename(&temp_path, path) {
         let _ = fs::remove_file(&temp_path);
         return Err(format!("자동화 설정을 저장하지 못했습니다: {error}"));
@@ -271,6 +300,20 @@ fn write_file_atomically(path: &Path, content: &str) -> Result<(), String> {
 
     Ok(())
 }
+
+/// 레시피 파일에는 개인 업무 주소만 들어가지만, 다른 사용자 계정에 노출되지 않도록
+/// 소유자 전용 권한으로 좁힙니다. Windows에서는 사용자 프로필 ACL을 그대로 따릅니다.
+#[cfg(unix)]
+fn restrict_file_permissions(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    if let Err(error) = fs::set_permissions(path, fs::Permissions::from_mode(0o600)) {
+        eprintln!("자동화 설정 파일 권한을 좁히지 못했습니다: {error}");
+    }
+}
+
+#[cfg(not(unix))]
+fn restrict_file_permissions(_path: &Path) {}
 
 #[tauri::command]
 fn list_automation_recipes(app_handle: tauri::AppHandle) -> Result<Vec<AutomationRecipe>, String> {
@@ -294,7 +337,7 @@ fn save_automation_recipe(
 ) -> Result<Vec<AutomationRecipe>, String> {
     recipe.id = recipe.id.trim().to_string();
     recipe.name = recipe.name.trim().to_string();
-    recipe.target_url = recipe.target_url.trim().to_string();
+    recipe.target_url = normalize_target_url(recipe.target_url.trim())?;
     validate_recipe(&recipe)?;
 
     let path = automation_recipes_path(&app_handle)?;
@@ -316,47 +359,36 @@ fn delete_automation_recipe(
     remove_automation_recipe(&path, recipe_id)
 }
 
-#[cfg(target_os = "windows")]
-fn launch_external_url(url: &str) -> Result<(), String> {
-    let status = std::process::Command::new("rundll32")
-        .arg("url.dll,FileProtocolHandler")
-        .arg(url)
-        .status()
+/// 브라우저 열기는 사용자의 응답을 기다리지 않도록 분리 실행하고,
+/// 종료 상태만 백그라운드에서 수거합니다.
+fn spawn_detached(program: &str, args: &[&str]) -> Result<(), String> {
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
         .map_err(|error| format!("브라우저를 열지 못했습니다: {error}"))?;
 
-    if status.success() {
-        Ok(())
-    } else {
-        Err("브라우저 열기 명령이 실패했습니다.".to_string())
-    }
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn launch_external_url(url: &str) -> Result<(), String> {
+    spawn_detached("rundll32", &["url.dll,FileProtocolHandler", url])
 }
 
 #[cfg(target_os = "macos")]
 fn launch_external_url(url: &str) -> Result<(), String> {
-    let status = std::process::Command::new("open")
-        .arg(url)
-        .status()
-        .map_err(|error| format!("브라우저를 열지 못했습니다: {error}"))?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err("브라우저 열기 명령이 실패했습니다.".to_string())
-    }
+    spawn_detached("open", &[url])
 }
 
 #[cfg(target_os = "linux")]
 fn launch_external_url(url: &str) -> Result<(), String> {
-    let status = std::process::Command::new("xdg-open")
-        .arg(url)
-        .status()
-        .map_err(|error| format!("브라우저를 열지 못했습니다: {error}"))?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err("브라우저 열기 명령이 실패했습니다.".to_string())
-    }
+    spawn_detached("xdg-open", &[url])
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
@@ -364,11 +396,33 @@ fn launch_external_url(_url: &str) -> Result<(), String> {
     Err("현재 플랫폼에서는 외부 브라우저 열기를 지원하지 않습니다.".to_string())
 }
 
+/// 렌더러가 임의 URL을 열지 못하게, 저장된 레시피 id로만 실행합니다.
 #[tauri::command]
-fn open_automation_target(target_url: String) -> Result<(), String> {
-    let target_url = target_url.trim();
-    validate_target_url(target_url)?;
-    launch_external_url(target_url)
+fn open_automation_recipe(app_handle: tauri::AppHandle, recipe_id: String) -> Result<(), String> {
+    let recipe_id = recipe_id.trim();
+    if recipe_id.is_empty() || recipe_id.len() > MAX_RECIPE_ID_LEN {
+        return Err("자동화 식별자가 올바르지 않습니다.".to_string());
+    }
+    validate_plain_field(recipe_id)?;
+
+    let path = automation_recipes_path(&app_handle)?;
+    let target_url = resolve_recipe_target(&path, recipe_id)?;
+    launch_external_url(&target_url)
+}
+
+/// 저장된 레시피에서 실행할 주소를 찾습니다. 손상된 행 복구에 실패해도
+/// 남아 있는 정상 레시피는 실행할 수 있어야 하므로 파일을 읽기만 합니다.
+fn resolve_recipe_target(path: &Path, recipe_id: &str) -> Result<String, String> {
+    let file = RecipeFile::read(path)?;
+    let recipe = file
+        .recipes
+        .into_iter()
+        .find(|recipe| recipe.id == recipe_id)
+        .ok_or_else(|| "등록된 업무 버튼을 찾지 못했습니다.".to_string())?;
+
+    // 파일이 외부에서 수정될 수 있으므로 실행 직전에 다시 검증합니다.
+    validate_target_url(&recipe.target_url)?;
+    Ok(recipe.target_url)
 }
 
 #[tauri::command]
@@ -384,7 +438,7 @@ pub fn run() {
             list_automation_recipes,
             save_automation_recipe,
             delete_automation_recipe,
-            open_automation_target
+            open_automation_recipe
         ])
         .run(tauri::generate_context!())
         .expect("failed to run School Collect");
@@ -594,5 +648,137 @@ mod tests {
         let remaining = remove_automation_recipe(&recipes_path, "recipe-1").unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].id, "recipe-2");
+    }
+
+    #[test]
+    fn normalizes_scheme_host_and_default_port() {
+        let normalized = normalize_target_url("HTTPS://Example.INVALID:443/Path").unwrap();
+        assert_eq!(normalized, "https://example.invalid/Path");
+    }
+
+    #[test]
+    fn rejects_target_without_host() {
+        assert!(validate_target_url("https://:8080/portal").is_err());
+    }
+
+    #[test]
+    fn rejects_unsupported_scheme() {
+        assert!(validate_target_url("ftp://example.invalid/portal").is_err());
+    }
+
+    #[test]
+    fn trims_fields_when_decoding() {
+        let decoded =
+            decode_recipe(" recipe-1 \tshortcut\t 기안 \t https://example.invalid/draft ").unwrap();
+
+        assert_eq!(decoded.id, "recipe-1");
+        assert_eq!(decoded.name, "기안");
+        assert_eq!(decoded.target_url, "https://example.invalid/draft");
+    }
+
+    #[test]
+    fn rejects_new_recipe_beyond_limit_but_updates_existing() {
+        let directory = test_directory("recipe-limit");
+        let recipes_path = directory.join(AUTOMATION_RECIPES_FILE);
+        let recipes = (0..MAX_RECIPES)
+            .map(|index| {
+                shortcut_recipe(
+                    &format!("recipe-{index}"),
+                    &format!("버튼{index}"),
+                    "https://example.invalid/draft",
+                )
+            })
+            .collect::<Vec<_>>();
+        write_automation_recipes(&recipes_path, &recipes).unwrap();
+
+        let error = upsert_automation_recipe(
+            &recipes_path,
+            shortcut_recipe("recipe-extra", "추가", "https://example.invalid/draft"),
+        )
+        .unwrap_err();
+        assert!(error.contains("최대"));
+
+        let updated = upsert_automation_recipe(
+            &recipes_path,
+            shortcut_recipe("recipe-0", "이름변경", "https://example.invalid/draft"),
+        )
+        .unwrap();
+        assert_eq!(updated.len(), MAX_RECIPES);
+    }
+
+    #[test]
+    fn quarantine_size_limit_preserves_existing_bytes() {
+        let directory = test_directory("quarantine-limit");
+        let quarantine_path = directory.join(AUTOMATION_RECIPES_QUARANTINE_FILE);
+        fs::write(&quarantine_path, "x".repeat(MAX_QUARANTINE_BYTES)).unwrap();
+
+        let result = quarantine_invalid_lines(&directory, &["damaged-line".to_string()]);
+
+        assert!(result.is_err());
+        assert_eq!(
+            fs::read(&quarantine_path).unwrap().len(),
+            MAX_QUARANTINE_BYTES
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recipe_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = test_directory("recipe-permissions");
+        let recipes_path = directory.join(AUTOMATION_RECIPES_FILE);
+
+        write_file_atomically(
+            &recipes_path,
+            "recipe-1\tshortcut\t기안\thttps://example.invalid/draft\n",
+        )
+        .unwrap();
+
+        let mode = fs::metadata(&recipes_path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    #[test]
+    fn resolves_target_from_stored_recipe_id() {
+        let directory = test_directory("resolve-target");
+        let recipes_path = directory.join(AUTOMATION_RECIPES_FILE);
+        upsert_automation_recipe(
+            &recipes_path,
+            shortcut_recipe("recipe-1", "기안", "https://example.invalid/draft"),
+        )
+        .unwrap();
+
+        let target = resolve_recipe_target(&recipes_path, "recipe-1").unwrap();
+
+        assert_eq!(target, "https://example.invalid/draft");
+    }
+
+    #[test]
+    fn rejects_unknown_recipe_id() {
+        let directory = test_directory("resolve-unknown");
+        let recipes_path = directory.join(AUTOMATION_RECIPES_FILE);
+        upsert_automation_recipe(
+            &recipes_path,
+            shortcut_recipe("recipe-1", "기안", "https://example.invalid/draft"),
+        )
+        .unwrap();
+
+        let error = resolve_recipe_target(&recipes_path, "recipe-2").unwrap_err();
+
+        assert!(error.contains("찾지 못했습니다"));
+    }
+
+    #[test]
+    fn damaged_file_still_resolves_remaining_recipe() {
+        let directory = test_directory("resolve-damaged");
+        let recipes_path = directory.join(AUTOMATION_RECIPES_FILE);
+        fs::write(&recipes_path, damaged_recipes_file()).unwrap();
+        // 격리 경로를 디렉터리로 만들어 복구를 실패시킵니다.
+        fs::create_dir(directory.join(AUTOMATION_RECIPES_QUARANTINE_FILE)).unwrap();
+
+        let target = resolve_recipe_target(&recipes_path, "recipe-1").unwrap();
+
+        assert_eq!(target, "https://example.invalid/draft");
     }
 }

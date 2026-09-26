@@ -9,6 +9,7 @@ import {
   ListRow,
   ListSurface,
   LoadingState,
+  PermissionState,
   Status,
   type NavigationItem,
   type StatusTone,
@@ -38,12 +39,22 @@ import {
   deleteAutomationRecipe,
   describeAutomationTarget,
   listAutomationRecipes,
-  openAutomationTarget,
+  openAutomationRecipe,
   saveAutomationRecipe,
   type AutomationRecipe,
 } from "./automation";
 
 type RouteId = "overview" | "collects" | "automation" | "settings";
+
+/**
+ * 로그인과 학교 membership 없이 쓸 수 있는 개인기능 화면입니다.
+ * 학교 화면은 서버 세션을 요구하고, 이 화면들은 로그인 전에도 동작합니다.
+ */
+const personalRoutes: RouteId[] = ["automation"];
+
+function routeNeedsSchoolSession(route: RouteId): boolean {
+  return !personalRoutes.includes(route);
+}
 
 const navigation: NavigationItem[] = [
   { id: "overview", icon: "activity", label: "홈", group: "업무" },
@@ -96,12 +107,17 @@ export default function App() {
   const [activeTenantId, setActiveTenantId] = useState<string | null>(null);
   const [activeRoute, setActiveRoute] = useState<RouteId>("overview");
   const [bootError, setBootError] = useState<string | null>(null);
+  const [signInOpen, setSignInOpen] = useState(false);
 
   const signOut = useCallback(() => {
     setToken(null);
     setSession(null);
     setActiveTenantId(null);
-    setActiveRoute("overview");
+    setBootError(null);
+    // 로그인 없이 쓸 수 있는 화면에 머무르고, 학교 화면에서만 홈으로 돌아갑니다.
+    setActiveRoute((current) =>
+      routeNeedsSchoolSession(current) ? "overview" : current,
+    );
   }, []);
 
   useEffect(() => {
@@ -128,38 +144,33 @@ export default function App() {
     };
   }, [session, signOut, token]);
 
-  if (!token) {
-    return <SignInView onSignedIn={setToken} />;
-  }
-
-  if (bootError) {
-    return (
-      <Standalone>
-        <ErrorState
-          description={bootError}
-          title="로그인 정보를 확인하지 못했습니다"
-          action={
-            <Button onClick={signOut} variant="secondary">
-              다시 로그인
-            </Button>
-          }
-        />
-      </Standalone>
-    );
-  }
-
-  if (!session) {
-    return (
-      <Standalone>
-        <LoadingState description="계정 정보를 불러오고 있습니다." title="확인 중" />
-      </Standalone>
-    );
-  }
-
   const activeTenant =
-    session.memberships.find((item) => item.tenantId === activeTenantId) ?? null;
+    session?.memberships.find((item) => item.tenantId === activeTenantId) ?? null;
 
-  if (!activeTenant) {
+  const routeMeta: Record<RouteId, { title: string; description: string }> = {
+    overview: { title: "홈", description: "우리 학교의 수합 업무를 한눈에 봅니다." },
+    collects: { title: "자료수합", description: "수합을 만들고, 작성하고, 마감합니다." },
+    automation: {
+      title: "업무 자동화",
+      description: "자주 쓰는 업무 화면을 사용자 정의 버튼으로 등록합니다.",
+    },
+    settings: { title: "설정", description: "연결 상태와 계정을 확인합니다." },
+  };
+
+  if (signInOpen) {
+    return (
+      <SignInView
+        onBack={() => setSignInOpen(false)}
+        onSignedIn={(next) => {
+          setSignInOpen(false);
+          setToken(next);
+        }}
+      />
+    );
+  }
+
+  // 학교 계정은 있지만 아직 학교가 없는 사용자에게는 셸 대신 등록 화면을 보여줍니다.
+  if (token && session && !activeTenant) {
     return (
       <CreateSchoolView
         onCreated={(membership) => {
@@ -174,47 +185,83 @@ export default function App() {
     );
   }
 
-  const routeMeta: Record<RouteId, { title: string; description: string }> = {
-    overview: { title: "홈", description: "우리 학교의 수합 업무를 한눈에 봅니다." },
-    collects: { title: "자료수합", description: "수합을 만들고, 작성하고, 마감합니다." },
-    automation: {
-      title: "업무 자동화",
-      description: "자주 쓰는 업무 화면을 사용자 정의 버튼으로 등록합니다.",
-    },
-    settings: { title: "설정", description: "연결 상태와 계정을 확인합니다." },
-  };
+  function schoolContent(token: string): React.ReactNode {
+    if (bootError) {
+      return (
+        <ErrorState
+          action={
+            <Button onClick={signOut} variant="secondary">
+              다시 로그인
+            </Button>
+          }
+          description={bootError}
+          title="로그인 정보를 확인하지 못했습니다"
+        />
+      );
+    }
+    if (!session || !activeTenant) {
+      return <LoadingState description="계정 정보를 불러오고 있습니다." title="확인 중" />;
+    }
+    return activeRoute === "settings" ? (
+      <SettingsView session={session} tenant={activeTenant} token={token} />
+    ) : (
+      <CollectsView
+        role={activeTenant.role}
+        tenantId={activeTenant.tenantId}
+        token={token}
+        variant={activeRoute === "overview" ? "overview" : "full"}
+      />
+    );
+  }
+
+  function content(): React.ReactNode {
+    if (!routeNeedsSchoolSession(activeRoute)) {
+      return <AutomationView />;
+    }
+    if (!token) {
+      return (
+        <PermissionState
+          action={<Button onClick={() => setSignInOpen(true)}>로그인</Button>}
+          description="이 화면은 학교 구성원으로 로그인한 뒤에 쓸 수 있습니다. 로그인 없이 쓸 수 있는 화면은 왼쪽 메뉴에 있습니다."
+          title="로그인이 필요합니다"
+        />
+      );
+    }
+    return schoolContent(token);
+  }
+
+  const meta = routeMeta[activeRoute];
 
   return (
     <AppShell
       activeNavigationId={activeRoute}
-      description={routeMeta[activeRoute].description}
-      eyebrow={activeTenant.tenantName}
+      description={meta.description}
+      eyebrow={activeTenant?.tenantName}
       navigation={navigation}
       onNavigationChange={(id) => setActiveRoute(id as RouteId)}
       sidebarFooter={
         <div className="app-sidebar-footer">
           <p className="app-sidebar-footer__name">
-            {session.user.displayName ?? session.user.subject}
+            {session
+              ? (session.user.displayName ?? session.user.subject)
+              : token
+                ? "계정 확인 중"
+                : "로그인하지 않음"}
           </p>
-          <Button onClick={signOut} size="small" variant="quiet">
-            로그아웃
-          </Button>
+          {token ? (
+            <Button onClick={signOut} size="small" variant="quiet">
+              로그아웃
+            </Button>
+          ) : (
+            <Button onClick={() => setSignInOpen(true)} size="small" variant="secondary">
+              로그인
+            </Button>
+          )}
         </div>
       }
-      title={routeMeta[activeRoute].title}
+      title={meta.title}
     >
-      {activeRoute === "settings" ? (
-        <SettingsView session={session} tenant={activeTenant} token={token} />
-      ) : activeRoute === "automation" ? (
-        <AutomationView />
-      ) : (
-        <CollectsView
-          role={activeTenant.role}
-          tenantId={activeTenant.tenantId}
-          token={token}
-          variant={activeRoute === "overview" ? "overview" : "full"}
-        />
-      )}
+      {content()}
     </AppShell>
   );
 }
@@ -227,7 +274,13 @@ function Standalone({ children }: { children: React.ReactNode }) {
   );
 }
 
-function SignInView({ onSignedIn }: { onSignedIn: (token: string) => void }) {
+function SignInView({
+  onBack,
+  onSignedIn,
+}: {
+  onBack?: () => void;
+  onSignedIn: (token: string) => void;
+}) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -270,11 +323,19 @@ function SignInView({ onSignedIn }: { onSignedIn: (token: string) => void }) {
   return (
     <Standalone>
       <Card className="app-signin">
+        {onBack ? (
+          <div className="app-detail-head">
+            <Button onClick={onBack} size="small" variant="quiet">
+              ← 돌아가기
+            </Button>
+          </div>
+        ) : null}
         <div>
           <p className="app-card-eyebrow">SCHOOL COLLECT</p>
           <h1>로그인</h1>
           <p className="app-card-description">
             학교 계정으로 로그인하면 우리 학교의 수합 업무를 볼 수 있습니다.
+            로그인 없이 쓰는 업무 자동화는 왼쪽 메뉴에서 열 수 있습니다.
           </p>
         </div>
         {!identityConfigured ? (
@@ -817,7 +878,8 @@ function AutomationView() {
     setError(null);
     setNotice(null);
     try {
-      await openAutomationTarget(recipe.targetUrl);
+      await openAutomationRecipe(recipe.id);
+      setNotice("브라우저 열기를 요청했습니다.");
     } catch (caught) {
       setError(automationErrorMessage(caught));
     } finally {
@@ -834,6 +896,11 @@ function AutomationView() {
           <p className="app-card-description">
             업무포털에 이미 로그인한 기본 브라우저에서 등록한 화면을 엽니다. 쿠키,
             인증서, 비밀번호는 School Collect에 저장하지 않습니다.
+          </p>
+          <p className="app-card-description">
+            버튼은 School Collect 계정이 아니라 이 컴퓨터의 사용자 설정에 저장됩니다.
+            같은 OS 계정을 함께 쓰면 다른 사람에게도 보일 수 있으므로 공용 PC에서는
+            등록하지 마세요.
           </p>
         </div>
 
