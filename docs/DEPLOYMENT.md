@@ -40,9 +40,11 @@ curl -fsS https://<api-host>/ready
 - `DATABASE_URL` = PostgreSQL pooler 주소
 - `OIDC_ISSUER_URL`, `OIDC_AUDIENCE` (`OIDC_JWKS_URL`은 discovery가 없는
   provider용 선택값)
-- `APP_ATTACHMENT_DIR` = 첨부 bytes를 둘 경로(개발용 디렉터리 adapter).
-  `development`가 아닌 환경에서는 필수이며, private R2 adapter가 준비되면
-  교체합니다.
+- 첨부 저장소(`development`가 아닌 환경에서는 둘 중 하나가 필수):
+  - private R2: `R2_ENDPOINT`(`https://<account-id>.r2.cloudflarestorage.com`),
+    `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`. 넷을 모두 넣어야
+    하고, 일부만 있으면 api·worker가 기동하지 않습니다.
+  - 디렉터리: `APP_ATTACHMENT_DIR`(R2 변수가 없을 때만 씁니다).
 
 값은 Infisical에서 실행 시점에 주입하고, 이미지나 저장소에 넣지 않습니다.
 

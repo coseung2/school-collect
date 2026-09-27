@@ -13,6 +13,7 @@ use std::{
     future::Future,
     path::{Component, Path, PathBuf},
     pin::Pin,
+    sync::Arc,
 };
 
 #[derive(Debug)]
@@ -125,6 +126,28 @@ impl ObjectStorage for FileStorage {
                 Err(error) => Err(StorageError::Failed(error.to_string())),
             }
         })
+    }
+}
+
+/// A configured store and a short name for logs (`"r2"` or `"directory"`).
+pub type ConfiguredStorage = (Arc<dyn ObjectStorage>, &'static str);
+
+/// Which store the process should use, from the environment.
+///
+/// Private R2 wins when its variables are set; otherwise `APP_ATTACHMENT_DIR`
+/// selects the directory adapter. `Ok(None)` means neither is configured and
+/// the caller decides whether that is allowed. A half-configured R2 is an
+/// error, never a silent fallback to the directory.
+pub fn configured_storage() -> Result<Option<ConfiguredStorage>, StorageError> {
+    if let Some(r2) = crate::r2::R2Storage::from_env()? {
+        return Ok(Some((Arc::new(r2), "r2")));
+    }
+    match std::env::var("APP_ATTACHMENT_DIR") {
+        Ok(value) if !value.trim().is_empty() => Ok(Some((
+            Arc::new(FileStorage::new(PathBuf::from(value))),
+            "directory",
+        ))),
+        _ => Ok(None),
     }
 }
 

@@ -17,7 +17,12 @@ services:
       DATABASE_URL: ${DATABASE_URL:?set the pooled PostgreSQL URL}
       OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:?set the identity provider issuer}
       OIDC_AUDIENCE: ${OIDC_AUDIENCE:-authenticated}
-      # Required outside development until private R2 storage is connected.
+      # Attachment storage: private R2 when all four R2_* values are set,
+      # otherwise the directory below. A partial R2 set refuses to start.
+      R2_ENDPOINT: ${R2_ENDPOINT:-}
+      R2_BUCKET: ${R2_BUCKET:-}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
       APP_ATTACHMENT_DIR: /var/lib/school-collect/attachments
       RUST_LOG: ${RUST_LOG:-info,tower_http=info}
     ports:
@@ -47,6 +52,11 @@ services:
       # Runtime role: the worker only reads and writes rows, never DDL.
       DATABASE_URL: ${DATABASE_URL:?set the pooled PostgreSQL URL}
       NATS_URL: ${NATS_URL:?set the NATS JetStream URL}
+      # Must match the API so the retention sweep reaches the same store.
+      R2_ENDPOINT: ${R2_ENDPOINT:-}
+      R2_BUCKET: ${R2_BUCKET:-}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
       APP_ATTACHMENT_DIR: /var/lib/school-collect/attachments
       RUST_LOG: ${RUST_LOG:-info}
     volumes:
