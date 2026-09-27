@@ -3,11 +3,15 @@ import hashlib
 import json
 import re
 from pathlib import Path
+import shutil
+import subprocess
+import tempfile
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-MANIFEST = ROOT / "apps" / "extension" / "manifest.json"
+EXTENSION = ROOT / "apps" / "extension"
+MANIFEST = EXTENSION / "manifest.json"
 BRIDGE = ROOT / "apps" / "app" / "src-tauri" / "src" / "bridge.rs"
 
 
@@ -45,6 +49,27 @@ class ExtensionContractTests(unittest.TestCase):
         self.assertNotIn("http://*/*", serialized)
         self.assertNotIn("https://*/*", serialized)
         self.assertNotIn("cookies", serialized)
+
+    def test_extension_scripts_parse_as_modules(self):
+        """팝업과 페이지 명령이 ES 모듈로 해석되는지 확인합니다."""
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node is not available")
+
+        for script in sorted(EXTENSION.glob("*.js")):
+            with tempfile.TemporaryDirectory() as directory:
+                copy = Path(directory) / f"{script.stem}.mjs"
+                shutil.copyfile(script, copy)
+                completed = subprocess.run(
+                    [node, "--check", str(copy)],
+                    capture_output=True,
+                    text=True,
+                )
+            self.assertEqual(
+                completed.returncode,
+                0,
+                f"{script.name}: {completed.stderr.strip()}",
+            )
 
 
 if __name__ == "__main__":
