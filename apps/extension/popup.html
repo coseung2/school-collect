@@ -104,6 +104,26 @@
     </div>
     <ul id="table-results" class="fields"></ul>
 
+    <hr />
+
+    <h2>감시 레시피</h2>
+    <div class="row">
+      <button id="pick-watch" type="button" class="secondary">감시 등록(행 클릭)</button>
+    </div>
+    <p id="watch-picked" class="hint"></p>
+    <label for="watch-name">레시피 이름</label>
+    <input id="watch-name" type="text" maxlength="80" placeholder="예: 체험학습 신청 감시" />
+    <div class="row">
+      <button id="save-watch-recipe" type="button">감시 레시피 저장</button>
+    </div>
+
+    <label for="watch-select">저장된 감시 레시피</label>
+    <select id="watch-select"></select>
+    <div class="row">
+      <button id="watch-scan" type="button">감시 실행</button>
+    </div>
+    <ul id="watch-results" class="fields"></ul>
+
     <p id="status" role="status"></p>
     <script type="module" src="popup.js"></script>
   </body>

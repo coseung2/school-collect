@@ -11,6 +11,7 @@ import {
   Status,
 } from "@school-collect/ui";
 import {
+  acknowledgeAutomationWatch,
   automationKindLabel,
   automationRunsInExtension,
   automationErrorMessage,
@@ -18,11 +19,14 @@ import {
   deleteAutomationRecipe,
   describeAutomationRecipe,
   fetchAutomationBridgeInfo,
+  listAutomationWatchState,
   listAutomationRecipes,
   openAutomationRecipe,
   saveAutomationRecipe,
+  setAutomationWatchPaused,
   type AutomationRecipe,
   type AutomationBridgeInfo,
+  type AutomationWatchState,
 } from "../automation";
 export function AutomationPage() {
   const [recipes, setRecipes] = useState<AutomationRecipe[] | null>(null);
@@ -39,11 +43,18 @@ export function AutomationPage() {
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [bridge, setBridge] = useState<AutomationBridgeInfo | null>(null);
   const [bridgeError, setBridgeError] = useState<string | null>(null);
+  const [watchState, setWatchState] = useState<AutomationWatchState[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setRecipes(await listAutomationRecipes());
+      const [nextRecipes, nextWatchState] = await Promise.all([
+        listAutomationRecipes(),
+        // 감시 상태를 읽지 못해도 버튼 목록은 그대로 보여 줍니다.
+        listAutomationWatchState().catch(() => [] as AutomationWatchState[]),
+      ]);
+      setRecipes(nextRecipes);
+      setWatchState(nextWatchState);
       setLoadError(null);
     } catch (caught) {
       setRecipes(null);
@@ -150,6 +161,54 @@ export function AutomationPage() {
     try {
       await openAutomationRecipe(recipe.id);
       setListNotice("브라우저 열기를 요청했습니다.");
+    } catch (caught) {
+      setListError(automationErrorMessage(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function watchStateFor(recipe: AutomationRecipe): AutomationWatchState | undefined {
+    return watchState.find((entry) => entry.recipeId === recipe.id);
+  }
+
+  /** 감시 레시피의 상태 줄입니다. 저장된 확인 시각과 항목 수만 보여 줍니다. */
+  function watchSummary(recipe: AutomationRecipe): string | null {
+    const state = watchStateFor(recipe);
+    if (!state) {
+      return null;
+    }
+    const checked = state.checkedAtMs
+      ? new Date(state.checkedAtMs).toLocaleString()
+      : "아직 없음";
+    return `항목 ${state.identifiers.length}개 · 마지막 확인 ${checked}`;
+  }
+
+  async function toggleWatch(recipe: AutomationRecipe, paused: boolean) {
+    setBusy(true);
+    setListError(null);
+    setListNotice(null);
+    try {
+      setWatchState(await setAutomationWatchPaused(recipe.id, paused));
+      setListNotice(
+        paused
+          ? `'${recipe.name}' 감시를 중지했습니다.`
+          : `'${recipe.name}' 감시를 다시 켰습니다.`,
+      );
+    } catch (caught) {
+      setListError(automationErrorMessage(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function acknowledgeWatch(recipe: AutomationRecipe) {
+    setBusy(true);
+    setListError(null);
+    setListNotice(null);
+    try {
+      setWatchState(await acknowledgeAutomationWatch(recipe.id));
+      setListNotice(`'${recipe.name}' 새 항목을 확인 처리했습니다.`);
     } catch (caught) {
       setListError(automationErrorMessage(caught));
     } finally {
@@ -314,7 +373,10 @@ export function AutomationPage() {
           />
         ) : (
           <ListSurface>
-            {recipes.map((recipe) => (
+            {recipes.map((recipe) => {
+              const state = watchStateFor(recipe);
+              const summary = recipe.kind === "watch" ? watchSummary(recipe) : null;
+              return (
               <ListRow
                 action={
                   pendingDeleteId === recipe.id ? (
@@ -352,6 +414,32 @@ export function AutomationPage() {
                       >
                         {automationRunsInExtension(recipe.kind) ? "화면 열기" : "열기"}
                       </Button>
+                      {recipe.kind === "watch" && state ? (
+                        <>
+                          {state.newIdentifiers.length > 0 ? (
+                            <Button
+                              aria-label={`${recipe.name} 새 항목 확인`}
+                              disabled={busy}
+                              onClick={() => void acknowledgeWatch(recipe)}
+                              size="small"
+                              variant="quiet"
+                            >
+                              새 항목 확인
+                            </Button>
+                          ) : null}
+                          <Button
+                            aria-label={`${recipe.name} ${
+                              state.paused ? "감시 다시 켜기" : "감시 중지"
+                            }`}
+                            disabled={busy}
+                            onClick={() => void toggleWatch(recipe, !state.paused)}
+                            size="small"
+                            variant="quiet"
+                          >
+                            {state.paused ? "감시 다시 켜기" : "감시 중지"}
+                          </Button>
+                        </>
+                      ) : null}
                       <Button
                         aria-label={`${recipe.name} 삭제`}
                         disabled={busy}
@@ -364,12 +452,29 @@ export function AutomationPage() {
                     </div>
                   )
                 }
-                description={describeAutomationRecipe(recipe)}
+                description={
+                  summary
+                    ? `${describeAutomationRecipe(recipe)} · ${summary}`
+                    : describeAutomationRecipe(recipe)
+                }
                 key={recipe.id}
-                status={<Status tone="info">{automationKindLabel(recipe.kind)}</Status>}
+                status={
+                  recipe.kind === "watch" && state ? (
+                    state.paused ? (
+                      <Status tone="neutral">감시 중지</Status>
+                    ) : state.newIdentifiers.length > 0 ? (
+                      <Status tone="warning">새 항목 {state.newIdentifiers.length}개</Status>
+                    ) : (
+                      <Status tone="info">감시</Status>
+                    )
+                  ) : (
+                    <Status tone="info">{automationKindLabel(recipe.kind)}</Status>
+                  )
+                }
                 title={recipe.name}
               />
-            ))}
+              );
+            })}
           </ListSurface>
         )}
       </section>

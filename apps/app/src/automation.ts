@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export type AutomationKind = "shortcut" | "fill" | "table_fill";
+export type AutomationKind = "shortcut" | "fill" | "table_fill" | "watch";
 
 /** 화면 요소를 찾는 방법입니다. native 검증과 같은 값을 씁니다. */
 export type LocatorKind = "id" | "name" | "label" | "css";
@@ -22,6 +22,12 @@ export interface AutomationTable {
   dateLabels: string[];
 }
 
+/** 목록의 행 위치와 행 안에서 식별자를 읽을 위치입니다. */
+export interface AutomationWatch {
+  list: AutomationLocator;
+  identity: AutomationLocator;
+}
+
 export interface AutomationRecipe {
   id: string;
   name: string;
@@ -31,6 +37,26 @@ export interface AutomationRecipe {
   fields?: AutomationField[];
   /** 표 입력 레시피의 표 정보입니다. 그 밖의 종류는 값을 갖지 않습니다. */
   table?: AutomationTable;
+  /** 감시 레시피의 목록·식별자 위치입니다. 그 밖의 종류는 값을 갖지 않습니다. */
+  watch?: AutomationWatch;
+}
+
+/** native가 보내는 감시 상태입니다. 빈 목록과 false 값은 파일에서 생략됩니다. */
+interface AutomationWatchStateWire {
+  recipeId: string;
+  identifiers?: string[];
+  checkedAtMs?: number;
+  paused?: boolean;
+  newIdentifiers?: string[];
+}
+
+/** 화면에서 쓰는 감시 상태입니다. 빈 값은 채워서 전달합니다. */
+export interface AutomationWatchState {
+  recipeId: string;
+  identifiers: string[];
+  checkedAtMs?: number;
+  paused: boolean;
+  newIdentifiers: string[];
 }
 
 export async function listAutomationRecipes(): Promise<AutomationRecipe[]> {
@@ -109,7 +135,10 @@ export function automationKindLabel(kind: AutomationKind): string {
   if (kind === "fill") {
     return "자동입력";
   }
-  return kind === "table_fill" ? "표 입력" : "바로가기";
+  if (kind === "table_fill") {
+    return "표 입력";
+  }
+  return kind === "watch" ? "감시" : "바로가기";
 }
 
 /**
@@ -127,10 +156,44 @@ export function describeAutomationRecipe(recipe: AutomationRecipe): string {
     const dateCount = recipe.table?.dateLabels?.length ?? 0;
     return `식별 ${identityCount}열 · 날짜 ${dateCount}개 · ${host}`;
   }
+  if (recipe.kind === "watch") {
+    return `새 항목 감시 · ${host}`;
+  }
   return host;
 }
 
 /** 표·자동입력 레시피는 페이지를 열어 확장에서 실행합니다. */
 export function automationRunsInExtension(kind: AutomationKind): boolean {
   return kind !== "shortcut";
+}
+
+export async function listAutomationWatchState(): Promise<AutomationWatchState[]> {
+  return normalizeWatchState(await invoke<AutomationWatchStateWire[]>("list_automation_watch_state"));
+}
+
+/** 새 항목 알림을 확인 처리합니다. 이미 본 식별자는 다시 알리지 않습니다. */
+export async function acknowledgeAutomationWatch(
+  recipeId: string,
+): Promise<AutomationWatchState[]> {
+  return normalizeWatchState(
+    await invoke<AutomationWatchStateWire[]>("acknowledge_automation_watch", { recipeId }),
+  );
+}
+
+export async function setAutomationWatchPaused(
+  recipeId: string,
+  paused: boolean,
+): Promise<AutomationWatchState[]> {
+  return normalizeWatchState(
+    await invoke<AutomationWatchStateWire[]>("set_automation_watch_paused", { recipeId, paused }),
+  );
+}
+
+function normalizeWatchState(entries: AutomationWatchStateWire[]): AutomationWatchState[] {
+  return entries.map((entry) => ({
+    ...entry,
+    identifiers: entry.identifiers ?? [],
+    newIdentifiers: entry.newIdentifiers ?? [],
+    paused: entry.paused ?? false,
+  }));
 }

@@ -20,12 +20,18 @@ const tableNameInput = document.getElementById("table-name");
 const tableSelect = document.getElementById("table-select");
 const tableValuesEl = document.getElementById("table-values");
 const tableResultsEl = document.getElementById("table-results");
+const watchPickedEl = document.getElementById("watch-picked");
+const watchNameInput = document.getElementById("watch-name");
+const watchSelect = document.getElementById("watch-select");
+const watchResultsEl = document.getElementById("watch-results");
 
 let picked = null;
 let draftFields = [];
 let fillRecipes = [];
 let tableRecipes = [];
+let watchRecipes = [];
 let pickedTable = null;
+let pickedWatch = null;
 let valueInputs = [];
 
 function setStatus(message, tone) {
@@ -242,6 +248,7 @@ async function refreshFillRecipes() {
   }
   fillRecipes = (recipes ?? []).filter((recipe) => recipe.kind === "fill");
   tableRecipes = (recipes ?? []).filter((recipe) => recipe.kind === "table_fill");
+  watchRecipes = (recipes ?? []).filter((recipe) => recipe.kind === "watch");
 
   const previous = recipeSelect.value;
   recipeSelect.replaceChildren();
@@ -279,10 +286,61 @@ async function refreshFillRecipes() {
   } else if (tableRecipes.some((recipe) => recipe.id === previousTable)) {
     tableSelect.value = previousTable;
   }
+
+  const previousWatch = watchSelect.value;
+  watchSelect.replaceChildren();
+  for (const recipe of watchRecipes) {
+    const option = document.createElement("option");
+    option.value = recipe.id;
+    option.textContent = `${recipe.name} (${recipe.watch?.list?.value ?? ""})`;
+    watchSelect.append(option);
+  }
+  if (watchRecipes.length === 0) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "저장된 감시 레시피가 없습니다";
+    watchSelect.append(option);
+  } else if (watchRecipes.some((recipe) => recipe.id === previousWatch)) {
+    watchSelect.value = previousWatch;
+  }
 }
 
 function selectedTableRecipe() {
   return tableRecipes.find((recipe) => recipe.id === tableSelect.value) ?? null;
+}
+
+function selectedWatchRecipe() {
+  return watchRecipes.find((recipe) => recipe.id === watchSelect.value) ?? null;
+}
+
+/** 감시 명령이 중단한 이유를 사용자가 읽을 수 있는 문장으로 바꿉니다. */
+function watchReasonText(reason) {
+  const texts = {
+    cancelled: "선택을 취소했습니다",
+    row_missing: "클릭한 위치에서 목록 행을 찾지 못했습니다",
+    identity_missing: "행 안에서 식별자 위치를 만들지 못했습니다",
+    rows_missing: "목록 행을 찾지 못했습니다",
+    login_required: "로그인 화면으로 바뀐 것 같습니다. 브라우저에서 다시 로그인하세요",
+    identity_not_unique: "행 안에서 식별자를 하나로 특정하지 못했습니다",
+    duplicate_identifiers: "식별자 값이 중복되는 행이 있습니다",
+  };
+  return texts[reason] ?? reason ?? "알 수 없는 이유";
+}
+
+function renderWatchResults(outcome) {
+  watchResultsEl.replaceChildren();
+  for (const identifier of outcome.newIdentifiers ?? []) {
+    const item = document.createElement("li");
+    item.dataset.tone = "ok";
+    item.textContent = `새 항목: ${identifier}`;
+    watchResultsEl.append(item);
+  }
+  const summary = document.createElement("li");
+  summary.className = "hint";
+  summary.textContent = `전체 ${outcome.total ?? 0}개 · 마지막 확인 ${new Date(
+    outcome.checkedAtMs ?? Date.now(),
+  ).toLocaleString()}`;
+  watchResultsEl.append(summary);
 }
 
 /** 표 명령이 중단한 이유를 사용자가 읽을 수 있는 문장으로 바꿉니다. */
@@ -711,6 +769,111 @@ document.getElementById("table-fill").addEventListener("click", async () => {
         ? `${result.results.length}개 칸을 입력했습니다. 내용을 확인한 뒤 사이트에서 직접 저장하세요.`
         : `${failed}개 칸을 확인하지 못했습니다. 화면을 확인하세요.`,
       failed === 0 ? "ok" : "error",
+    );
+  } catch (error) {
+    setStatus(error.message, "error");
+  }
+});
+
+document.getElementById("pick-watch").addEventListener("click", async () => {
+  setStatus("감시할 목록의 행 안에서 식별자(예: 신청번호)를 클릭하세요.", "");
+  try {
+    const result = await runPageCommand({ op: "pick-watch" }, { allowFailure: true });
+    if (result.ok !== true) {
+      pickedWatch = null;
+      watchPickedEl.textContent = "";
+      setStatus(`감시를 등록하지 못했습니다: ${watchReasonText(result.reason)}.`, "error");
+      return;
+    }
+    pickedWatch = result.spec;
+    watchPickedEl.textContent = `감시: 행 ${result.rowCount}개 · 식별 예: ${
+      result.sample.join(", ") || "(없음)"
+    }`;
+    setStatus("레시피 이름을 넣고 저장하세요.", "ok");
+  } catch (error) {
+    pickedWatch = null;
+    watchPickedEl.textContent = "";
+    setStatus(error.message, "error");
+  }
+});
+
+document.getElementById("save-watch-recipe").addEventListener("click", async () => {
+  const name = watchNameInput.value.trim();
+  if (!pickedWatch) {
+    setStatus("먼저 감시할 목록을 등록하세요.", "error");
+    return;
+  }
+  if (!name) {
+    setStatus("레시피 이름을 입력하세요.", "error");
+    return;
+  }
+
+  try {
+    const tab = await activeTab();
+    if (!tab?.url || !/^https?:/i.test(tab.url)) {
+      setStatus("http/https 화면에서만 저장할 수 있습니다.", "error");
+      return;
+    }
+    const created = await bridgeFetch("/v1/bridge/watch-recipes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, url: tab.url, watch: pickedWatch }),
+    });
+    pickedWatch = null;
+    watchPickedEl.textContent = "";
+    watchNameInput.value = "";
+    await refreshFillRecipes();
+    watchSelect.value = created.id;
+    setStatus(`'${created.name}' 감시 레시피를 저장했습니다.`, "ok");
+  } catch (error) {
+    setStatus(error.message, "error");
+  }
+});
+
+document.getElementById("watch-scan").addEventListener("click", async () => {
+  const recipe = selectedWatchRecipe();
+  if (!recipe) {
+    setStatus("실행할 감시 레시피를 고르세요.", "error");
+    return;
+  }
+
+  try {
+    const tab = await activeTab();
+    if (!tab?.url || !/^https?:/i.test(tab.url)) {
+      setStatus("http/https 화면에서만 실행할 수 있습니다.", "error");
+      return;
+    }
+    if (new URL(recipe.targetUrl).origin !== new URL(tab.url).origin) {
+      setStatus(`이 레시피는 ${new URL(recipe.targetUrl).origin} 화면용입니다.`, "error");
+      return;
+    }
+
+    const scan = await runPageCommand(
+      { op: "watch-scan", watch: recipe.watch },
+      { allowFailure: true },
+    );
+    if (scan.ok !== true) {
+      watchResultsEl.replaceChildren();
+      setStatus(`감시를 중단했습니다: ${watchReasonText(scan.reason)}.`, "error");
+      return;
+    }
+
+    const outcome = await bridgeFetch("/v1/bridge/watch-scans", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ recipeId: recipe.id, identifiers: scan.identifiers }),
+    });
+    renderWatchResults(outcome);
+
+    if (outcome.paused) {
+      setStatus("감시가 중지되어 있습니다. 앱에서 다시 켜세요.", "error");
+      return;
+    }
+    setStatus(
+      outcome.newIdentifiers.length === 0
+        ? `새 항목이 없습니다(전체 ${outcome.total}개).`
+        : `새 항목 ${outcome.newIdentifiers.length}개를 찾았습니다(전체 ${outcome.total}개).`,
+      "ok",
     );
   } catch (error) {
     setStatus(error.message, "error");
