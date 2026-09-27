@@ -267,7 +267,7 @@ jobs:
             sleep 2
           done
           docker run --rm --network school-collect-ci \
-            -e DATABASE_URL=postgres://school_collect:school_collect_ci@pg:5432/school_collect \
+            -e MIGRATION_DATABASE_URL=postgres://school_collect:school_collect_ci@pg:5432/school_collect \
             --entrypoint /usr/local/bin/school-collect-migrator \
             school-collect-server:ci
           docker run -d --name api --network school-collect-ci -p 127.0.0.1:3000:3000 \
