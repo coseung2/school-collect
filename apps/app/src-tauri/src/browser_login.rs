@@ -217,6 +217,9 @@ pub(crate) async fn start(auth_base: &Url, provider: &str) -> Result<PendingLogi
 
 impl PendingLogin {
     /// Waits for the callback, validates it and exchanges the code.
+    ///
+    /// `cancelled` and `timeout` cover the exchange too: a user who cancels
+    /// while the code is being traded must not be handed a session afterwards.
     pub(crate) async fn finish(
         self,
         token_endpoint: &Url,
@@ -230,16 +233,21 @@ impl PendingLogin {
             listener,
             ..
         } = self;
+        let mut cancelled = cancelled;
         let callback = tokio::select! {
             result = accept_callback(&listener, &redirect) => result?,
             () = tokio::time::sleep(timeout) => return Err(LoginError::TimedOut),
-            _ = cancelled => return Err(LoginError::Cancelled),
+            _ = &mut cancelled => return Err(LoginError::Cancelled),
         };
         // One callback per attempt: the listener closes here.
         drop(listener);
         let code = pkce::validate_callback(&callback, &redirect, &attempt.state)
             .map_err(LoginError::Callback)?;
-        exchange(token_endpoint, api_key, &code, &attempt.verifier).await
+        tokio::select! {
+            result = exchange(token_endpoint, api_key, &code, &attempt.verifier) => result,
+            () = tokio::time::sleep(timeout) => Err(LoginError::TimedOut),
+            _ = &mut cancelled => Err(LoginError::Cancelled),
+        }
     }
 }
 
@@ -393,14 +401,22 @@ mod tests {
     /// Fake identity provider: `/token?grant_type=pkce` accepts only the code
     /// `good-code` with a verifier whose S256 challenge was registered.
     async fn fake_provider(challenge: Arc<Mutex<String>>) -> (Url, Seen) {
+        fake_provider_after(challenge, Duration::ZERO).await
+    }
+
+    /// The same provider, holding its token answer back for `delay`.
+    async fn fake_provider_after(challenge: Arc<Mutex<String>>, delay: Duration) -> (Url, Seen) {
         let seen = Seen::default();
         async fn token(
-            State((challenge, seen)): State<(Arc<Mutex<String>>, Seen)>,
+            State((challenge, seen, delay)): State<(Arc<Mutex<String>>, Seen, Duration)>,
             Query(query): Query<HashMap<String, String>>,
             headers: HeaderMap,
             Json(body): Json<serde_json::Value>,
         ) -> impl IntoResponse {
             seen.0.lock().unwrap().push(body.clone());
+            // A delayed answer keeps the exchange in flight long enough for a
+            // cancel to land while it runs.
+            tokio::time::sleep(delay).await;
             let verifier = body["code_verifier"].as_str().unwrap_or_default();
             let ok = query.get("grant_type").map(String::as_str) == Some("pkce")
                 && headers.get("apikey").is_some()
@@ -427,7 +443,7 @@ mod tests {
         }
         let app = Router::new()
             .route("/auth/v1/token", post(token))
-            .with_state((challenge, seen.clone()));
+            .with_state((challenge, seen.clone(), delay));
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         tokio::spawn(async move {
@@ -618,6 +634,43 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error, LoginError::TimedOut);
+    }
+
+    /// A cancel that lands while the code is being exchanged must not hand back
+    /// a session: the exchange is part of the attempt, not a step after it.
+    #[tokio::test]
+    async fn cancelling_during_the_code_exchange_yields_no_session() {
+        let challenge = Arc::new(Mutex::new(String::new()));
+        let (token_endpoint, seen) =
+            fake_provider_after(challenge.clone(), Duration::from_secs(5)).await;
+        let pending = start(&auth_base(), "google").await.unwrap();
+        *challenge.lock().unwrap() = challenge_of(&pending.authorize_url);
+        let (redirect, state) = redirect_and_state(&pending.authorize_url);
+        let (cancel, cancelled) = oneshot::channel();
+        tokio::spawn(browser_calls(format!(
+            "{redirect}?state={state}&code=good-code"
+        )));
+        let finishing = tokio::spawn(async move {
+            pending
+                .finish(&token_endpoint, "anon", Duration::from_secs(30), cancelled)
+                .await
+        });
+        for _ in 0..40 {
+            if !seen.0.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(
+            !seen.0.lock().unwrap().is_empty(),
+            "the exchange must reach the provider first"
+        );
+        let _ = cancel.send(());
+        assert_eq!(
+            finishing.await.unwrap().unwrap_err(),
+            LoginError::Cancelled,
+            "a cancel while the code is exchanged must not return a session"
+        );
     }
 
     #[tokio::test]

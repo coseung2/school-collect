@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { Button, ListRow, ListSurface } from "@school-collect/ui";
 import {
   ATTACHMENT_ACCEPT,
+  attachmentExpired,
   deleteAttachment,
   downloadAttachment,
   uploadAttachment,
@@ -45,10 +46,14 @@ export function AttachmentList({
   const [busy, setBusy] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const stored = attachments.filter((item) => item.status === "stored");
+  // Expired rows are shown only so the owner can see why the file is gone;
+  // they never offer a download and never keep a place against the limit.
+  const live = attachments.filter((item) => !attachmentExpired(item));
+  const expired = attachments.filter(attachmentExpired);
+  const stored = live.filter((item) => item.status === "stored");
   // A slot whose upload never finished still counts against the limit on the
   // server, so it is shown and can be removed instead of silently blocking.
-  const unfinished = attachments.filter(
+  const unfinished = live.filter(
     (item) => item.status === "pending" || item.status === "uploading",
   );
   const full = stored.length + unfinished.length >= ATTACHMENTS_PER_ITEM;
@@ -77,6 +82,9 @@ export function AttachmentList({
   // an answer cannot be handed in while a slot is still half-written.
   useEffect(() => {
     onBusyChange?.(itemKey, busy !== null);
+    // The page removes this list when a refresh fails, so the cleanup has to
+    // clear the key: otherwise its submit button would stay locked.
+    return () => onBusyChange?.(itemKey, false);
   }, [busy, itemKey, onBusyChange]);
 
   async function onPick(files: FileList | null) {
@@ -92,7 +100,7 @@ export function AttachmentList({
 
   return (
     <div className="app-attachments">
-      {stored.length + unfinished.length > 0 ? (
+      {stored.length + unfinished.length + expired.length > 0 ? (
         <ListSurface aria-label={`${itemLabel} 첨부 파일`}>
           {stored.map((attachment) => (
             <ListRow
@@ -162,6 +170,33 @@ export function AttachmentList({
                   ? "올리기가 끝나지 않았습니다. 지우고 다시 올려 주세요."
                   : "올리기가 끝나지 않은 파일입니다."
               }
+              key={attachment.id}
+              meta={formatSize(attachment.byteSize)}
+              title={attachment.fileName}
+            />
+          ))}
+          {expired.map((attachment) => (
+            <ListRow
+              action={
+                editable ? (
+                  <Button
+                    aria-label={`${attachment.fileName} 지우기`}
+                    disabled={busy !== null}
+                    onClick={() =>
+                      void run(`delete-${attachment.id}`, async () => {
+                        await deleteAttachment(token, tenantId, attachment.id);
+                        await onChanged();
+                        return `'${attachment.fileName}'을(를) 지웠습니다.`;
+                      })
+                    }
+                    size="small"
+                    variant="quiet"
+                  >
+                    지우기
+                  </Button>
+                ) : undefined
+              }
+              description="보존 기간이 지나 더 쓸 수 없습니다. 정리 대상입니다."
               key={attachment.id}
               meta={formatSize(attachment.byteSize)}
               title={attachment.fileName}

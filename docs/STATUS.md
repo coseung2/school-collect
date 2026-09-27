@@ -94,7 +94,7 @@ PR #24/#25는 모두 develop에 병합됐습니다(`f573bfb`, `11a0af0`). 병합
 
 ### 4차 독립 검토 (2026-09-28, `d578f98`)
 
-같은 검토자(gpt-6-astra, 매우높음)의 판정은 **REVISE_LOCAL**이었습니다. 3차 지적 8개 중 4개는 닫힘, 4개는 부분으로 보았고, 저장소 안 결함 6개(F1~F6)를 새로 지적했습니다. 모두 이번 PR에서 고치고 다시 검증했습니다.
+같은 검토자(gpt-6-astra, 매우높음)의 판정은 **REVISE_LOCAL**이었습니다. 3차 지적 8개 중 4개는 닫힘, 4개는 부분으로 보았고, 저장소 안 결함 6개(F1~F6)를 새로 지적했습니다. 모두 이번 PR에서 고쳤지만, 5차 검토에서 그중 셋(업로드 정리 영속성·최초 제출 경쟁·목록 복구)이 부분으로 남았다고 확인됐습니다(아래 5차 절).
 
 - F1 업로드 인수 뒤 이전 시도가 살아 있던 문제: 업로드 시도마다 식별자와 object key를 따로 둡니다(migration `0008`, `upload_attempt_id`, `object_key_for_attempt`). 완료·해제·정리는 자기 시도에만 작용하고, 5분 인수로 밀려난 시도는 완료(`ClaimLost`)도 해제도 못 합니다. 그 시도의 객체는 인수 시점에 지우고, 삭제가 실패하면 `attachment_orphans`에 기록해 sweep이 지웁니다.
 - F2 완료 전 다운로드: `/v1/attachments/{id}/content`는 `stored`이고 보존 기간 안일 때만 bytes를 주고, `pending`·`uploading`·만료는 409(`attachment_not_ready`, `attachment_expired`)로 거절합니다. E2E가 슬롯만 연 상태와 크기 불일치 실패 뒤의 다운로드 거절을 확인합니다.
@@ -106,6 +106,21 @@ PR #24/#25는 모두 develop에 병합됐습니다(`f573bfb`, `11a0af0`). 병합
 - 실제 Tauri 창(WebView2 CDP) 확인: 슬롯만 연 상태의 다운로드 409, 미완료 행 표시와 지우기, 제출 잠금과 안내 문구, 지운 뒤 제출 가능, 실제 업로드 뒤 `받기` 행과 제출 가능, 640px 가로 넘침 없음.
 - 검증: `cargo test --workspace --locked` 156개, 실제 개발 DB `crates/db/tests/attachments.rs` 8개·worker sweep 1개·relay 6개, 실제 provider + PostgreSQL E2E 5개, foundation 34개, repository guard 0건, `@example.test` 계정과 검증 학교·행 잔여 0.
 - PR #77(`a92965e`)로 develop에 통합했습니다. 병합 전 CI 7개가 성공했고(`container` 검사가 migrator에 `MIGRATION_DATABASE_URL`을 넘기도록 한 번 고쳤습니다), `postgres` 작업의 런타임 역할 검사가 실제 PostgreSQL에서 통과했습니다.
+
+### 5차 독립 검토 (2026-09-28, `eac15ae`)
+
+판정은 **REVISE_LOCAL**이었습니다. 4차 지적 6개 중 F2·F5는 닫힘, F1·F3·F4·F6은 부분으로 보았고, 새 발견 N1~N6을 지적했습니다. 모두 저장소 안에서 고쳤습니다.
+
+- N1 인수 commit과 정리 기록 사이의 영속성 공백: 인수 transaction 안에서 밀려난 시도의 object key를 `attachment_orphans`에 기록합니다. 인수 직후 프로세스가 죽어도 키를 잃지 않고, 늦은 `PUT` 가능성이 남은 동안(업로드 인수 제한 시간)에는 sweep이 그 기록을 지우지 않습니다. API의 즉시 삭제는 빠른 경로일 뿐입니다.
+- N2 제출 행이 없을 때의 경쟁: 슬롯 생성·최초 초안 저장·제출이 모두 배정 행을 먼저 잠그도록 순서를 통일했습니다(제출 행은 아직 없을 수 있어 잠글 행이 없습니다). 실제 개발 DB에서 슬롯 생성과 최초 저장·제출을 8회 교차 실행해 "제출 + 미완료 슬롯"이 함께 성공하지 않음을 확인했습니다.
+- N3 콜백 이후 취소: 취소와 제한 시간을 token 교환까지 확장하고, 화면은 취소·이탈 시 시도를 무효화해 늦은 결과가 세션을 저장하지 못하게 합니다. 가짜 provider로 교환 중 취소를 검증했습니다.
+- N4 목록 갱신 실패 후 제출 잠김: 컴포넌트가 사라질 때 부모의 busy를 정리하고, 화면에 `다시 불러오기`를 넣었습니다. 실제 창에서 목록 GET을 실패시켜 제출이 잠기지 않고 재시도로 복구되는 것을 확인했습니다.
+- N5 만료 첨부 계약 불일치: 서버 제출 검사·슬롯 한도 계산·화면 표시가 모두 "만료된 슬롯은 자리를 차지하지 않고 제출을 막지 않는다"로 같아졌습니다. 만료된 파일은 받기 대상이 아니고 화면에 만료로 표시됩니다.
+- N6 검증 문구: `STATUS.md`·`SCHOOL_WORK_PLAN.md`·`TEAM_BACKLOG.md`·`V2_PLAN.md`의 완료·검증 표현을 실제 범위로 고쳤습니다. 브라우저 로그인은 가짜 provider 앱 경로 검증과 실제 provider 검증을 구분해 적었습니다.
+- S-06 소비 worker: 계획의 완료 조건에 있던 멱등 처리와 commit 후 ACK를 구현했습니다(migration `0009`, `processed_events`, `services/worker/src/consumer.rs`). durable pull consumer가 전달된 이벤트를 한 transaction에서 기록하고 commit 뒤에만 ACK하며, 중복 전달은 효과를 반복하지 않습니다. 알림 발송 채널은 제품 결정으로 남습니다.
+- CI: `postgres` 작업이 runtime 역할로 API를 띄워 `/ready` 200을 확인하고, `nats-outbox` 작업이 같은 역할로 worker 기동을 확인합니다.
+- 실제 Tauri 창(WebView2 CDP, 가짜 provider) 확인: 로그인 화면 → native 명령 → loopback 콜백 → code 교환 → OS 자격 증명 저장소에 provider가 발급한 `sub`와 같은 사용자로 저장, 첨부 상태 기계(완료 전 409, 미완료 행·제출 잠금, 실제 업로드 뒤 받기·제출 가능), 목록 실패 뒤 제출 잠금 해제와 화면 재시도.
+- 검증: `cargo test --workspace --locked` 161개, 실제 개발 DB `crates/db/tests/attachments.rs` 10개·worker sweep 1개·소비 worker 2개·relay 6개, 실제 provider + PostgreSQL E2E 5개, foundation 34개, repository guard 0건, `@example.test`·검증 학교·행 잔여 0. 백업 drill은 migration 9개·테이블 15개입니다.
 
 ## 단계 상태
 

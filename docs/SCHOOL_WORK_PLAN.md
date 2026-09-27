@@ -21,7 +21,7 @@
 | S-03 | 항목·대상 편집과 권한 규칙 / 완료(PR #41, `70dcbfe`) | S-01, 구성원 변경 시 S-02 | 배포 전후 변경·역할 변경·미배정 제출 정책 확정, 서버 검증·충돌 처리·변경 기록과 UI 검증 |
 | S-04 | 파일 첨부 / 구현 중(PR #58·#59·#60, 2차 검토 보강 #69, 화면 #70, R2 adapter, 4차 보강) | S-01, C-03 승인된 저장소 설정 | 완료: metadata·보존 규칙, 업로드·다운로드 API와 저장소 port(학교 간 접근 차단), 만료 정리 worker, 제출 작성·관리자 검토 화면, private R2 adapter·presigned URL(AWS 예제·mock 검증) / 남음: 실제 R2 bucket·credential 연결 확인(소유자 자원), presigned 직접 업로드 전환 여부 |
 | S-05 | 세션 유지·offline 초안 / 진행 중(PR #45, PR #46, PR #65, 브라우저 로그인 흐름) | S-01, C-01/C-02 | 완료: OS 보안 저장소 세션(재시작 복구·갱신·로그아웃 정리)과 사용자/학교별 SQLite 초안(재시작 복구·재전송·충돌·로그아웃 정리), 외부 브라우저 로그인의 PKCE·state·loopback 콜백 검증과 전체 흐름(콜백 수신·code 교환·취소·만료, 가짜 provider 테스트) / 남음: provider redirect 허용 목록 등록(소유자) 후 실제 provider로 로그인 화면 전체 흐름 검증 |
-| S-06 | 알림·재처리용 outbox/worker / relay 완료(PR #43, `e722bce`) | S-01 | 완료: 업무 변경+outbox 단일 transaction, relay의 재시도·dead-letter, JetStream 전달과 broker 중복 제거, 만료 첨부 sweep / 남음: 업무 변경을 실제로 소비하는 알림 worker와 그 멱등 처리·commit 후 ACK는 아직 구현·검증하지 않았습니다(현재 실행 worker는 relay와 sweep) |
+| S-06 | 알림·재처리용 outbox/worker / 완료(relay PR #43 `e722bce`, 소비 worker 5차 보강) | S-01 | 완료: 업무 변경+outbox 단일 transaction, relay의 재시도·dead-letter, JetStream 전달과 broker 중복 제거, 만료 첨부 sweep, 전달된 이벤트를 한 transaction에서 멱등 처리하고 commit 뒤에 ACK하는 durable 소비 worker(`processed_events`) / 남음: 그 이벤트로 실제 알림을 보내는 채널은 제품 결정입니다(현재 소비 효과는 처리 기록) |
 | S-07 | 결과 내보내기·전체 흐름 검증 / 완료(PR #48, PR #50, PR #53) | S-02~S-06, 출시 시 C-02~C-05 | 완료: CSV 결과의 권한·누락 검증, 화면 내보내기 버튼, 마감 후·다른 학교 내보내기 경계, 역할 4종 단일 시나리오를 통합 SHA에서 검증 |
 
 공통 ID는 [TEAM_BACKLOG.md](TEAM_BACKLOG.md)를 따릅니다. 첨부·offline·worker는 S-01 계약이 고정된 뒤 독립 범위로 진행해 첨부는 metadata·API·정리 sweep까지 통합했습니다. 실제 운영 저장소(R2 계정·bucket) 연결과 제출 작성·검토 화면은 계정·환경이 확정된 뒤 진행합니다.
@@ -68,7 +68,7 @@ PR #43(`feat/outbox-relay`)로 업무 변경과 이벤트를 한 transaction에 
 - `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo test --workspace --locked`(91개), foundation 25개, repository guard.
 - 실제 개발 DB에서 relay 테스트 6개(배달 후 재선점 없음, 실패 → 재시도 → dead-letter, 동시 relay 중복 선점 없음, 업무 transaction과 이벤트 동시 기록·거부된 전이는 이벤트 없음, 선점 시 시도 횟수 증가, 재시도 예약) 통과.
 - CI `postgres` 작업이 DB 쪽 relay 테스트를, 새 `nats-outbox` 작업이 NATS JetStream 컨테이너와 함께 실제 배달·ack·중복 제거(같은 id 두 번 publish → 1건)를 확인했습니다.
-- 아직 아님: 이벤트를 소비하는 서비스(알림 발송 등). 이 슬라이스는 배달·재처리까지입니다.
+- 소비 worker(5차 검토 보강): durable pull consumer가 `school_collect_worker` 이름으로 스트림을 읽습니다. 전달된 이벤트는 `school_collect.processed_events`에 `(consumer, event_id)` unique로 기록하고, 그 기록과 효과를 한 transaction에서 commit한 뒤에만 broker에 ACK합니다. 중복 전달은 효과를 반복하지 않고 ACK하고, 효과가 실패하면 ACK하지 않아 broker가 다시 전달합니다. 알림 발송 채널은 아직 없어 소비 효과는 처리 기록까지입니다.
 
 ## 결과 내보내기 (S-07 1차)
 
@@ -133,7 +133,7 @@ PR #45(세션 보안 저장소)와 PR #46(오프라인 초안)로 세션 유지�
 - `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo test --workspace --locked`(95개), 앱 typecheck/build, foundation 25개, repository guard. 초안 저장소 단위 테스트 3개(사용자·학교 분리, 재저장 교체, 로그아웃 정리, 잘못된 식별자·크기 초과 거부)를 포함합니다.
 - 실제 Tauri 창: 로그인 → Windows 자격 증명 관리자에 세션 항목 생성 → 앱 재시작 후 로그인 유지 → 로그아웃 시 항목 삭제. API를 끈 상태에서 임시 저장 → 로컬 SQLite에 초안 기록, 재시작 후 제출 화면에서 값 복구, API 복구 후 임시 저장 → 서버 저장·로컬 초안 삭제, 로그아웃 → 재로그인 시 초안 없음을 확인했습니다. 검증용 계정·행·초안 파일은 정리했습니다.
 
-- 화면 연결(4차 검토): 로그인 화면에 `학교 계정으로 로그인`(시스템 브라우저 PKCE)과 취소 버튼을 넣고, native 명령 `start_browser_login`·`cancel_browser_login`을 등록했습니다. 로그인 화면 → native → 세션 저장 경로를 가짜 provider로 검증하고(정상·취소·만료, authorize URL · code 교환 · 세션 필드), 취소·만료·실패는 화면 문구로 안내합니다. 실제 provider 흐름은 redirect 허용 목록 등록 뒤에 검증합니다.
+- 화면 연결(4차 검토): 로그인 화면에 `학교 계정으로 로그인`(시스템 브라우저 PKCE)과 취소 버튼을 넣고, native 명령 `start_browser_login`·`cancel_browser_login`을 등록했습니다. native 명령이 호출하는 `run_browser_login`을 가짜 provider로 검증하고(정상·취소·교환 중 취소·만료, authorize URL · code 교환 · 세션 필드), 취소·만료·실패는 화면 문구로 안내하며 화면을 벗어나면 늦은 결과를 무효화합니다. 실제 provider 흐름은 redirect 허용 목록 등록 뒤에 검증합니다.
 
 인증과 membership RBAC를 새로 시작하는 작업으로 되돌리지 않습니다. `crates/auth`의 OIDC/JWKS 검증, `crates/db/src/records.rs`의 사용자 upsert·membership 조회, `services/api/src/lib.rs`의 권한 및 request ID 처리가 이미 있습니다.
 

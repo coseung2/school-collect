@@ -155,6 +155,14 @@ fn slot(tenant_id: Uuid, item_key: &str, file_name: &str, byte_size: i64) -> New
     }
 }
 
+/// A slot whose retention deadline already passed.
+fn past_slot(tenant_id: Uuid, item_key: &str, file_name: &str) -> NewAttachment {
+    NewAttachment {
+        expires_at: Utc::now() - Duration::days(1),
+        ..slot(tenant_id, item_key, file_name, 10)
+    }
+}
+
 /// Takes a slot and marks its bytes stored, the way the API does after a `PUT`.
 async fn store_slot(fixture: &Fixture, attachment_id: Uuid, byte_size: i64) {
     let claim = claim_attachment_upload(&fixture.pool, fixture.tenant, attachment_id, Utc::now())
@@ -960,6 +968,23 @@ async fn one_upload_owns_a_slot_at_a_time() {
     assert_eq!(superseded_object_key.as_deref(), Some(first_key.as_str()));
     assert_ne!(second.object_key, first_key);
 
+    // The takeover itself records the superseded object, in the same
+    // transaction that moved the row off it, so a crash before any cleanup
+    // cannot lose that key.
+    let recorded: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM school_collect.attachment_orphans
+         WHERE tenant_id = $1 AND object_key = $2",
+    )
+    .bind(fixture.tenant)
+    .bind(&first_key)
+    .fetch_one(&fixture.pool)
+    .await
+    .expect("orphan count");
+    assert_eq!(
+        recorded, 1,
+        "the superseded object is recorded by the claim"
+    );
+
     // A claim left behind by a crashed request is taken over after the timeout.
     assert!(matches!(
         claim_attachment_upload(&fixture.pool, fixture.tenant, slot_row.id, Utc::now())
@@ -1120,6 +1145,161 @@ async fn a_waiting_slot_blocks_the_answer_and_the_answer_blocks_new_slots() {
     .await
     .expect("create");
     assert!(matches!(late, CreateAttachmentOutcome::AlreadySubmitted));
+
+    fixture.cleanup().await;
+}
+
+/// A slot past its retention deadline is not a place and not a blocker.
+#[tokio::test]
+async fn an_expired_slot_neither_blocks_the_answer_nor_keeps_a_place() {
+    let Some(url) = database_url() else {
+        eprintln!("DATABASE_URL is not set; skipping the expired slot check");
+        return;
+    };
+    let pool = school_collect_db::connect(&url).await.expect("connect");
+    school_collect_db::MIGRATOR
+        .run(&pool)
+        .await
+        .expect("migrate");
+    let fixture = fixture(pool).await;
+    let collect = new_collect(&fixture, &[item("plan", "계획서")], &[fixture.contributor]).await;
+    publish(&fixture, collect).await;
+
+    // A slot whose deadline passed before the sweep reached it.
+    let stale = create_attachment(
+        &fixture.pool,
+        fixture.tenant,
+        collect,
+        fixture.contributor,
+        past_slot(fixture.tenant, "plan", "지난.pdf"),
+    )
+    .await
+    .expect("create");
+    assert!(matches!(stale, CreateAttachmentOutcome::Created(_)));
+
+    save_draft(
+        &fixture.pool,
+        fixture.tenant,
+        collect,
+        fixture.contributor,
+        0,
+        &json!({ "plan": "제출" }),
+    )
+    .await
+    .expect("draft");
+    // An expired slot can never hold bytes again, so it must not trap the answer.
+    let sent =
+        school_collect_db::submit(&fixture.pool, fixture.tenant, collect, fixture.contributor)
+            .await
+            .expect("submit");
+    assert!(
+        matches!(sent, school_collect_db::SubmitOutcome::Submitted(_)),
+        "an expired slot must not block the answer: {sent:?}"
+    );
+
+    // On another collect it must not keep a place either: the limit is about
+    // live slots.
+    let second = new_collect(&fixture, &[item("plan", "계획서")], &[fixture.contributor]).await;
+    publish(&fixture, second).await;
+    for index in 0..MAX_ATTACHMENTS_PER_ITEM {
+        let outcome = create_attachment(
+            &fixture.pool,
+            fixture.tenant,
+            second,
+            fixture.contributor,
+            past_slot(fixture.tenant, "plan", &format!("지난-{index}.pdf")),
+        )
+        .await
+        .expect("create");
+        assert!(
+            matches!(outcome, CreateAttachmentOutcome::Created(_)),
+            "expired slot {index} must open: {outcome:?}"
+        );
+    }
+    let fresh = create_attachment(
+        &fixture.pool,
+        fixture.tenant,
+        second,
+        fixture.contributor,
+        slot(fixture.tenant, "plan", "새.pdf", 10),
+    )
+    .await
+    .expect("create");
+    assert!(
+        matches!(fresh, CreateAttachmentOutcome::Created(_)),
+        "expired slots must not use up the limit: {fresh:?}"
+    );
+
+    fixture.cleanup().await;
+}
+
+/// The first answer and a newly opened slot must not both win.
+#[tokio::test]
+async fn the_first_answer_and_a_slot_never_both_win() {
+    let Some(url) = database_url() else {
+        eprintln!("DATABASE_URL is not set; skipping the first answer race check");
+        return;
+    };
+    let pool = school_collect_db::connect(&url).await.expect("connect");
+    school_collect_db::MIGRATOR
+        .run(&pool)
+        .await
+        .expect("migrate");
+    let fixture = fixture(pool).await;
+
+    // No submission row exists yet, which is the case an answer-row lock cannot
+    // cover: slot creation and the first draft save must serialize on the
+    // assignment row instead.
+    for round in 0..8 {
+        let collect =
+            new_collect(&fixture, &[item("plan", "계획서")], &[fixture.contributor]).await;
+        publish(&fixture, collect).await;
+
+        let slot_task = tokio::spawn({
+            let pool = fixture.pool.clone();
+            let (tenant, user) = (fixture.tenant, fixture.contributor);
+            async move {
+                create_attachment(
+                    &pool,
+                    tenant,
+                    collect,
+                    user,
+                    slot(tenant, "plan", &format!("동시-{round}.pdf"), 10),
+                )
+                .await
+                .expect("create")
+            }
+        });
+        let answer_task = tokio::spawn({
+            let pool = fixture.pool.clone();
+            let (tenant, user) = (fixture.tenant, fixture.contributor);
+            async move {
+                let _ =
+                    save_draft(&pool, tenant, collect, user, 0, &json!({ "plan": "제출" })).await;
+                school_collect_db::submit(&pool, tenant, collect, user)
+                    .await
+                    .expect("submit")
+            }
+        });
+        slot_task.await.expect("join");
+        let answer = answer_task.await.expect("join");
+
+        let submitted = matches!(answer, school_collect_db::SubmitOutcome::Submitted(_));
+        let unfinished: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM school_collect.collect_attachments
+             WHERE tenant_id = $1 AND collect_id = $2
+               AND status IN ('pending', 'uploading')",
+        )
+        .bind(fixture.tenant)
+        .bind(collect)
+        .fetch_one(&fixture.pool)
+        .await
+        .expect("count");
+        assert!(
+            !(submitted && unfinished > 0),
+            "round {round}: the answer was handed in with {unfinished} unfinished slot(s)"
+        );
+    }
 
     fixture.cleanup().await;
 }

@@ -6,11 +6,13 @@ use sqlx::{PgConnection, PgPool, postgres::PgPoolOptions};
 pub mod attachments;
 pub mod invitations;
 pub mod outbox;
+pub mod processed_events;
 pub mod records;
 
 pub use attachments::*;
 pub use invitations::*;
 pub use outbox::*;
+pub use processed_events::*;
 pub use records::*;
 
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations/v2");

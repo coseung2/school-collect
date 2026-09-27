@@ -8,6 +8,7 @@ license.workspace = true
 anyhow = { workspace = true }
 async-nats = "0.50.0"
 chrono = { workspace = true }
+futures = "0.3"
 school-collect-application = { path = "../../crates/application" }
 school-collect-db = { path = "../../crates/db" }
 school-collect-observability = { path = "../../crates/observability" }
@@ -19,7 +20,6 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 async-nats = "0.50.0"
-futures = "0.3"
 school-collect-domain = { path = "../../crates/domain" }
 # Paused clock for the sweep schedule test; a feature of the tokio already locked.
 tokio = { workspace = true, features = ["test-util"] }

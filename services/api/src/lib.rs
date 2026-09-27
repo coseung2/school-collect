@@ -959,25 +959,18 @@ async fn upload_attachment_content(
                 superseded_object_key,
             }) => {
                 // The attempt that just lost the slot may have left bytes at the key
-                // it owned. They belong to nobody now, so remove them here; if that
-                // fails, remember them so the retention sweep still removes them.
+                // it owned. The claim already recorded that key, in the same
+                // transaction that stopped pointing the row at it, so removing the
+                // bytes here is only the fast path: if this call or the process
+                // dies, the sweep still knows the object exists.
                 if let Some(superseded) = superseded_object_key
                     && let Err(error) = storage.delete(&superseded).await
                 {
                     tracing::warn!(
                         attachment.id = %record.id,
                         reason = %error,
-                        "superseded upload bytes were not removed; recording them for the sweep"
+                        "superseded upload bytes were not removed now; the sweep will remove them"
                     );
-                    if let Err(error) = school_collect_db::record_attachment_orphan(
-                        &state.pool,
-                        tenant_id,
-                        &superseded,
-                    )
-                    .await
-                    {
-                        tracing::warn!(reason = %error, "leftover bytes could not be recorded");
-                    }
                 }
                 record
             }

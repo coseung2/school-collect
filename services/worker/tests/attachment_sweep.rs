@@ -266,7 +266,9 @@ async fn the_sweep_removes_expired_attachments_and_keeps_the_rest() {
         }
 
         // Bytes whose owning row is gone are removed too, so no object outlives
-        // the row that would have tracked it.
+        // the row that would have tracked it. A record younger than the claim
+        // window is kept first: the writer that lost the slot may still be
+        // sending its bytes, so clearing the record now would lose them.
         let orphan_key = format!(
             "tenants/{}/attachments/{}/orphan",
             fixture.tenant,
@@ -279,6 +281,33 @@ async fn the_sweep_removes_expired_attachments_and_keeps_the_rest() {
         record_attachment_orphan(&fixture.pool, fixture.tenant, &orphan_key)
             .await
             .map_err(|error| format!("orphan record failed: {error}"))?;
+        let report = purge_expired_attachments(&fixture.pool, &storage, 100)
+            .await
+            .map_err(|error| format!("sweep failed: {error}"))?;
+        if report.orphans_removed != 0 || report.failed != 0 {
+            return Err(format!(
+                "a fresh record must wait for the claim window: {report:?}"
+            ));
+        }
+        if storage
+            .get(&orphan_key)
+            .await
+            .map_err(|error| format!("get failed: {error}"))?
+            .is_none()
+        {
+            return Err("a fresh record must keep its bytes".to_owned());
+        }
+
+        // Once the window passed, the same record is removed with its bytes.
+        sqlx::query(
+            "UPDATE school_collect.attachment_orphans
+             SET created_at = now() - interval '1 hour'
+             WHERE tenant_id = $1",
+        )
+        .bind(fixture.tenant)
+        .execute(&fixture.pool)
+        .await
+        .map_err(|error| format!("age failed: {error}"))?;
         let report = purge_expired_attachments(&fixture.pool, &storage, 100)
             .await
             .map_err(|error| format!("sweep failed: {error}"))?;
@@ -313,6 +342,15 @@ async fn the_sweep_removes_expired_attachments_and_keeps_the_rest() {
         record_attachment_orphan(&fixture.pool, fixture.tenant, &stubborn_key)
             .await
             .map_err(|error| format!("orphan record failed: {error}"))?;
+        sqlx::query(
+            "UPDATE school_collect.attachment_orphans
+             SET created_at = now() - interval '1 hour'
+             WHERE tenant_id = $1",
+        )
+        .bind(fixture.tenant)
+        .execute(&fixture.pool)
+        .await
+        .map_err(|error| format!("age failed: {error}"))?;
         let report = purge_expired_attachments(&fixture.pool, &RefusingStorage, 100)
             .await
             .map_err(|error| format!("sweep with a refusing store failed: {error}"))?;

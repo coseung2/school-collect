@@ -8,7 +8,8 @@ use std::{env, sync::Arc, time::Duration};
 use anyhow::Context;
 use school_collect_application::storage::{ObjectStorage, configured_storage};
 use school_collect_worker::{
-    RelayConfig, nats::NatsPublisher, run_sweep_until_shutdown, run_until_shutdown,
+    CONSUMER_NAME, EventEffect, JetStreamConsumer, RecordOnlyEffect, RelayConfig,
+    nats::NatsPublisher, run_consumer_until_shutdown, run_sweep_until_shutdown, run_until_shutdown,
 };
 
 #[tokio::main]
@@ -45,6 +46,16 @@ async fn main() -> anyhow::Result<()> {
         "outbox relay started"
     );
 
+    // The consumer handles the events the relay has published. It shares the
+    // relay's connection and writes its progress under the durable name, so one
+    // worker process both delivers the outbox and consumes it.
+    let consumer = Arc::new(
+        JetStreamConsumer::from_context(publisher.context().clone(), CONSUMER_NAME).await?,
+    );
+    let consumer_batch = read_number("WORKER_CONSUMER_BATCH", 50)?;
+    let effect: Arc<dyn EventEffect> = Arc::new(RecordOnlyEffect);
+    tracing::info!(consumer = CONSUMER_NAME, "outbox consumer started");
+
     // The retention sweep needs to reach the same object storage the API writes
     // to. Without that configuration the relay still runs; attachments simply
     // keep their rows until an operator points the worker at the store.
@@ -79,6 +90,16 @@ async fn main() -> anyhow::Result<()> {
         ))
     });
 
+    let consuming = tokio::spawn(run_consumer_until_shutdown(
+        pool.clone(),
+        consumer,
+        effect,
+        consumer_batch,
+        async {
+            let _ = tokio::signal::ctrl_c().await;
+        },
+    ));
+
     run_until_shutdown(pool, publisher, config, poll_interval, async {
         let _ = tokio::signal::ctrl_c().await;
     })
@@ -87,6 +108,7 @@ async fn main() -> anyhow::Result<()> {
     if let Some(sweep) = sweep {
         let _ = sweep.await;
     }
+    let _ = consuming.await;
 
     Ok(())
 }
