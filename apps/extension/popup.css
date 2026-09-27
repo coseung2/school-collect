@@ -81,3 +81,73 @@ hr {
 #status[data-tone="error"] {
   color: #a11919;
 }
+
+h2 {
+  margin: 0 0 6px;
+  font-size: 13px;
+}
+
+select {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 7px 8px;
+  border: 1px solid #cbd2d9;
+  border-radius: 6px;
+  background: #ffffff;
+  font-size: 13px;
+}
+
+.candidates {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.candidate {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  font-weight: 400;
+  line-height: 1.4;
+  word-break: break-all;
+}
+
+.candidate input {
+  width: auto;
+  margin-top: 2px;
+}
+
+.fields {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fields li {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px solid #f0f2f5;
+  line-height: 1.4;
+  word-break: break-all;
+}
+
+.fields li[data-tone="ok"] {
+  color: #0b6b3a;
+}
+
+.fields li[data-tone="error"] {
+  color: #a11919;
+}
+
+button.link {
+  flex: none;
+  padding: 2px 6px;
+  border-color: transparent;
+  background: transparent;
+  color: #1f5fbf;
+  font-size: 12px;
+}

@@ -1,12 +1,27 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export type AutomationKind = "shortcut";
+export type AutomationKind = "shortcut" | "fill";
+
+/** 화면 요소를 찾는 방법입니다. native 검증과 같은 값을 씁니다. */
+export type LocatorKind = "id" | "name" | "label" | "css";
+
+export interface AutomationLocator {
+  kind: LocatorKind;
+  value: string;
+}
+
+export interface AutomationField {
+  label: string;
+  locator: AutomationLocator;
+}
 
 export interface AutomationRecipe {
   id: string;
   name: string;
   targetUrl: string;
   kind: AutomationKind;
+  /** 자동입력 레시피가 채울 필드입니다. 바로가기는 값을 갖지 않습니다. */
+  fields?: AutomationField[];
 }
 
 export async function listAutomationRecipes(): Promise<AutomationRecipe[]> {
@@ -79,4 +94,22 @@ export function describeAutomationTarget(targetUrl: string): string {
   } catch {
     return targetUrl;
   }
+}
+
+export function automationKindLabel(kind: AutomationKind): string {
+  return kind === "fill" ? "자동입력" : "바로가기";
+}
+
+/**
+ * 목록 한 줄에 보여 줄 요약입니다. 자동입력 레시피는 몇 개 필드를
+ * 채우는지 함께 알려 줍니다.
+ */
+export function describeAutomationRecipe(recipe: AutomationRecipe): string {
+  const host = describeAutomationTarget(recipe.targetUrl);
+  if (recipe.kind !== "fill") {
+    return host;
+  }
+
+  const fieldCount = recipe.fields?.length ?? 0;
+  return `필드 ${fieldCount}개 · ${host}`;
 }

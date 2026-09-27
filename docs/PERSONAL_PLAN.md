@@ -12,7 +12,8 @@
 | 로그인 없는 개인 화면, `open_automation_recipe(recipeId)`로 저장된 주소 실행 | PR #25 (`11a0af0`, `apps/app/src/pages/AutomationPage.tsx`) | 완료: `#automation` 로컬 라우트 |
 | 실제 Tauri 창에서 등록·열기·삭제·실행 취소·재시작 | [AUTOMATION_DESIGN.md](AUTOMATION_DESIGN.md) | 완료(2026-09-27, Windows) |
 | 브라우저 확장으로 현재 탭 등록, 로컬 브리지(`127.0.0.1:43110`) | PR #30 (`795dc26`), [AUTOMATION_DESIGN.md](AUTOMATION_DESIGN.md) | 완료: develop 통합 |
-| DOM 자동입력, 행렬 입력, 새 신청 감시 | [AUTOMATION_DESIGN.md](AUTOMATION_DESIGN.md) | 계획, 미구현 |
+| 화면 요소 선택, 자동입력 레시피 저장, dry-run 미리보기 | `feat/personal-fill-recipes`, [AUTOMATION_DESIGN.md](AUTOMATION_DESIGN.md) | 구현: 브랜치(PR 리뷰 대기) |
+| 자동입력 실행·결과 검증, 행렬 입력, 새 신청 감시 | [AUTOMATION_DESIGN.md](AUTOMATION_DESIGN.md) | 계획, 미구현 |
 
 개인기능은 PR #25로 develop에 통합됐고, 병합 과정에서 학교 화면 구조는 PR #24 방식을 유지하며 개인 화면을 `pages/AutomationPage.tsx`와 `#automation` 라우트로 분리했습니다. 상세 설계와 검증 기록은 [AUTOMATION_DESIGN.md](AUTOMATION_DESIGN.md)에 있습니다.
 
@@ -30,7 +31,7 @@
 | --- | --- | --- | --- |
 | P-01 | 바로가기 통합·안정화 / 완료(PR #25, `11a0af0`) | C-01 공통 진입 계약 | 로그인 없이 등록/조회/삭제/열기, 재시작 보존, 손상·복구 실패 시 원본 보존, 실제 창 검증 완료 |
 | P-02 | 브라우저 확장·현재 화면 등록 / 완료(PR #30, `795dc26`) | P-01 | 사용자가 현재 탭을 선택해 이름을 붙여 등록, 허용 origin·command schema만 통과, cookie/token/password 전달 금지 |
-| P-03 | 결정론적 DOM 레시피 엔진 / 계획 | P-02 | dry-run -> 입력 계획 확인 -> 실행 -> 결과 검증, 페이지/요소 모호 시 중단, 사용자 최종 저장 |
+| P-03 | 결정론적 DOM 레시피 엔진 / 진행 중(1차 슬라이스 구현, PR 리뷰 대기) | P-02 | dry-run -> 입력 계획 확인 -> 실행 -> 결과 검증, 페이지/요소 모호 시 중단, 사용자 최종 저장 |
 | P-04 | 학생 × 날짜 행렬 입력 / 계획 | P-03 | 학년도/학년/반/번호 등으로 행 식별, 날짜 열·교차 셀 확인, 중복·누락·불일치 중단, 부분 실패 표시 |
 | P-05 | 출결 등 앱 데이터 연결 / 계획 | P-04, 실제 데이터 원천·권한 계약 | 출처·필드 매핑 확정, 필요한 학교 API만 권한에 맞게 조회, 미리보기·검토·최소 보존·정리 검증 |
 | P-06 | 새 신청·결재 감시와 로컬 알림 / 계획 | P-02, P-03의 페이지 식별·검증 | 최소 식별자/fingerprint 비교, 새 항목만 알림, 중복 알림 억제·감시 중지·로그인 만료 처리 |
@@ -62,6 +63,17 @@ PR #30(`feat/personal-bridge-extension`)으로 데스크톱 앱의 제한된 로
 - 통과: Rust 단위·통합 테스트(워크스페이스 46개), clippy `-D warnings`, 앱 typecheck/build, foundation 24개, repository guard. 실제 소켓 스모크에서 상태 200, 등록 201과 파일 저장, 자격증명 포함 URL 400, 토큰 없음 401, 다른 origin 403을 확인했습니다. 실제 Tauri 창에서 연결 카드 렌더링과 브리지로 만든 버튼이 목록에 나타나는 것도 확인했습니다.
 - 통과(실제 브라우저, Edge 154): 확장이 `chrome-extension://dfobjphjganlegjomdgmaaphbjcgpoea/popup.html`로 로드됐고, 토큰 저장 -> 연결 확인 -> 현재 화면 등록까지 성공해 레시피 파일에 기록된 뒤 원래 내용으로 되돌렸습니다. 고정 ID와 매니페스트 권한은 `scripts/tests/test_extension_contract.py`가 공개 키에서 ID를 다시 계산해 브리지 상수와 대조합니다.
 - 아직 아님: 도구 모음 아이콘 클릭으로 여는 실제 팝업·`activeTab` 부여 경로와 실제 업무 사이트 주소 등록은 사람이 직접 확인하지 않았습니다. 검증은 팝업 페이지를 탭으로 열어 수행했고 대상은 브리지 origin 페이지였습니다.
+
+## P-03 1차 슬라이스에서 구현한 것 (브랜치)
+
+`feat/personal-fill-recipes`에서 자동입력 레시피의 저장 형식과 화면 요소 선택, dry-run 미리보기를 추가했습니다. 실행(입력)과 결과 검증은 다음 슬라이스입니다.
+
+- 레시피 종류가 `shortcut`/`fill`로 나뉘고, 자동입력 레시피는 화면 주소와 필드 목록(이름 + 위치)을 함께 저장합니다. 저장 형식은 기존 4열 TSV에 필드 JSON을 담은 5열을 더한 형태라 이전 파일을 그대로 읽습니다.
+- 위치는 `id`, `name`, `label`, `css` 네 종류만 허용합니다. 임의 JavaScript나 자유 형식 XPath는 받지 않고, CSS는 문자 집합과 함수형 선택자(`:has`, `:is` 등)를 제한하며 `nth-child()`/`nth-of-type()`만 허용합니다.
+- 확장은 페이지에 고정 명령 함수 하나만 주입합니다(`pick`, `preview`). 브리지와 앱은 데이터만 보내고 코드를 보내지 않습니다.
+- 미리보기는 각 필드의 일치 수와 현재 값을 보여 주고, 0개·2개 이상이면 "입력하지 않음"으로 표시합니다.
+
+검증 기록은 [AUTOMATION_DESIGN.md](AUTOMATION_DESIGN.md)의 3단계 절에 있습니다.
 
 ## 확장·실행 원칙
 

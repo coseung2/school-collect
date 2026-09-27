@@ -22,8 +22,9 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use uuid::Uuid;
 
 use crate::{
-    AutomationKind, AutomationRecipe, automation_config_dir, automation_recipes_path,
-    normalize_target_url, upsert_automation_recipe, validate_recipe, write_file_atomically,
+    AutomationField, AutomationKind, AutomationRecipe, automation_config_dir,
+    automation_recipes_path, normalize_recipe, read_automation_recipes, upsert_automation_recipe,
+    write_file_atomically,
 };
 
 /// Loopback port the desktop app listens on for the extension.
@@ -68,6 +69,23 @@ pub struct ShortcutResponse {
     pub target_url: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FillRecipeRequest {
+    pub name: String,
+    pub url: String,
+    pub fields: Vec<AutomationField>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FillRecipeResponse {
+    pub id: String,
+    pub name: String,
+    pub target_url: String,
+    pub field_count: usize,
+}
+
 fn json_error(status: StatusCode, code: &str, message: &str) -> Response {
     (
         status,
@@ -101,6 +119,8 @@ pub fn router(state: BridgeState) -> Router {
     Router::new()
         .route("/v1/bridge/status", get(status))
         .route("/v1/bridge/shortcuts", post(create_shortcut))
+        .route("/v1/bridge/fill-recipes", post(create_fill_recipe))
+        .route("/v1/bridge/recipes", get(list_recipes))
         .route_layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
         .layer(cors)
@@ -118,35 +138,17 @@ async fn create_shortcut(
     State(state): State<BridgeState>,
     Json(body): Json<ShortcutRequest>,
 ) -> Response {
-    let name = body.name.trim();
-    if name.is_empty() || name.chars().count() > 80 {
-        return json_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_name",
-            "a button name between 1 and 80 characters is required",
-        );
-    }
-    let Ok(target_url) = normalize_target_url(body.url.trim()) else {
-        return json_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_url",
-            "an http or https address without credentials is required",
-        );
-    };
-
     let recipe = AutomationRecipe {
         id: Uuid::new_v4().to_string(),
         kind: AutomationKind::Shortcut,
-        name: name.to_owned(),
-        target_url,
+        name: body.name,
+        target_url: body.url,
+        fields: Vec::new(),
     };
-    if validate_recipe(&recipe).is_err() {
-        return json_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_recipe",
-            "the shortcut could not be validated",
-        );
-    }
+    let recipe = match normalize_recipe(recipe) {
+        Ok(recipe) => recipe,
+        Err(message) => return json_error(StatusCode::BAD_REQUEST, "invalid_recipe", &message),
+    };
 
     match upsert_automation_recipe(&state.recipes_path, recipe.clone()) {
         Ok(_) => (
@@ -164,6 +166,60 @@ async fn create_shortcut(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "storage_failed",
                 "the shortcut could not be stored",
+            )
+        }
+    }
+}
+
+/// 자동입력 레시피는 화면 요소 위치만 저장합니다. 값은 실행할 때 사용자가 확인합니다.
+async fn create_fill_recipe(
+    State(state): State<BridgeState>,
+    Json(body): Json<FillRecipeRequest>,
+) -> Response {
+    let recipe = AutomationRecipe {
+        id: Uuid::new_v4().to_string(),
+        kind: AutomationKind::Fill,
+        name: body.name,
+        target_url: body.url,
+        fields: body.fields,
+    };
+    let recipe = match normalize_recipe(recipe) {
+        Ok(recipe) => recipe,
+        Err(message) => return json_error(StatusCode::BAD_REQUEST, "invalid_recipe", &message),
+    };
+
+    match upsert_automation_recipe(&state.recipes_path, recipe.clone()) {
+        Ok(_) => (
+            StatusCode::CREATED,
+            Json(FillRecipeResponse {
+                id: recipe.id,
+                name: recipe.name,
+                target_url: recipe.target_url,
+                field_count: recipe.fields.len(),
+            }),
+        )
+            .into_response(),
+        Err(error) => {
+            eprintln!("자동화 브리지가 자동입력 레시피를 저장하지 못했습니다: {error}");
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "storage_failed",
+                "the recipe could not be stored",
+            )
+        }
+    }
+}
+
+/// 확장이 미리보기·실행에 쓸 레시피 목록입니다. 읽기만 합니다.
+async fn list_recipes(State(state): State<BridgeState>) -> Response {
+    match read_automation_recipes(&state.recipes_path) {
+        Ok(recipes) => Json(recipes).into_response(),
+        Err(error) => {
+            eprintln!("자동화 브리지가 레시피를 읽지 못했습니다: {error}");
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "storage_failed",
+                "the recipes could not be read",
             )
         }
     }
@@ -309,6 +365,24 @@ mod tests {
 
     async fn status_code(app: Router, request: Request<Body>) -> StatusCode {
         app.oneshot(request).await.unwrap().status()
+    }
+
+    async fn json_response(app: Router, request: Request<Body>) -> (StatusCode, serde_json::Value) {
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        (status, value)
+    }
+
+    fn authorized_request(method: &str, uri: &str) -> axum::http::request::Builder {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::ORIGIN, allowed_origin())
+            .header(header::AUTHORIZATION, format!("Bearer {}", test_token()))
     }
 
     #[test]
@@ -486,6 +560,115 @@ mod tests {
         }
 
         assert!(!directory.join(crate::AUTOMATION_RECIPES_FILE).exists());
+    }
+
+    #[tokio::test]
+    async fn fill_recipes_endpoint_stores_locators_and_lists_them() {
+        let directory = test_directory("fill-create");
+        let app = router(state(&directory));
+        let payload = serde_json::json!({
+            "name": "기안 작성",
+            "url": "https://example.invalid/draft",
+            "fields": [
+                { "label": "제목", "locator": { "kind": "id", "value": "title" } },
+                { "label": "비고", "locator": { "kind": "css", "value": "#main > textarea" } }
+            ]
+        });
+
+        let (status, body) = json_response(
+            app.clone(),
+            authorized_request("POST", "/v1/bridge/fill-recipes")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "body: {body}");
+        assert_eq!(body["fieldCount"], 2);
+
+        let (status, body) = json_response(
+            app,
+            authorized_request("GET", "/v1/bridge/recipes")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let recipes = body.as_array().expect("a recipe array");
+        assert_eq!(recipes.len(), 1);
+        assert_eq!(recipes[0]["kind"], "fill");
+        assert_eq!(recipes[0]["name"], "기안 작성");
+        assert_eq!(recipes[0]["fields"].as_array().map(Vec::len), Some(2));
+        assert_eq!(recipes[0]["fields"][1]["locator"]["kind"], "css");
+
+        let stored = fs::read_to_string(directory.join(crate::AUTOMATION_RECIPES_FILE)).unwrap();
+        assert_eq!(stored.lines().count(), 1, "stored: {stored}");
+        assert!(stored.starts_with("fill") || stored.contains("\tfill\t"));
+    }
+
+    #[tokio::test]
+    async fn fill_recipes_endpoint_rejects_unsafe_locators() {
+        let directory = test_directory("fill-reject");
+        let app = router(state(&directory));
+
+        for locator in [
+            serde_json::json!({ "kind": "css", "value": "div; body" }),
+            serde_json::json!({ "kind": "css", "value": "div:has(> input)" }),
+            serde_json::json!({ "kind": "id", "value": "title with space" }),
+            serde_json::json!({ "kind": "label", "value": "" }),
+        ] {
+            let payload = serde_json::json!({
+                "name": "기안 작성",
+                "url": "https://example.invalid/draft",
+                "fields": [{ "label": "제목", "locator": locator }]
+            });
+            let response = app
+                .clone()
+                .oneshot(
+                    authorized_request("POST", "/v1/bridge/fill-recipes")
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(payload.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::BAD_REQUEST,
+                "payload: {payload}"
+            );
+        }
+
+        // 필드가 없는 자동입력 레시피도 저장하지 않습니다.
+        let payload = serde_json::json!({
+            "name": "기안 작성",
+            "url": "https://example.invalid/draft",
+            "fields": []
+        });
+        let response = app
+            .clone()
+            .oneshot(
+                authorized_request("POST", "/v1/bridge/fill-recipes")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(payload.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        assert!(!directory.join(crate::AUTOMATION_RECIPES_FILE).exists());
+    }
+
+    #[tokio::test]
+    async fn recipes_endpoint_requires_the_pairing_token() {
+        let directory = test_directory("recipes-guard");
+        let app = router(state(&directory));
+
+        assert_eq!(
+            status_code(app, request("GET", "/v1/bridge/recipes", None, None)).await,
+            StatusCode::UNAUTHORIZED
+        );
     }
 
     #[test]

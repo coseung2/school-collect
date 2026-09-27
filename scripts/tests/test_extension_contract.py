@@ -26,7 +26,7 @@ class ExtensionContractTests(unittest.TestCase):
     def test_manifest_is_a_keyed_mv3_extension(self):
         self.assertEqual(self.manifest["manifest_version"], 3)
         self.assertIn("key", self.manifest)
-        self.assertEqual(self.manifest["version"], "0.1.0")
+        self.assertEqual(self.manifest["version"], "0.2.0")
 
     def test_pinned_extension_id_matches_the_bridge_allowlist(self):
         match = re.search(
@@ -37,7 +37,9 @@ class ExtensionContractTests(unittest.TestCase):
 
     def test_extension_cannot_reach_anything_but_the_local_bridge(self):
         self.assertEqual(self.manifest["host_permissions"], ["http://127.0.0.1:43110/*"])
-        self.assertEqual(sorted(self.manifest["permissions"]), ["activeTab", "storage"])
+        self.assertEqual(
+            sorted(self.manifest["permissions"]), ["activeTab", "scripting", "storage"]
+        )
         serialized = json.dumps(self.manifest)
         self.assertNotIn("<all_urls>", serialized)
         self.assertNotIn("http://*/*", serialized)

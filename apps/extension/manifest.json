@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "School Collect 업무 자동화",
-  "version": "0.1.0",
-  "description": "현재 탭을 School Collect의 업무 버튼으로 등록합니다.",
+  "version": "0.2.0",
+  "description": "현재 탭을 School Collect의 업무 버튼으로 등록하고 자동입력 레시피를 만듭니다.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAs5pz79L2KgjIayPDfR2+Wmvi4bSB9UKPa5NAzvgdonJ66Lj88+lEVGbRIwG1mQvAlO8ZXMDSP8gE1axzHDbJQhA9GUiEF6Km9lqtz1f8jiD6Zue/d13yz8PMTncuwrke5+8SXY7K/+ZzjyE5IFCElzmumjo5fA3HmPKcQOQyEXfPJXt+OF3Fr2nhPzzUsPYIm6SGPqPc/5kew3V1U3Qvbk1b4/mvVPrEtovxL2W2nA8Cyehe3MXRxsl9C1Qa20JHG8qIkPbqKnOOh2ZVTIm8pr0Tv2fKUOo/WAPbEnaQMwGTDSvgQ1Qp6gq8WMIrahanJAwV55h2ttF9TtPDazI85wIDAQAB",
-  "permissions": ["activeTab", "storage"],
+  "permissions": ["activeTab", "scripting", "storage"],
   "host_permissions": ["http://127.0.0.1:43110/*"],
   "action": {
     "default_title": "School Collect 업무 자동화",
