@@ -58,7 +58,7 @@ PR #30(`feat/personal-bridge-extension`)으로 데스크톱 앱의 제한된 로
 
 - 브리지는 `127.0.0.1:43110`에만 열리고, 짝 맞춘 토큰(`automation-bridge.token`, 64자 hex)과 고정 확장 ID origin을 함께 확인합니다. 토큰은 상수 시간 비교이고, 브라우저가 `Origin`을 보내면 `chrome-extension://dfobjphjganlegjomdgmaaphbjcgpoea`와 정확히 같아야 합니다.
 - 브리지가 제공하는 것은 상태 확인과 바로가기 생성뿐입니다. URL 열기, 쿠키·DOM 접근, 임의 JavaScript 실행은 없습니다.
-- 확장은 `apps/extension`을 "압축해제된 확장 프로그램"으로 로드해 쓰고, `manifest.json`의 `key`로 ID를 고정합니다. 권한은 `activeTab`·`storage`와 `http://127.0.0.1:43110/*`뿐이고, 등록 값은 현재 탭의 제목과 주소입니다.
+- 확장은 `apps/extension`을 "압축해제된 확장 프로그램"으로 로드해 쓰고, `manifest.json`의 `key`로 ID를 고정합니다. 권한은 `activeTab`·`scripting`·`storage`와 `http://127.0.0.1:43110/*`뿐이고(`scripting`은 활성 탭에 고정 명령을 주입할 때만 씁니다), 등록 값은 현재 탭의 제목과 주소입니다.
 - 앱의 `업무 자동화` 화면에는 포트·토큰·확장 ID를 보여 주는 "브라우저 확장 연결" 카드가 있습니다.
 
 검증한 것과 아직 아닌 것:
@@ -91,7 +91,7 @@ PR #35(`feat/personal-table-fill`)로 학생 × 날짜 행렬 입력을 develop�
 - 중단 조건: 행 식별 값 중복, 저장한 머리글을 지금 표에서 찾지 못함, 입력 칸이 없거나 여러 개, 미리보기 이후 행 식별 변경. 중단 시 아무것도 입력하지 않고 이유를 팝업에 문장으로 표시합니다.
 - 값은 P-03과 같이 실행할 때만 페이지로 보내고 레시피·서버에 저장하지 않습니다.
 
-검증은 [AUTOMATION_DESIGN.md](AUTOMATION_DESIGN.md)의 "학생 × 날짜 행렬" 절에 있습니다. 실제 업무 사이트에서의 사람 검증과 월/화면 식별자 확장은 남아 있습니다.
+검증은 [AUTOMATION_DESIGN.md](AUTOMATION_DESIGN.md)의 "학생 × 날짜 행렬" 절에 있습니다. 레시피는 기록한 화면(origin+path)에서만 실행됩니다. 실제 업무 사이트에서의 사람 검증과 화면 안의 월·학기 식별은 남아 있습니다.
 
 ## P-06에서 구현한 것
 
