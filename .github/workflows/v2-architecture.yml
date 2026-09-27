@@ -306,7 +306,15 @@ jobs:
           # One due event, inserted as the runtime role: it has to travel
           # relay -> JetStream -> consumer -> commit to prove the runtime role can
           # do more than hold a connection open.
-          event_id="$(psql "$RUNTIME_DATABASE_URL" -v ON_ERROR_STOP=1 -tAc "INSERT INTO school_collect.outbox_events (id, tenant_id, topic, event_type, payload) VALUES (gen_random_uuid(), NULL, 'test.runtime-worker', 'test.runtime_worker', '{}'::jsonb) RETURNING id")"
+          #
+          # The outer statement has to be a SELECT: psql appends the command tag
+          # ("INSERT 0 1") to an INSERT ... RETURNING result, which would leak
+          # into the captured id and break the correlation query below.
+          event_id="$(psql "$RUNTIME_DATABASE_URL" -v ON_ERROR_STOP=1 -tAc "WITH inserted AS (INSERT INTO school_collect.outbox_events (id, tenant_id, topic, event_type, payload) VALUES (gen_random_uuid(), NULL, 'test.runtime-worker', 'test.runtime_worker', '{}'::jsonb) RETURNING id) SELECT id FROM inserted")"
+          if ! printf '%s' "$event_id" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'; then
+            echo "the inserted event id was not captured as one uuid: $event_id"
+            exit 1
+          fi
           echo "inserted outbox event ${event_id} as the runtime role"
 
           consumed=0
