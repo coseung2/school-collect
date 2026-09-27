@@ -24,6 +24,7 @@ const watchPickedEl = document.getElementById("watch-picked");
 const watchNameInput = document.getElementById("watch-name");
 const watchSelect = document.getElementById("watch-select");
 const watchResultsEl = document.getElementById("watch-results");
+const suggestionsEl = document.getElementById("suggestions");
 
 let picked = null;
 let draftFields = [];
@@ -33,6 +34,18 @@ let watchRecipes = [];
 let pickedTable = null;
 let pickedWatch = null;
 let valueInputs = [];
+
+const SUGGESTION_KIND_TEXT = {
+  fill: "자동입력",
+  table_fill: "표 입력",
+  watch: "감시",
+};
+
+const SUGGESTION_PATHS = {
+  fill: "/v1/bridge/fill-recipes",
+  table_fill: "/v1/bridge/table-recipes",
+  watch: "/v1/bridge/watch-recipes",
+};
 
 function setStatus(message, tone) {
   statusEl.textContent = message;
@@ -168,6 +181,113 @@ function renderFields() {
     item.append(text, remove);
     fieldsEl.append(item);
   });
+}
+
+function suggestionKindText(kind) {
+  return SUGGESTION_KIND_TEXT[kind] ?? kind;
+}
+
+/** 규칙 기반 실행기가 검증한 레시피 후보를 이름 입력과 함께 보여 줍니다. */
+function renderSuggestions(suggestions) {
+  suggestionsEl.replaceChildren();
+  if (suggestions.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "hint";
+    empty.textContent = "이 화면에서 바로 실행할 수 있는 레시피를 찾지 못했습니다.";
+    suggestionsEl.append(empty);
+    return;
+  }
+
+  for (const suggestion of suggestions) {
+    const item = document.createElement("li");
+    item.className = "suggestion";
+
+    const head = document.createElement("div");
+    head.className = "suggestion-head";
+    const badge = document.createElement("span");
+    badge.className = "badge";
+    badge.textContent = suggestionKindText(suggestion.kind);
+    const summary = document.createElement("span");
+    summary.className = "hint";
+    summary.textContent = suggestion.summary;
+    head.append(badge, summary);
+
+    const nameInput = document.createElement("input");
+    nameInput.type = "text";
+    nameInput.maxLength = 80;
+    nameInput.value = suggestion.name;
+    nameInput.setAttribute("aria-label", "레시피 이름");
+
+    const row = document.createElement("div");
+    row.className = "row";
+    const save = document.createElement("button");
+    save.type = "button";
+    save.textContent = "이 레시피 저장";
+    save.addEventListener("click", () => saveSuggestion(suggestion, nameInput, save));
+    row.append(save);
+
+    item.append(head, nameInput, row);
+    suggestionsEl.append(item);
+  }
+}
+
+/**
+ * 저장 직전에 화면을 다시 분석해 같은 레시피가 아직 성립하는지 확인합니다.
+ * 화면이 바뀌었으면 저장하지 않습니다. 값은 여전히 보내지 않습니다.
+ */
+async function saveSuggestion(suggestion, nameInput, button) {
+  const name = nameInput.value.trim();
+  if (!name) {
+    setStatus("레시피 이름을 입력하세요.", "error");
+    return;
+  }
+  const path = SUGGESTION_PATHS[suggestion.kind];
+  if (!path) {
+    setStatus("저장할 수 없는 추천 종류입니다.", "error");
+    return;
+  }
+
+  let saved = false;
+  button.disabled = true;
+  try {
+    const tab = await activeTab();
+    if (!tab?.url || !/^https?:/i.test(tab.url)) {
+      setStatus("http/https 화면에서만 저장할 수 있습니다.", "error");
+      return;
+    }
+    const fresh = await runPageCommand({ op: "suggest-recipes" });
+    const current = fresh.suggestions.find((item) => item.key === suggestion.key);
+    if (!current) {
+      setStatus("화면이 바뀌어 저장하지 않았습니다. '화면 분석'을 다시 실행하세요.", "error");
+      return;
+    }
+    const created = await bridgeFetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, url: tab.url, ...current.payload }),
+    });
+    await refreshFillRecipes();
+    const select =
+      suggestion.kind === "fill"
+        ? recipeSelect
+        : suggestion.kind === "table_fill"
+          ? tableSelect
+          : watchSelect;
+    select.value = created.id;
+    renderValueInputs();
+    saved = true;
+    button.textContent = "저장됨";
+    setStatus(
+      `'${created.name}' ${suggestionKindText(suggestion.kind)} 레시피를 저장했습니다.`,
+      "ok",
+    );
+  } catch (error) {
+    setStatus(error.message, "error");
+  } finally {
+    if (!saved) {
+      button.disabled = false;
+    }
+  }
 }
 
 function renderPreview(result) {
@@ -444,6 +564,23 @@ document.getElementById("check").addEventListener("click", async () => {
     setStatus(`연결됨 · ${status.service} ${status.version}`, "ok");
     await refreshFillRecipes();
   } catch (error) {
+    setStatus(error.message, "error");
+  }
+});
+
+document.getElementById("suggest").addEventListener("click", async () => {
+  setStatus("현재 화면 구조를 확인하는 중입니다.", "");
+  try {
+    const result = await runPageCommand({ op: "suggest-recipes" });
+    renderSuggestions(result.suggestions);
+    setStatus(
+      result.suggestions.length === 0
+        ? "이 화면에서 바로 실행할 수 있는 레시피를 찾지 못했습니다."
+        : `레시피 후보 ${result.suggestions.length}개를 찾았습니다. 이름을 확인하고 저장하세요.`,
+      result.suggestions.length === 0 ? "" : "ok",
+    );
+  } catch (error) {
+    suggestionsEl.replaceChildren();
     setStatus(error.message, "error");
   }
 });
