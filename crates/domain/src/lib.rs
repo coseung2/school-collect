@@ -121,4 +121,37 @@ mod tests {
         assert!(MembershipRole::Contributor.can_submit());
         assert!(!MembershipRole::Viewer.can_submit());
     }
+
+    #[test]
+    fn every_role_round_trips_and_unknown_roles_are_rejected() {
+        for role in [
+            MembershipRole::Admin,
+            MembershipRole::Coordinator,
+            MembershipRole::Contributor,
+            MembershipRole::Viewer,
+        ] {
+            assert_eq!(MembershipRole::parse(role.as_str()), Some(role));
+        }
+
+        assert_eq!(MembershipRole::parse("owner"), None);
+        assert_eq!(MembershipRole::parse("Admin"), None);
+        assert_eq!(MembershipRole::parse(""), None);
+    }
+
+    #[test]
+    fn capability_matrix_covers_all_four_roles() {
+        // manage: admin, coordinator / submit: admin, coordinator, contributor /
+        // viewer has neither, and every role may read its own school's data.
+        let expected = [
+            (MembershipRole::Admin, true, true),
+            (MembershipRole::Coordinator, true, true),
+            (MembershipRole::Contributor, false, true),
+            (MembershipRole::Viewer, false, false),
+        ];
+
+        for (role, can_manage, can_submit) in expected {
+            assert_eq!(role.can_manage_collects(), can_manage, "{role:?} manage");
+            assert_eq!(role.can_submit(), can_submit, "{role:?} submit");
+        }
+    }
 }

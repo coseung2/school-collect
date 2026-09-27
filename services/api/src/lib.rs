@@ -24,12 +24,13 @@ use school_collect_db::{
     NewCollectItem, SaveDraftOutcome, SubmitOutcome, TransitionOutcome, UserRecord,
 };
 use school_collect_domain::MembershipRole;
+use school_collect_observability::Metrics;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use tower_http::{
     cors::CorsLayer,
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
-    trace::TraceLayer,
+    trace::{MakeSpan, TraceLayer},
 };
 use utoipa::OpenApi;
 use uuid::Uuid;
@@ -158,12 +159,17 @@ pub fn router(state: AppState, cors_origin: HeaderValue, auth_state: AuthState) 
     Router::new()
         .route("/health", get(health))
         .route("/ready", get(readiness))
+        .route("/metrics", get(metrics))
         .route("/openapi.json", get(|| async { Json(ApiDoc::openapi()) }))
         .merge(protected)
         .with_state(Arc::new(state))
         .layer(DefaultBodyLimit::max(256 * 1024))
+        // Order matters: the request id is assigned first so the tracing span
+        // and the metrics middleware can report it.
+        .layer(TraceLayer::new_for_http().make_span_with(RequestSpan))
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
+        .layer(middleware::from_fn(record_metrics))
         .layer(
             CorsLayer::new()
                 .allow_origin(cors_origin)
@@ -175,7 +181,33 @@ pub fn router(state: AppState, cors_origin: HeaderValue, auth_state: AuthState) 
                     axum::http::HeaderName::from_static("apikey"),
                 ]),
         )
-        .layer(TraceLayer::new_for_http())
+}
+
+/// Span for every request, including the request id that the client sees.
+#[derive(Clone, Copy)]
+struct RequestSpan;
+
+impl<B> MakeSpan<B> for RequestSpan {
+    fn make_span(&mut self, request: &axum::http::Request<B>) -> tracing::Span {
+        let request_id = request
+            .headers()
+            .get("x-request-id")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("request-untracked");
+        tracing::info_span!(
+            "http",
+            method = %request.method(),
+            path = %request.uri().path(),
+            request_id = %request_id,
+        )
+    }
+}
+
+/// Counts every response by status class so operators can alert on 4xx/5xx.
+async fn record_metrics(request: Request, next: Next) -> Response {
+    let response = next.run(request).await;
+    Metrics::global().record_response(response.status().as_u16());
+    response
 }
 
 fn request_id_of(headers: &HeaderMap) -> String {
@@ -239,6 +271,7 @@ async fn authenticate(State(auth): State<AuthState>, mut request: Request, next:
                 );
             };
             let Some(header) = request.headers().get("authorization") else {
+                Metrics::global().record_auth_failure();
                 return failure(
                     request.headers(),
                     StatusCode::UNAUTHORIZED,
@@ -247,6 +280,7 @@ async fn authenticate(State(auth): State<AuthState>, mut request: Request, next:
                 );
             };
             let Ok(header) = header.to_str() else {
+                Metrics::global().record_auth_failure();
                 return failure(
                     request.headers(),
                     StatusCode::UNAUTHORIZED,
@@ -259,6 +293,7 @@ async fn authenticate(State(auth): State<AuthState>, mut request: Request, next:
                 Err(error) => {
                     // The reason is logged for operators; the token itself never is.
                     tracing::warn!(reason = %error, "access token verification failed");
+                    Metrics::global().record_auth_failure();
                     return failure(
                         request.headers(),
                         StatusCode::UNAUTHORIZED,
@@ -332,6 +367,7 @@ async fn authorize(
     let role = school_collect_db::membership_role(&state.pool, tenant_id, user.id)
         .await
         .map_err(|_| {
+            Metrics::global().record_storage_failure();
             Box::new(failure(
                 headers,
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -340,6 +376,7 @@ async fn authorize(
             ))
         })?
         .ok_or_else(|| {
+            Metrics::global().record_authorization_denial();
             Box::new(failure(
                 headers,
                 StatusCode::FORBIDDEN,
@@ -349,6 +386,7 @@ async fn authorize(
         })?;
 
     let parsed = MembershipRole::parse(&role).ok_or_else(|| {
+        Metrics::global().record_authorization_denial();
         Box::new(failure(
             headers,
             StatusCode::FORBIDDEN,
@@ -363,6 +401,7 @@ async fn authorize(
         Capability::Manage => parsed.can_manage_collects(),
     };
     if !allowed {
+        Metrics::global().record_authorization_denial();
         return Err(Box::new(failure(
             headers,
             StatusCode::FORBIDDEN,
@@ -382,6 +421,7 @@ enum Capability {
 }
 
 fn storage_failure(headers: &HeaderMap) -> Response {
+    Metrics::global().record_storage_failure();
     failure(
         headers,
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -430,6 +470,20 @@ async fn health() -> Json<ServiceStatus> {
         status: "ok",
         service: "api",
     })
+}
+
+/// Operational counters in the Prometheus text format.
+///
+/// Like `/health` and `/ready` this exposes no tenant data: only request,
+/// rejection, and storage-failure counts.
+async fn metrics() -> impl IntoResponse {
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        Metrics::global().render(),
+    )
 }
 
 #[utoipa::path(
@@ -1663,6 +1717,186 @@ mod tests {
         .unwrap();
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    fn oidc_state() -> AuthState {
+        let values = HashMap::from([
+            ("OIDC_ISSUER_URL", "https://id.example.test"),
+            ("OIDC_AUDIENCE", "authenticated"),
+        ]);
+        let config =
+            OidcConfig::from_env(|key| values.get(key).map(|value| (*value).to_owned())).unwrap();
+        AuthState::oidc(OidcVerifier::new(config).unwrap())
+    }
+
+    async fn body_json(response: axum::response::Response) -> serde_json::Value {
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("body");
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+    }
+
+    #[tokio::test]
+    async fn every_rejection_carries_the_request_id_it_answers_to() {
+        // Client-supplied id: it must be echoed on the response and in the body.
+        let response = router(
+            unreachable_state(),
+            HeaderValue::from_static("http://127.0.0.1:1420"),
+            oidc_state(),
+        )
+        .oneshot(
+            Request::builder()
+                .uri("/v1/session")
+                .header("x-request-id", "client-request-7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-request-id")
+                .and_then(|value| value.to_str().ok()),
+            Some("client-request-7")
+        );
+        let body = body_json(response).await;
+        assert_eq!(body["code"], "unauthorized");
+        assert_eq!(body["requestId"], "client-request-7");
+    }
+
+    #[tokio::test]
+    async fn generated_request_ids_are_returned_when_the_client_sends_none() {
+        let response = router(
+            unreachable_state(),
+            HeaderValue::from_static("http://127.0.0.1:1420"),
+            oidc_state(),
+        )
+        .oneshot(
+            Request::builder()
+                .uri("/v1/session")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let request_id = response
+            .headers()
+            .get("x-request-id")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        assert!(!request_id.is_empty());
+        assert_ne!(request_id, "request-untracked");
+
+        let body = body_json(response).await;
+        assert_eq!(body["requestId"], request_id);
+    }
+
+    #[tokio::test]
+    async fn rejection_bodies_never_repeat_the_presented_token() {
+        let token = "Bearer eyJhbGciOiJFUzI1NiJ9.forged.signature";
+        let response = router(
+            unreachable_state(),
+            HeaderValue::from_static("http://127.0.0.1:1420"),
+            oidc_state(),
+        )
+        .oneshot(
+            Request::builder()
+                .uri("/v1/session")
+                .header("authorization", token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let body = body_json(response).await;
+        let rendered = body.to_string();
+        assert_eq!(body["message"], "the access token could not be verified");
+        assert!(!rendered.contains("forged.signature"));
+        assert!(!rendered.contains("eyJhbGciOiJFUzI1NiJ9"));
+        assert!(!rendered.contains("Bearer"));
+    }
+
+    #[tokio::test]
+    async fn authentication_unavailable_is_reported_with_a_request_id() {
+        let response = router(
+            unreachable_state(),
+            HeaderValue::from_static("http://127.0.0.1:1420"),
+            AuthState {
+                mode: AuthMode::Oidc,
+                verifier: None,
+            },
+        )
+        .oneshot(
+            Request::builder()
+                .uri("/v1/session")
+                .header("x-request-id", "ops-check-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = body_json(response).await;
+        assert_eq!(body["code"], "authentication_unavailable");
+        assert_eq!(body["requestId"], "ops-check-1");
+    }
+
+    #[tokio::test]
+    async fn tenant_header_must_be_a_present_valid_identifier() {
+        let missing = HeaderMap::new();
+        let response = tenant_id_from(&missing).expect_err("missing tenant");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = body_json(*response).await;
+        assert_eq!(body["code"], "tenant_required");
+
+        let mut invalid = HeaderMap::new();
+        invalid.insert("x-tenant-id", HeaderValue::from_static("not-a-uuid"));
+        let response = tenant_id_from(&invalid).expect_err("invalid tenant");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = body_json(*response).await;
+        assert_eq!(body["code"], "tenant_invalid");
+
+        let tenant = Uuid::now_v7();
+        let mut valid = HeaderMap::new();
+        valid.insert(
+            "x-tenant-id",
+            HeaderValue::from_str(&tenant.to_string()).unwrap(),
+        );
+        assert_eq!(tenant_id_from(&valid).unwrap(), tenant);
+    }
+
+    #[tokio::test]
+    async fn metrics_are_exposed_without_tenant_data() {
+        let response = router(
+            unreachable_state(),
+            HeaderValue::from_static("http://127.0.0.1:1420"),
+            AuthState::development_disabled(),
+        )
+        .oneshot(
+            Request::builder()
+                .uri("/metrics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("body");
+        let text = String::from_utf8(bytes.to_vec()).expect("utf8");
+        assert!(text.contains("school_collect_http_requests_total"));
+        assert!(text.contains("school_collect_auth_failures_total"));
+        assert!(text.contains("school_collect_authorization_denials_total"));
     }
 
     #[test]

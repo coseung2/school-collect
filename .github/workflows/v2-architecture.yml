@@ -135,6 +135,8 @@ jobs:
           test "$(psql "$DATABASE_URL" -tAc "select count(*) from information_schema.tables where table_schema='public' and table_name in ('tenants','users','memberships','invitations','collects','collect_items','collect_assignments','collect_submissions','audit_events','outbox_events')")" = "0"
       - name: Re-running migrations must be a no-op
         run: cargo run -p school-collect-migrator --locked
+      - name: Tenant isolation across pooled connections
+        run: cargo test -p school-collect-db --locked
       - name: Missing configuration must fail startup instead of degrading
         shell: bash
         env:
