@@ -3,10 +3,13 @@
 //! Both dependencies are required: missing configuration must fail startup
 //! rather than silently drop events.
 
-use std::{env, sync::Arc, time::Duration};
+use std::{env, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::Context;
-use school_collect_worker::{RelayConfig, nats::NatsPublisher, run_until_shutdown};
+use school_collect_application::storage::{FileStorage, ObjectStorage};
+use school_collect_worker::{
+    RelayConfig, nats::NatsPublisher, run_sweep_until_shutdown, run_until_shutdown,
+};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -40,10 +43,45 @@ async fn main() -> anyhow::Result<()> {
         "outbox relay started"
     );
 
+    // The retention sweep needs to reach the same object storage the API writes
+    // to. Without that configuration the relay still runs; attachments simply
+    // keep their rows until an operator points the worker at the store.
+    let storage: Option<Arc<dyn ObjectStorage>> = match env::var("APP_ATTACHMENT_DIR") {
+        Ok(value) if !value.trim().is_empty() => {
+            Some(Arc::new(FileStorage::new(PathBuf::from(value))))
+        }
+        _ => {
+            tracing::info!("APP_ATTACHMENT_DIR is not set; the attachment retention sweep is off");
+            None
+        }
+    };
+    let sweep_interval = Duration::from_millis(read_number(
+        "WORKER_ATTACHMENT_SWEEP_MS",
+        6 * 60 * 60 * 1_000,
+    )?);
+    let sweep_batch = read_number("WORKER_ATTACHMENT_BATCH", 100)?;
+
+    let sweep = storage.map(|storage| {
+        let pool = pool.clone();
+        tokio::spawn(run_sweep_until_shutdown(
+            pool,
+            storage,
+            sweep_batch,
+            sweep_interval,
+            async {
+                let _ = tokio::signal::ctrl_c().await;
+            },
+        ))
+    });
+
     run_until_shutdown(pool, publisher, config, poll_interval, async {
         let _ = tokio::signal::ctrl_c().await;
     })
     .await;
+
+    if let Some(sweep) = sweep {
+        let _ = sweep.await;
+    }
 
     Ok(())
 }

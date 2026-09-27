@@ -17,6 +17,10 @@ use sqlx::PgPool;
 
 pub mod nats;
 
+pub mod attachments;
+
+pub use attachments::{PurgeReport, purge_expired_attachments, run_sweep_until_shutdown};
+
 /// How the relay delivers one event.
 pub trait EventPublisher: Send + Sync {
     fn publish<'a>(
