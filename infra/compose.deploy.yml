@@ -38,7 +38,9 @@ services:
     entrypoint: ["/usr/local/bin/school-collect-migrator"]
     environment:
       APP_ENV: ${APP_ENV:?set APP_ENV to staging or production}
-      DATABASE_URL: ${DATABASE_URL:?set the migration PostgreSQL URL}
+      # The schema owner is a separate input from the runtime URL, so a runtime
+      # credential can never be used to change the schema by accident.
+      MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:?set the migration PostgreSQL URL}
       RUST_LOG: ${RUST_LOG:-info}
 
   worker:

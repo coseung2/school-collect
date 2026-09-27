@@ -19,9 +19,9 @@
 | S-01 | 항목·대상·제출 현황과 화면 확장 / 완료(PR #24, `f573bfb`) | C-01 공통 진입 계약 | develop 통합과 CI 6개 통과 확인. 다음은 S-02 |
 | S-02 | 구성원 초대·합류 / 완료(PR #28, `9416c6c`) | S-01 | 초대된 계정이 해당 학교 contributor로 합류해 수합 제출; 다른 학교·계정에는 권한이 생기지 않음. 다음은 S-03 |
 | S-03 | 항목·대상 편집과 권한 규칙 / 완료(PR #41, `70dcbfe`) | S-01, 구성원 변경 시 S-02 | 배포 전후 변경·역할 변경·미배정 제출 정책 확정, 서버 검증·충돌 처리·변경 기록과 UI 검증 |
-| S-04 | 파일 첨부 / 구현 중(PR #58·#59·#60, 2차 검토 보강 #69, 화면 #70, R2 adapter) | S-01, C-03 승인된 저장소 설정 | 완료: metadata·보존 규칙, 업로드·다운로드 API와 저장소 port(학교 간 접근 차단), 만료 정리 worker, 제출 작성·관리자 검토 화면, private R2 adapter·presigned URL(AWS 예제·mock 검증) / 남음: 실제 R2 bucket·credential 연결 확인(소유자 자원), presigned 직접 업로드 전환 여부 |
-| S-05 | 세션 유지·offline 초안 / 진행 중(PR #45, PR #46, PR #65, 브라우저 로그인 흐름) | S-01, C-01/C-02 | 완료: OS 보안 저장소 세션(재시작 복구·갱신·로그아웃 정리)과 사용자/학교별 SQLite 초안(재시작 복구·재전송·충돌·로그아웃 정리), 외부 브라우저 로그인의 PKCE·state·loopback 콜백 검증과 전체 흐름(콜백 수신·code 교환·취소·만료, 가짜 provider 테스트) / 남음: provider redirect 허용 목록 등록(소유자) 후 로그인 화면 연결 |
-| S-06 | 알림·재처리용 outbox/worker / 완료(PR #43, `e722bce`) | S-01 | 업무 변경+outbox 단일 transaction, relay/JetStream/idempotent 처리, commit 후 ACK, retry/dead-letter·중복 전달 복구 |
+| S-04 | 파일 첨부 / 구현 중(PR #58·#59·#60, 2차 검토 보강 #69, 화면 #70, R2 adapter, 4차 보강) | S-01, C-03 승인된 저장소 설정 | 완료: metadata·보존 규칙, 업로드·다운로드 API와 저장소 port(학교 간 접근 차단), 만료 정리 worker, 제출 작성·관리자 검토 화면, private R2 adapter·presigned URL(AWS 예제·mock 검증) / 남음: 실제 R2 bucket·credential 연결 확인(소유자 자원), presigned 직접 업로드 전환 여부 |
+| S-05 | 세션 유지·offline 초안 / 진행 중(PR #45, PR #46, PR #65, 브라우저 로그인 흐름) | S-01, C-01/C-02 | 완료: OS 보안 저장소 세션(재시작 복구·갱신·로그아웃 정리)과 사용자/학교별 SQLite 초안(재시작 복구·재전송·충돌·로그아웃 정리), 외부 브라우저 로그인의 PKCE·state·loopback 콜백 검증과 전체 흐름(콜백 수신·code 교환·취소·만료, 가짜 provider 테스트) / 남음: provider redirect 허용 목록 등록(소유자) 후 실제 provider로 로그인 화면 전체 흐름 검증 |
+| S-06 | 알림·재처리용 outbox/worker / relay 완료(PR #43, `e722bce`) | S-01 | 완료: 업무 변경+outbox 단일 transaction, relay의 재시도·dead-letter, JetStream 전달과 broker 중복 제거, 만료 첨부 sweep / 남음: 업무 변경을 실제로 소비하는 알림 worker와 그 멱등 처리·commit 후 ACK는 아직 구현·검증하지 않았습니다(현재 실행 worker는 relay와 sweep) |
 | S-07 | 결과 내보내기·전체 흐름 검증 / 완료(PR #48, PR #50, PR #53) | S-02~S-06, 출시 시 C-02~C-05 | 완료: CSV 결과의 권한·누락 검증, 화면 내보내기 버튼, 마감 후·다른 학교 내보내기 경계, 역할 4종 단일 시나리오를 통합 SHA에서 검증 |
 
 공통 ID는 [TEAM_BACKLOG.md](TEAM_BACKLOG.md)를 따릅니다. 첨부·offline·worker는 S-01 계약이 고정된 뒤 독립 범위로 진행해 첨부는 metadata·API·정리 sweep까지 통합했습니다. 실제 운영 저장소(R2 계정·bucket) 연결과 제출 작성·검토 화면은 계정·환경이 확정된 뒤 진행합니다.
@@ -115,11 +115,12 @@ PR #58(`e3a541c`)·PR #59(`2486f8d`)·PR #60(`aaa55c5`)으로 첨부 metadata �
 - 이 검증에서 API의 CORS가 `DELETE`를 허용하지 않아 앱에서 지우기가 막히는 결함을 찾아 고쳤고, preflight가 클라이언트가 쓰는 모든 method를 허용하는지 단위 테스트로 고정했습니다.
 - 3차 검토 보강: 동시 올리기는 슬롯을 차지한 한 요청만 bytes를 쓰고(`one_upload_owns_a_slot_at_a_time`: 8개 동시 → 1개 차지·7개 거절, 해제 후 재차지, 5분 뒤 남은 차지 인수, 저장 후 차지 불가), 실패한 올리기는 bytes를 지우고 슬롯을 돌려줍니다. 앱은 올리기가 실패하면 빈 슬롯을 지우고, 끝나지 않은 슬롯이 남으면 목록에 "올리기가 끝나지 않았습니다"와 지우기를 보여 줍니다. 관리자가 자기 제출 화면을 열 때는 `scope=mine`으로 자기 파일만 받습니다.
 - R2 adapter: `R2_*` 변수가 있으면 api·worker가 private R2를 씁니다. 서명은 AWS 공개 예제 값으로, 요청 흐름은 loopback S3 stand-in으로 검증했습니다([ARCHITECTURE.md](ARCHITECTURE.md) Files).
+- 4차 검토 보강: 업로드 시도마다 식별자와 object key를 따로 두고 완료·해제·정리를 그 시도로만 제한합니다. 5분 인수로 밀려난 시도의 객체는 인수 시점에 지우거나 `attachment_orphans`에 기록해 sweep이 지웁니다. `GET /content`는 `stored`이고 보존 기간 안일 때만 bytes를 주고, `pending`·`uploading`·만료는 409로 거절합니다. 제출은 미완료 슬롯이 있으면 `attachment_incomplete`로 거절하고, 슬롯 열기·인수·완료는 제출·마감 상태를 같은 transaction에서 다시 확인합니다. 실제 개발 DB에서 `crates/db/tests/attachments.rs` 8개와 E2E가 이 경계를 확인합니다.
 - 아직: 실제 R2 bucket·credential 연결 확인, presigned 직접 업로드로 바꿀지 결정, 실제 네트워크 단절·재시도 사람 검증.
 
 ## 세션 유지와 offline 초안 (S-05)
 
-PR #45(세션 보안 저장소)와 PR #46(오프라인 초안)로 세션 유지와 초안 보관을 develop에 통합했습니다. 외부 브라우저 PKCE 로그인은 남아 있습니다.
+PR #45(세션 보안 저장소)와 PR #46(오프라인 초안)로 세션 유지와 초안 보관을 develop에 통합했습니다. 외부 브라우저 PKCE 로그인은 로그인 화면에 연결되어 있습니다(가짜 provider로 흐름 검증). 실제 provider 흐름은 redirect 허용 목록 등록 뒤에 검증합니다.
 
 - 세션: 로그인하면 access token·refresh token·만료 시각·사용자 정보를 OS 자격 증명 저장소(Windows)에 저장합니다. 비밀번호는 저장하지 않습니다. 앱 시작 시 저장된 세션을 읽고, 만료 임박이면 refresh token으로 갱신하며, 실패하면 저장된 세션을 지우고 다시 로그인하게 합니다. 로그아웃은 저장된 세션을 지웁니다.
 - 초안: 임시 저장·제출은 로컬 SQLite(`submission-drafts.sqlite`, 사용자·학교·수합 단위)에 먼저 쓰고 서버로 보냅니다. 서버가 받으면 로컬 초본을 지웁니다. 화면을 열 때 로컬 초안이 있으면 그 값으로 복구하고 안내를 보여 줍니다. 로그아웃은 그 사용자의 초안을 지웁니다.
@@ -131,6 +132,8 @@ PR #45(세션 보안 저장소)와 PR #46(오프라인 초안)로 세션 유지�
 
 - `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo test --workspace --locked`(95개), 앱 typecheck/build, foundation 25개, repository guard. 초안 저장소 단위 테스트 3개(사용자·학교 분리, 재저장 교체, 로그아웃 정리, 잘못된 식별자·크기 초과 거부)를 포함합니다.
 - 실제 Tauri 창: 로그인 → Windows 자격 증명 관리자에 세션 항목 생성 → 앱 재시작 후 로그인 유지 → 로그아웃 시 항목 삭제. API를 끈 상태에서 임시 저장 → 로컬 SQLite에 초안 기록, 재시작 후 제출 화면에서 값 복구, API 복구 후 임시 저장 → 서버 저장·로컬 초안 삭제, 로그아웃 → 재로그인 시 초안 없음을 확인했습니다. 검증용 계정·행·초안 파일은 정리했습니다.
+
+- 화면 연결(4차 검토): 로그인 화면에 `학교 계정으로 로그인`(시스템 브라우저 PKCE)과 취소 버튼을 넣고, native 명령 `start_browser_login`·`cancel_browser_login`을 등록했습니다. 로그인 화면 → native → 세션 저장 경로를 가짜 provider로 검증하고(정상·취소·만료, authorize URL · code 교환 · 세션 필드), 취소·만료·실패는 화면 문구로 안내합니다. 실제 provider 흐름은 redirect 허용 목록 등록 뒤에 검증합니다.
 
 인증과 membership RBAC를 새로 시작하는 작업으로 되돌리지 않습니다. `crates/auth`의 OIDC/JWKS 검증, `crates/db/src/records.rs`의 사용자 upsert·membership 조회, `services/api/src/lib.rs`의 권한 및 request ID 처리가 이미 있습니다.
 

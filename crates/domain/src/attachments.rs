@@ -111,6 +111,15 @@ pub fn object_key(tenant_id: &str, attachment_id: &str) -> String {
     format!("tenants/{tenant_id}/attachments/{attachment_id}")
 }
 
+/// Object key for one upload attempt of an attachment.
+///
+/// Every attempt writes its own object, so a writer whose claim was taken over
+/// cannot overwrite the bytes of the attempt that replaced it. The attachment
+/// key alone is a prefix that is never written to.
+pub fn object_key_for_attempt(tenant_id: &str, attachment_id: &str, attempt_id: &str) -> String {
+    format!("{}/{attempt_id}", object_key(tenant_id, attachment_id))
+}
+
 /// Deadline after which the bytes are removed and the row is purged.
 pub fn expires_at(created_at: DateTime<Utc>) -> DateTime<Utc> {
     created_at + Duration::days(ATTACHMENT_RETENTION_DAYS)
@@ -133,7 +142,7 @@ pub const fn can_delete(role: MembershipRole, owner: bool, submission_submitted:
 mod tests {
     use super::{
         ALLOWED_CONTENT_TYPES, ATTACHMENT_RETENTION_DAYS, AttachmentRejection,
-        MAX_ATTACHMENT_BYTES, can_delete, can_read, expires_at, object_key,
+        MAX_ATTACHMENT_BYTES, can_delete, can_read, expires_at, object_key, object_key_for_attempt,
         validate_new_attachment,
     };
     use crate::MembershipRole;
@@ -202,6 +211,15 @@ mod tests {
         assert_eq!(
             object_key("tenant-1", "attachment-1"),
             "tenants/tenant-1/attachments/attachment-1"
+        );
+        // Each attempt writes a distinct object under the same attachment.
+        assert_eq!(
+            object_key_for_attempt("tenant-1", "attachment-1", "attempt-a"),
+            "tenants/tenant-1/attachments/attachment-1/attempt-a"
+        );
+        assert_ne!(
+            object_key_for_attempt("tenant-1", "attachment-1", "attempt-a"),
+            object_key_for_attempt("tenant-1", "attachment-1", "attempt-b")
         );
         let created = Utc.with_ymd_and_hms(2026, 9, 27, 0, 0, 0).unwrap();
         assert_eq!(

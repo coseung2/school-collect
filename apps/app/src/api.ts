@@ -1,9 +1,18 @@
+import { invoke } from "@tauri-apps/api/core";
+
 const apiBaseUrl = (
   import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:3000"
 ).replace(/\/$/, "");
 
 const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL ?? "").replace(/\/$/, "");
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY ?? "";
+
+/**
+ * Upstream provider the external-browser login asks the identity provider for.
+ * The name is public; the redirect allowlist entry for the loopback callback
+ * on the identity provider is what the owner still decides.
+ */
+const browserLoginProvider = import.meta.env.VITE_OIDC_PROVIDER ?? "google";
 
 /// The client can only sign in when it was built with the public project
 /// address and publishable key. Both values are public by design; no server
@@ -226,6 +235,76 @@ export async function signInWithPassword(
     email: result.user?.email ?? email,
     expiresAtMs: result.expires_in ? Date.now() + result.expires_in * 1000 : null,
   };
+}
+
+/** Session the native external-browser login hands back to the renderer. */
+type BrowserLoginResult = {
+  accessToken: string;
+  refreshToken: string | null;
+  expiresInSeconds: number | null;
+  userId: string;
+  email: string | null;
+};
+
+/** The native flow reports failures as a stable code plus a message. */
+type BrowserLoginFailure = { code: string; message: string };
+
+function isBrowserLoginFailure(caught: unknown): caught is BrowserLoginFailure {
+  if (typeof caught !== "object" || caught === null) {
+    return false;
+  }
+  const { code, message } = caught as { code?: unknown; message?: unknown };
+  return typeof code === "string" && typeof message === "string";
+}
+
+/**
+ * Signs in through the identity provider in the system browser (PKCE).
+ *
+ * Only the desktop shell can receive the loopback callback, so a plain browser
+ * build gets a clear message instead of a silent failure. The renderer sends
+ * public values only: the project address, the publishable anon key and the
+ * provider name. No password is involved.
+ */
+export async function signInWithBrowser(): Promise<AuthSession> {
+  let result: BrowserLoginResult;
+  try {
+    result = await invoke<BrowserLoginResult>("start_browser_login", {
+      baseUrl: `${supabaseUrl}/auth/v1/`,
+      anonKey: supabaseAnonKey,
+      provider: browserLoginProvider,
+    });
+  } catch (caught) {
+    if (isBrowserLoginFailure(caught)) {
+      throw new ApiError(0, caught.code, caught.message, null);
+    }
+    throw new ApiError(
+      0,
+      "native_unavailable",
+      "브라우저 로그인은 데스크톱 앱에서만 쓸 수 있습니다.",
+      null,
+    );
+  }
+  if (!result.accessToken) {
+    throw new ApiError(401, "no_token", "로그인 응답에 토큰이 없습니다.", null);
+  }
+  return {
+    accessToken: result.accessToken,
+    refreshToken: result.refreshToken ?? null,
+    userId: result.userId,
+    email: result.email ?? null,
+    expiresAtMs: result.expiresInSeconds
+      ? Date.now() + result.expiresInSeconds * 1000
+      : null,
+  };
+}
+
+/** Stops an in-flight browser login. */
+export async function cancelBrowserLogin(): Promise<void> {
+  try {
+    await invoke<boolean>("cancel_browser_login");
+  } catch {
+    // 이미 끝난 시도이거나 데스크톱 앱이 아닙니다. 시도는 시간 초과로도 끝납니다.
+  }
 }
 
 /**

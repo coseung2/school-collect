@@ -115,6 +115,8 @@ jobs:
           --health-retries 20
     env:
       DATABASE_URL: postgres://school_collect:school_collect_ci@127.0.0.1:5432/school_collect
+      MIGRATION_DATABASE_URL: postgres://school_collect:school_collect_ci@127.0.0.1:5432/school_collect
+      RUNTIME_DATABASE_URL: postgres://school_collect_runtime:school_collect_runtime_ci@127.0.0.1:5432/school_collect
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
@@ -139,6 +141,18 @@ jobs:
         run: cargo test -p school-collect-db --locked
       - name: Outbox relay (database side)
         run: cargo test -p school-collect-worker --locked
+      - name: Runtime role writes rows but cannot run DDL
+        run: bash scripts/runtime_role_check.sh
+      - name: The migrator refuses to start without its own URL
+        shell: bash
+        env:
+          MIGRATION_DATABASE_URL: ""
+        run: |
+          if cargo run -p school-collect-migrator --locked > /tmp/migrator-nourl.log 2>&1; then
+            echo "the migrator ran without MIGRATION_DATABASE_URL"
+            exit 1
+          fi
+          grep -q "MIGRATION_DATABASE_URL is required" /tmp/migrator-nourl.log
       - name: Backup and restore drill
         shell: bash
         env:
@@ -253,7 +267,7 @@ jobs:
             sleep 2
           done
           docker run --rm --network school-collect-ci \
-            -e DATABASE_URL=postgres://school_collect:school_collect_ci@pg:5432/school_collect \
+            -e MIGRATION_DATABASE_URL=postgres://school_collect:school_collect_ci@pg:5432/school_collect \
             --entrypoint /usr/local/bin/school-collect-migrator \
             school-collect-server:ci
           docker run -d --name api --network school-collect-ci -p 127.0.0.1:3000:3000 \

@@ -78,6 +78,10 @@ cargo run -p school-collect-api
 pnpm --filter @school-collect/app tauri dev
 ```
 
+The migrator reads `MIGRATION_DATABASE_URL`, not `DATABASE_URL`: the schema
+owner is a separate input from the runtime role, so a runtime credential can
+never run DDL. Locally both point at the same development database.
+
 Stage 5 is replacing the diagnostic UI with the approved Figma design-system
 implementation. The current code migration is recorded in
 `docs/STAGE5_CODE_MIGRATION.md`; it adds no production data or database seed.

@@ -41,6 +41,9 @@ curl -fsS https://<api-host>/ready
 - `APP_ENV` = `staging` 또는 `production`
 - `APP_CORS_ORIGIN` = 실제 클라이언트 origin (loopback 기본값은 development 전용)
 - `DATABASE_URL` = PostgreSQL pooler 주소
+- `MIGRATION_DATABASE_URL` = schema 소유자 주소(migrator 전용). runtime
+  `DATABASE_URL`과 분리되어 있어 runtime 자격증명으로는 스키마를 바꿀 수
+  없습니다. migrator는 이 값이 없으면 기동하지 않습니다.
 - `OIDC_ISSUER_URL`, `OIDC_AUDIENCE` (`OIDC_JWKS_URL`은 discovery가 없는
   provider용 선택값)
 - 첨부 저장소(`development`가 아닌 환경에서는 둘 중 하나가 필수):
@@ -50,6 +53,20 @@ curl -fsS https://<api-host>/ready
   - 디렉터리: `APP_ATTACHMENT_DIR`(R2 변수가 없을 때만 씁니다).
 
 값은 Infisical에서 실행 시점에 주입하고, 이미지나 저장소에 넣지 않습니다.
+
+## 역할 분리 (runtime / migrator)
+
+- schema 소유자와 runtime 역할을 나눕니다. migrator만 DDL을 실행하고, api·worker는
+  업무 행만 읽고 씁니다(`SELECT`·`INSERT`·`UPDATE`·`DELETE`).
+- runtime 역할에는 `school_collect` schema의 `USAGE`, 모든 테이블의 행 권한,
+  시퀀스 `USAGE`/`SELECT`, 그리고 이후 migration이 만드는 객체를 덮는
+  `ALTER DEFAULT PRIVILEGES`를 줍니다.
+- `scripts/runtime_role_check.sh`가 실제 PostgreSQL에서 이 분리를 확인합니다.
+  runtime 역할로 `CREATE TABLE`·`ALTER TABLE`·`CREATE INDEX`가 거부되고,
+  `tenants` 행 insert·update·select·delete(rollback)는 성공해야 합니다. CI
+  `postgres` 작업이 매번 실행합니다.
+- 아직 남은 것: 실제 staging/production 역할·자격증명 생성과 연결, 그리고 그
+  역할로 운영 API를 띄운 상태의 확인입니다.
 
 ## 로컬 개발 (개발자별 Docker)
 
@@ -80,7 +97,8 @@ pnpm --filter @school-collect/app tauri dev  # 데스크톱 창
 ```
 
 빌드 시 필요한 공개 값은 `VITE_API_BASE_URL`, `VITE_SUPABASE_URL`,
-`VITE_SUPABASE_ANON_KEY`입니다. 모두 공개 값이며 서버 자격증명은 절대 `VITE_`
+`VITE_SUPABASE_ANON_KEY`, `VITE_OIDC_PROVIDER`(브라우저 로그인에 요청할
+provider, 기본 `google`)입니다. 모두 공개 값이며 서버 자격증명은 절대 `VITE_`
 변수로 들어가지 않습니다.
 
 ## 아직 결정되지 않은 것

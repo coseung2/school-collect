@@ -11,14 +11,16 @@
 //! finds nothing to talk to. The verifier stays in this process and is sent
 //! only to the token endpoint.
 //!
-//! Opening the system browser and registering the loopback redirect with the
-//! identity provider are left to the caller; the redirect allowlist entry is an
-//! owner decision, so no UI starts this flow yet.
-#![allow(dead_code)] // Wired into the login screen once the redirect allowlist is approved.
+//! `run_browser_login` is what the `start_browser_login` command calls: it
+//! opens the system browser and turns the provider's tokens into the session
+//! the renderer stores. Registering this loopback redirect with the identity
+//! provider is still an owner decision, so an attempt can only succeed once
+//! that allowlist entry exists. Tests drive the same path against a fake
+//! provider with a fake opener.
 
 use std::time::Duration;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
@@ -44,6 +46,87 @@ pub(crate) enum LoginError {
     Exchange(String),
     /// The loopback listener could not be opened.
     Listener(String),
+    /// The attempt could not be built from the given identity base URL.
+    Config(String),
+    /// The system browser could not be opened.
+    Browser(String),
+}
+
+/// Renderer-facing failure: a stable `code` the UI can branch on plus a
+/// message safe to show. Neither ever carries the verifier or a token.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LoginFailure {
+    pub(crate) code: &'static str,
+    pub(crate) message: String,
+}
+
+impl LoginFailure {
+    /// A problem the command found before the attempt started.
+    pub(crate) fn invalid_config(message: &str) -> Self {
+        Self {
+            code: "invalid_config",
+            message: message.to_string(),
+        }
+    }
+
+    /// Another attempt is already waiting for its callback.
+    pub(crate) fn already_running() -> Self {
+        Self {
+            code: "already_running",
+            message:
+                "이미 브라우저 로그인이 진행 중입니다. 끝나거나 취소된 뒤에 다시 시도해 주세요."
+                    .to_string(),
+        }
+    }
+}
+
+impl From<LoginError> for LoginFailure {
+    fn from(error: LoginError) -> Self {
+        let code = match &error {
+            LoginError::TimedOut => "timeout",
+            LoginError::Cancelled => "cancelled",
+            LoginError::Callback(_) => "callback_rejected",
+            LoginError::Exchange(_) => "exchange_failed",
+            LoginError::Listener(_) => "listener_unavailable",
+            LoginError::Config(_) => "invalid_config",
+            LoginError::Browser(_) => "browser_unavailable",
+        };
+        // The internal reasons stay inside the process: only the status the
+        // provider reported for this attempt (a short error name) is repeated.
+        let message = match error {
+            LoginError::TimedOut => {
+                "브라우저 로그인 응답을 기다리다 시간이 초과되었습니다. 다시 시도해 주세요."
+                    .to_string()
+            }
+            LoginError::Cancelled => "로그인을 취소했습니다.".to_string(),
+            LoginError::Callback(CallbackError::WrongRedirect) => {
+                "로그인 응답이 이 시도의 주소와 일치하지 않습니다.".to_string()
+            }
+            LoginError::Callback(CallbackError::StateMismatch) => {
+                "로그인 응답의 state 값이 일치하지 않아 요청을 거부했습니다.".to_string()
+            }
+            LoginError::Callback(CallbackError::MissingCode) => {
+                "로그인 응답에 인증 코드가 없습니다.".to_string()
+            }
+            LoginError::Callback(CallbackError::ProviderError(reason)) => {
+                format!("로그인 제공자가 요청을 거부했습니다({reason}).")
+            }
+            LoginError::Exchange(_) => {
+                "인증 코드를 토큰으로 바꾸지 못했습니다. 잠시 후 다시 시도해 주세요.".to_string()
+            }
+            LoginError::Listener(_) => {
+                "로그인 대기 주소를 열지 못했습니다. 다시 시도해 주세요.".to_string()
+            }
+            LoginError::Config(_) => {
+                "로그인 설정이 올바르지 않습니다. 앱 설정을 확인해 주세요.".to_string()
+            }
+            LoginError::Browser(_) => {
+                "브라우저를 열지 못했습니다. 기본 브라우저를 확인해 주세요.".to_string()
+            }
+        };
+        Self { code, message }
+    }
 }
 
 /// Tokens the provider returned for the exchanged code.
@@ -54,6 +137,52 @@ pub(crate) struct LoginTokens {
     pub(crate) refresh_token: Option<String>,
     #[serde(default)]
     pub(crate) expires_in: Option<u64>,
+    #[serde(default)]
+    pub(crate) user: Option<LoginUser>,
+}
+
+/// The public part of the provider's `user` object.
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+pub(crate) struct LoginUser {
+    #[serde(default)]
+    pub(crate) id: Option<String>,
+    #[serde(default)]
+    pub(crate) email: Option<String>,
+}
+
+/// What the renderer stores as a session: the tokens plus the identity the
+/// local drafts and the OS credential store key on.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BrowserLoginSession {
+    pub(crate) access_token: String,
+    pub(crate) refresh_token: Option<String>,
+    pub(crate) expires_in_seconds: Option<u64>,
+    pub(crate) user_id: String,
+    pub(crate) email: Option<String>,
+}
+
+/// The credential store only accepts a session whose user id is the token's
+/// own `sub`, so that subject wins; the provider's reported id is the fallback
+/// for a token that is not a JWT.
+fn session_from(tokens: LoginTokens) -> BrowserLoginSession {
+    let LoginTokens {
+        access_token,
+        refresh_token,
+        expires_in,
+        user,
+    } = tokens;
+    let user_id = crate::token_subject(&access_token)
+        .ok()
+        .or_else(|| user.as_ref().and_then(|user| user.id.clone()))
+        .unwrap_or_default();
+    BrowserLoginSession {
+        access_token,
+        refresh_token,
+        expires_in_seconds: expires_in,
+        user_id,
+        email: user.and_then(|user| user.email),
+    }
 }
 
 /// A started attempt: open `authorize_url` in the browser, then `finish`.
@@ -62,17 +191,6 @@ pub(crate) struct PendingLogin {
     redirect: Url,
     attempt: PkceAttempt,
     listener: TcpListener,
-}
-
-/// Stops a pending attempt from another task (e.g. a "cancel" button).
-pub(crate) struct CancelHandle(Option<oneshot::Sender<()>>);
-
-impl CancelHandle {
-    pub(crate) fn cancel(mut self) {
-        if let Some(sender) = self.0.take() {
-            let _ = sender.send(());
-        }
-    }
 }
 
 /// Binds the loopback listener and builds the authorize URL.
@@ -86,9 +204,9 @@ pub(crate) async fn start(auth_base: &Url, provider: &str) -> Result<PendingLogi
         .port();
     let redirect = Url::parse(&format!("http://127.0.0.1:{port}{CALLBACK_PATH}"))
         .map_err(|error| LoginError::Listener(error.to_string()))?;
-    let attempt = pkce::new_attempt().map_err(LoginError::Listener)?;
+    let attempt = pkce::new_attempt().map_err(LoginError::Config)?;
     let authorize_url = pkce::authorize_url(auth_base, provider, &redirect, &attempt)
-        .map_err(LoginError::Listener)?;
+        .map_err(LoginError::Config)?;
     Ok(PendingLogin {
         authorize_url,
         redirect,
@@ -98,11 +216,6 @@ pub(crate) async fn start(auth_base: &Url, provider: &str) -> Result<PendingLogi
 }
 
 impl PendingLogin {
-    pub(crate) fn cancel_handle(&mut self) -> (CancelHandle, oneshot::Receiver<()>) {
-        let (sender, receiver) = oneshot::channel();
-        (CancelHandle(Some(sender)), receiver)
-    }
-
     /// Waits for the callback, validates it and exchanges the code.
     pub(crate) async fn finish(
         self,
@@ -128,6 +241,37 @@ impl PendingLogin {
             .map_err(LoginError::Callback)?;
         exchange(token_endpoint, api_key, &code, &attempt.verifier).await
     }
+}
+
+/// One complete attempt: bind the loopback listener, open the provider in the
+/// system browser, wait for the single callback and exchange its code.
+///
+/// `open_browser` is injected so tests can drive the flow without a real
+/// browser; in the app it opens the system browser, which is what makes this
+/// the external-browser flow. `cancelled` ends the attempt (and closes the
+/// listener) as soon as its sender fires. The token endpoint is derived from
+/// `auth_base` (`.../auth/v1/` + `token`), so the caller only supplies the
+/// public provider address.
+pub(crate) async fn run_browser_login<F>(
+    auth_base: &Url,
+    provider: &str,
+    api_key: &str,
+    timeout: Duration,
+    open_browser: F,
+    cancelled: oneshot::Receiver<()>,
+) -> Result<BrowserLoginSession, LoginError>
+where
+    F: FnOnce(&Url) -> Result<(), String>,
+{
+    let token_endpoint = auth_base
+        .join("token")
+        .map_err(|error| LoginError::Config(error.to_string()))?;
+    let pending = start(auth_base, provider).await?;
+    open_browser(&pending.authorize_url).map_err(LoginError::Browser)?;
+    let tokens = pending
+        .finish(&token_endpoint, api_key, timeout, cancelled)
+        .await?;
+    Ok(session_from(tokens))
 }
 
 /// Reads one HTTP request line from the loopback socket, answers with a short
@@ -268,7 +412,8 @@ mod tests {
                     Json(serde_json::json!({
                         "access_token": "access-from-fake",
                         "refresh_token": "refresh-from-fake",
-                        "expires_in": 3600
+                        "expires_in": 3600,
+                        "user": { "id": "fake-user", "email": "teacher@example.test" }
                     })),
                 )
                     .into_response()
@@ -296,6 +441,16 @@ mod tests {
 
     fn auth_base() -> Url {
         Url::parse("https://project.example.test/auth/v1/").unwrap()
+    }
+
+    /// The provider base the command resolves `token` against. Pointing it at
+    /// the fake provider's own loopback root lets the whole command path,
+    /// including the token exchange, run against the fake.
+    fn provider_base(token_endpoint: &Url) -> Url {
+        let mut base = token_endpoint.clone();
+        base.set_path("/auth/v1/");
+        base.set_query(None);
+        base
     }
 
     /// The redirect and state the authorize URL asked the provider to use.
@@ -336,12 +491,12 @@ mod tests {
     async fn a_matching_callback_is_exchanged_with_the_verifier() {
         let challenge = Arc::new(Mutex::new(String::new()));
         let (token_endpoint, seen) = fake_provider(challenge.clone()).await;
-        let mut pending = start(&auth_base(), "google").await.unwrap();
+        let pending = start(&auth_base(), "google").await.unwrap();
         *challenge.lock().unwrap() = challenge_of(&pending.authorize_url);
         let (redirect, state) = redirect_and_state(&pending.authorize_url);
         assert_eq!(redirect.host_str(), Some("127.0.0.1"));
 
-        let (_cancel, cancelled) = pending.cancel_handle();
+        let (_cancel, cancelled) = oneshot::channel();
         let browser = tokio::spawn(browser_calls(format!(
             "{redirect}?state={state}&code=good-code"
         )));
@@ -377,9 +532,9 @@ mod tests {
         let challenge = Arc::new(Mutex::new(String::new()));
         let (token_endpoint, seen) = fake_provider(challenge).await;
 
-        let mut pending = start(&auth_base(), "google").await.unwrap();
+        let pending = start(&auth_base(), "google").await.unwrap();
         let (redirect, _) = redirect_and_state(&pending.authorize_url);
-        let (_cancel, cancelled) = pending.cancel_handle();
+        let (_cancel, cancelled) = oneshot::channel();
         tokio::spawn(browser_calls(format!(
             "{redirect}?state=someone-else&code=good-code"
         )));
@@ -389,9 +544,9 @@ mod tests {
             .unwrap_err();
         assert_eq!(error, LoginError::Callback(CallbackError::StateMismatch));
 
-        let mut pending = start(&auth_base(), "google").await.unwrap();
+        let pending = start(&auth_base(), "google").await.unwrap();
         let (redirect, state) = redirect_and_state(&pending.authorize_url);
-        let (_cancel, cancelled) = pending.cancel_handle();
+        let (_cancel, cancelled) = oneshot::channel();
         tokio::spawn(browser_calls(format!(
             "{redirect}?state={state}&error=access_denied"
         )));
@@ -411,10 +566,10 @@ mod tests {
     async fn a_rejected_code_is_an_exchange_error() {
         let challenge = Arc::new(Mutex::new(String::new()));
         let (token_endpoint, _) = fake_provider(challenge.clone()).await;
-        let mut pending = start(&auth_base(), "google").await.unwrap();
+        let pending = start(&auth_base(), "google").await.unwrap();
         *challenge.lock().unwrap() = challenge_of(&pending.authorize_url);
         let (redirect, state) = redirect_and_state(&pending.authorize_url);
-        let (_cancel, cancelled) = pending.cancel_handle();
+        let (_cancel, cancelled) = oneshot::channel();
         tokio::spawn(browser_calls(format!(
             "{redirect}?state={state}&code=stale-code"
         )));
@@ -433,15 +588,15 @@ mod tests {
         let challenge = Arc::new(Mutex::new(String::new()));
         let (token_endpoint, _) = fake_provider(challenge).await;
 
-        let mut pending = start(&auth_base(), "google").await.unwrap();
+        let pending = start(&auth_base(), "google").await.unwrap();
         let (redirect, state) = redirect_and_state(&pending.authorize_url);
-        let (cancel, cancelled) = pending.cancel_handle();
+        let (cancel, cancelled) = oneshot::channel();
         let finishing = tokio::spawn(async move {
             pending
                 .finish(&token_endpoint, "anon", Duration::from_secs(30), cancelled)
                 .await
         });
-        cancel.cancel();
+        let _ = cancel.send(());
         assert_eq!(finishing.await.unwrap().unwrap_err(), LoginError::Cancelled);
         assert_eq!(
             browser_calls(format!("{redirect}?state={state}&code=good-code")).await,
@@ -451,8 +606,8 @@ mod tests {
 
         let challenge = Arc::new(Mutex::new(String::new()));
         let (token_endpoint, _) = fake_provider(challenge).await;
-        let mut pending = start(&auth_base(), "google").await.unwrap();
-        let (_cancel, cancelled) = pending.cancel_handle();
+        let pending = start(&auth_base(), "google").await.unwrap();
+        let (_cancel, cancelled) = oneshot::channel();
         let error = pending
             .finish(
                 &token_endpoint,
@@ -467,9 +622,9 @@ mod tests {
 
     #[tokio::test]
     async fn a_plain_http_token_endpoint_is_refused() {
-        let mut pending = start(&auth_base(), "google").await.unwrap();
+        let pending = start(&auth_base(), "google").await.unwrap();
         let (redirect, state) = redirect_and_state(&pending.authorize_url);
-        let (_cancel, cancelled) = pending.cancel_handle();
+        let (_cancel, cancelled) = oneshot::channel();
         tokio::spawn(browser_calls(format!(
             "{redirect}?state={state}&code=good-code"
         )));
@@ -483,5 +638,230 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(error, LoginError::Exchange(message) if message.contains("https")));
+    }
+
+    /// Plays the browser for the command-layer function: remembers the
+    /// authorize URL the app asked for, then sends the provider's redirect to
+    /// the loopback callback.
+    fn fake_opener(
+        authorize_url: Arc<Mutex<Option<Url>>>,
+        challenge: Arc<Mutex<String>>,
+    ) -> impl FnOnce(&Url) -> Result<(), String> {
+        move |authorize| {
+            *authorize_url.lock().unwrap() = Some(authorize.clone());
+            *challenge.lock().unwrap() = challenge_of(authorize);
+            let (redirect, state) = redirect_and_state(authorize);
+            tokio::spawn(browser_calls(format!(
+                "{redirect}?state={state}&code=good-code"
+            )));
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn the_command_path_runs_authorize_callback_and_exchange() {
+        let challenge = Arc::new(Mutex::new(String::new()));
+        let (token_endpoint, seen) = fake_provider(challenge.clone()).await;
+        let base = provider_base(&token_endpoint);
+        let authorize_url = Arc::new(Mutex::new(None));
+
+        let (_cancel, cancelled) = oneshot::channel();
+        let session = run_browser_login(
+            &base,
+            "google",
+            "anon",
+            Duration::from_secs(10),
+            fake_opener(authorize_url.clone(), challenge.clone()),
+            cancelled,
+        )
+        .await
+        .unwrap();
+
+        // The opened URL is the provider's authorize endpoint, carries the
+        // S256 challenge, and redirects only to a loopback port.
+        let authorize = authorize_url.lock().unwrap().clone().unwrap();
+        assert_eq!(authorize.path(), "/auth/v1/authorize");
+        let pairs: Vec<(String, String)> = authorize.query_pairs().into_owned().collect();
+        assert!(pairs.contains(&("provider".to_string(), "google".to_string())));
+        assert!(pairs.contains(&("code_challenge_method".to_string(), "s256".to_string())));
+        let (redirect, _) = redirect_and_state(&authorize);
+        assert_eq!(redirect.host_str(), Some("127.0.0.1"));
+        // The verifier never rides on the URL the browser opens.
+        assert!(
+            !authorize
+                .query_pairs()
+                .any(|(key, _)| key == "code_verifier")
+        );
+
+        // The code was exchanged once, with the verifier that matches the
+        // challenge the authorize URL carried.
+        let bodies = seen.0.lock().unwrap().clone();
+        assert_eq!(bodies.len(), 1);
+        assert_eq!(bodies[0]["auth_code"], "good-code");
+        assert_eq!(
+            pkce::challenge_for(bodies[0]["code_verifier"].as_str().unwrap()),
+            *challenge.lock().unwrap()
+        );
+
+        // The renderer receives the session fields it stores.
+        assert_eq!(session.access_token, "access-from-fake");
+        assert_eq!(session.refresh_token.as_deref(), Some("refresh-from-fake"));
+        assert_eq!(session.expires_in_seconds, Some(3600));
+        assert_eq!(session.user_id, "fake-user");
+        assert_eq!(session.email.as_deref(), Some("teacher@example.test"));
+    }
+
+    #[tokio::test]
+    async fn cancel_through_the_command_path_closes_the_listener() {
+        let (token_endpoint, _) = fake_provider(Arc::new(Mutex::new(String::new()))).await;
+        let base = provider_base(&token_endpoint);
+        let (send_redirect, redirect_seen) = oneshot::channel();
+        let (cancel, cancelled) = oneshot::channel();
+
+        let running = tokio::spawn(async move {
+            run_browser_login(
+                &base,
+                "google",
+                "anon",
+                Duration::from_secs(30),
+                move |authorize: &Url| {
+                    let (redirect, _) = redirect_and_state(authorize);
+                    let _ = send_redirect.send(redirect);
+                    Ok(())
+                },
+                cancelled,
+            )
+            .await
+        });
+
+        let redirect = redirect_seen.await.unwrap();
+        let _ = cancel.send(());
+        assert_eq!(running.await.unwrap().unwrap_err(), LoginError::Cancelled);
+        assert_eq!(
+            browser_calls(format!("{redirect}?state=late&code=good-code")).await,
+            None,
+            "cancelling closes the loopback listener"
+        );
+    }
+
+    #[tokio::test]
+    async fn timeout_through_the_command_path_closes_the_listener() {
+        let (token_endpoint, seen) = fake_provider(Arc::new(Mutex::new(String::new()))).await;
+        let base = provider_base(&token_endpoint);
+        let (send_redirect, redirect_seen) = oneshot::channel();
+
+        let (_cancel, cancelled) = oneshot::channel();
+        let error = run_browser_login(
+            &base,
+            "google",
+            "anon",
+            Duration::from_millis(150),
+            move |authorize: &Url| {
+                let (redirect, _) = redirect_and_state(authorize);
+                let _ = send_redirect.send(redirect);
+                Ok(())
+            },
+            cancelled,
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error, LoginError::TimedOut);
+        let redirect = redirect_seen.await.unwrap();
+        assert_eq!(
+            browser_calls(format!("{redirect}?state=late&code=good-code")).await,
+            None,
+            "a callback after the deadline finds no listener"
+        );
+        assert!(seen.0.lock().unwrap().is_empty(), "no code was exchanged");
+    }
+
+    /// Unsigned JWT-shaped token carrying only a subject, as the identity
+    /// provider's access token shape is.
+    fn jwt_with_subject(subject: &str) -> String {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none","typ":"JWT"}"#);
+        let claims = URL_SAFE_NO_PAD.encode(format!(r#"{{"sub":"{subject}"}}"#));
+        format!("{header}.{claims}.signature")
+    }
+
+    #[test]
+    fn the_session_owner_is_the_token_subject() {
+        let session = session_from(LoginTokens {
+            access_token: jwt_with_subject("user-9"),
+            refresh_token: Some("refresh".to_string()),
+            expires_in: Some(60),
+            user: Some(LoginUser {
+                id: Some("different-id".to_string()),
+                email: Some("teacher@example.test".to_string()),
+            }),
+        });
+        assert_eq!(session.user_id, "user-9");
+        assert_eq!(session.email.as_deref(), Some("teacher@example.test"));
+        assert_eq!(session.expires_in_seconds, Some(60));
+
+        // A token the app cannot read falls back to the provider's own id.
+        let opaque = session_from(LoginTokens {
+            access_token: "opaque-token".to_string(),
+            refresh_token: None,
+            expires_in: None,
+            user: Some(LoginUser {
+                id: Some("user-1".to_string()),
+                email: None,
+            }),
+        });
+        assert_eq!(opaque.user_id, "user-1");
+        assert_eq!(opaque.expires_in_seconds, None);
+    }
+
+    #[test]
+    fn failures_are_a_stable_code_and_a_safe_message() {
+        for (error, code) in [
+            (LoginError::TimedOut, "timeout"),
+            (LoginError::Cancelled, "cancelled"),
+            (
+                LoginError::Callback(CallbackError::StateMismatch),
+                "callback_rejected",
+            ),
+            (
+                LoginError::Exchange("secret".to_string()),
+                "exchange_failed",
+            ),
+            (
+                LoginError::Listener("socket detail".to_string()),
+                "listener_unavailable",
+            ),
+            (
+                LoginError::Config("base detail".to_string()),
+                "invalid_config",
+            ),
+            (
+                LoginError::Browser("opener detail".to_string()),
+                "browser_unavailable",
+            ),
+        ] {
+            let failure = LoginFailure::from(error);
+            assert_eq!(failure.code, code);
+            assert!(!failure.message.trim().is_empty());
+            // Internal reasons never reach the renderer as-is.
+            assert!(!failure.message.contains("detail"));
+        }
+
+        assert_eq!(
+            LoginFailure::from(LoginError::Cancelled).message,
+            "로그인을 취소했습니다."
+        );
+        assert!(
+            LoginFailure::from(LoginError::Callback(CallbackError::ProviderError(
+                "access_denied".to_string()
+            )))
+            .message
+            .contains("access_denied")
+        );
+        assert_eq!(LoginFailure::already_running().code, "already_running");
+        assert_eq!(
+            LoginFailure::invalid_config("문제가 있습니다.").code,
+            "invalid_config"
+        );
     }
 }

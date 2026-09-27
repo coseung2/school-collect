@@ -1,10 +1,12 @@
 //! R2 adapter against a loopback S3 stand-in.
 //!
-//! The stand-in keeps objects in memory and refuses any request whose
-//! `Authorization` header or presigned query does not carry the expected
-//! access key and a SigV4 algorithm, so a wrong request shape fails here long
-//! before a real bucket exists. The signature value itself is covered by the
-//! AWS reference vectors in `r2.rs`.
+//! The stand-in keeps objects in memory and recomputes the SigV4
+//! `Authorization` header from what each request actually carries (method,
+//! path, `Host`, `x-amz-date`, `x-amz-content-sha256` and content type),
+//! refusing a mismatch with 403 `SignatureDoesNotMatch`. A signature that
+//! covers a different host than the one on the wire is therefore caught here,
+//! long before a real bucket exists. The signature value itself is also
+//! checked against the AWS reference vectors in `r2.rs`.
 
 use std::{
     collections::HashMap,
@@ -16,65 +18,65 @@ use axum::{
     Router,
     body::Bytes,
     extract::{Path, RawQuery, State},
-    http::{HeaderMap, Method, StatusCode},
-    response::IntoResponse,
+    http::{HeaderMap, Method, StatusCode, Uri},
+    response::{IntoResponse, Response},
     routing::any,
 };
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use school_collect_application::{
-    r2::{R2Config, R2Storage},
+    r2::{R2Config, R2Storage, authorization_header_for_test},
     storage::ObjectStorage,
 };
+use sha2::{Digest, Sha256};
 
 const ACCESS_KEY: &str = "test-access-key";
+const SECRET_KEY: &str = "test-secret";
+const BUCKET: &str = "school-collect-test";
 
 /// Object bytes and the content type they were stored with, by key.
 type Objects = HashMap<String, (Vec<u8>, String)>;
 
-#[derive(Clone, Default)]
-struct Bucket {
+#[derive(Clone)]
+struct Stand {
     objects: Arc<Mutex<Objects>>,
     seen: Arc<Mutex<Vec<String>>>,
+    config: Arc<R2Config>,
 }
 
 async fn handle(
-    State(bucket): State<Bucket>,
+    State(stand): State<Stand>,
     method: Method,
+    uri: Uri,
     Path((name, key)): Path<(String, String)>,
     RawQuery(query): RawQuery,
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
     let query = query.unwrap_or_default();
-    let header_auth = headers
-        .get("authorization")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default();
-    let signed_by_header = header_auth.starts_with("AWS4-HMAC-SHA256 ")
-        && header_auth.contains(&format!("Credential={ACCESS_KEY}/"))
-        && header_auth.contains("Signature=")
-        && headers.contains_key("x-amz-date")
-        && headers.contains_key("x-amz-content-sha256");
-    let signed_by_query = query.contains("X-Amz-Algorithm=AWS4-HMAC-SHA256")
-        && query.contains(&format!("X-Amz-Credential={ACCESS_KEY}%2F"))
-        && query.contains("X-Amz-Signature=");
-    if name != "school-collect-test" || !(signed_by_header || signed_by_query) {
-        return (
-            StatusCode::FORBIDDEN,
-            "<Error><Code>AccessDenied</Code></Error>",
-        )
-            .into_response();
+    if name != BUCKET {
+        return deny("AccessDenied");
     }
-    bucket.seen.lock().unwrap().push(format!(
-        "{method} {key} {}",
-        if signed_by_query {
-            "presigned"
-        } else {
-            "header"
+    let presigned = headers.get("authorization").is_none();
+    if presigned {
+        // The presigned round-trip only has to be accepted; its signature is
+        // exercised by the AWS reference vector in `r2.rs`.
+        if !query.contains("X-Amz-Algorithm=AWS4-HMAC-SHA256")
+            || !query.contains(&format!("X-Amz-Credential={ACCESS_KEY}%2F"))
+            || !query.contains("X-Amz-Signature=")
+        {
+            return deny("AccessDenied");
         }
+    } else if let Err(code) =
+        verify_header_signature(&stand.config, method.as_str(), uri.path(), &headers, &body)
+    {
+        return deny(code);
+    }
+    stand.seen.lock().unwrap().push(format!(
+        "{method} {key} {}",
+        if presigned { "presigned" } else { "header" }
     ));
 
-    let mut objects = bucket.objects.lock().unwrap();
+    let mut objects = stand.objects.lock().unwrap();
     match method {
         Method::PUT => {
             let content_type = headers
@@ -101,33 +103,114 @@ async fn handle(
     }
 }
 
-async fn start() -> (String, Bucket) {
-    let bucket = Bucket::default();
-    let app = Router::new()
-        .route("/{name}/{*key}", any(handle))
-        .with_state(bucket.clone());
+fn deny(code: &str) -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        format!("<Error><Code>{code}</Code></Error>"),
+    )
+        .into_response()
+}
+
+/// Reads one `Key=value` field out of the comma-separated `Authorization`
+/// header, stopping before the next field.
+fn auth_field<'a>(auth: &'a str, key: &str) -> Option<&'a str> {
+    let rest = auth.split_once(key)?.1;
+    let end = rest.find(", ").unwrap_or(rest.len());
+    Some(&rest[..end])
+}
+
+fn parse_amz_date(value: &str) -> Option<DateTime<Utc>> {
+    chrono::NaiveDateTime::parse_from_str(value, "%Y%m%dT%H%M%SZ")
+        .ok()
+        .map(|naive| naive.and_utc())
+}
+
+/// Recomputes the client's signature from the request as received.
+///
+/// The `Host` header, path, method, signed header set and payload hash all
+/// come from the wire, so a signature computed over a different authority
+/// (for example the raw, un-normalized endpoint) cannot match. Returns the S3
+/// error code to answer with when the request is not acceptable.
+fn verify_header_signature(
+    config: &R2Config,
+    method: &str,
+    path: &str,
+    headers: &HeaderMap,
+    body: &[u8],
+) -> Result<(), &'static str> {
+    let auth = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .ok_or("AccessDenied")?;
+    if !auth.starts_with("AWS4-HMAC-SHA256 ") {
+        return Err("AccessDenied");
+    }
+    let key_id = auth_field(auth, "Credential=")
+        .and_then(|credential| credential.split_once('/'))
+        .map(|(key_id, _scope)| key_id)
+        .ok_or("AccessDenied")?;
+    if key_id != config.access_key_id {
+        return Err("AccessDenied");
+    }
+
+    let signed_headers = auth_field(auth, "SignedHeaders=").ok_or("SignatureDoesNotMatch")?;
+    let mut signed = Vec::new();
+    for name in signed_headers.split(';').filter(|name| !name.is_empty()) {
+        let value = headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .ok_or("SignatureDoesNotMatch")?;
+        signed.push((name.to_owned(), value.to_owned()));
+    }
+
+    let payload_hash = headers
+        .get("x-amz-content-sha256")
+        .and_then(|value| value.to_str().ok())
+        .ok_or("SignatureDoesNotMatch")?;
+    if payload_hash != hex::encode(Sha256::digest(body)) {
+        return Err("XAmzContentSHA256Mismatch");
+    }
+    let date = headers
+        .get("x-amz-date")
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse_amz_date)
+        .ok_or("SignatureDoesNotMatch")?;
+
+    let expected = authorization_header_for_test(config, method, path, &signed, payload_hash, date);
+    if expected != auth {
+        return Err("SignatureDoesNotMatch");
+    }
+    Ok(())
+}
+
+async fn start() -> (R2Config, Stand) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
+    let config = R2Config {
+        endpoint: format!("http://{address}"),
+        bucket: BUCKET.into(),
+        access_key_id: ACCESS_KEY.into(),
+        secret_access_key: SECRET_KEY.into(),
+        region: "auto".into(),
+    };
+    let stand = Stand {
+        objects: Arc::default(),
+        seen: Arc::default(),
+        config: Arc::new(config.clone()),
+    };
+    let app = Router::new()
+        .route("/{name}/{*key}", any(handle))
+        .with_state(stand.clone());
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
-    (format!("http://{address}"), bucket)
-}
-
-fn config(endpoint: &str, secret: &str) -> R2Config {
-    R2Config {
-        endpoint: endpoint.to_owned(),
-        bucket: "school-collect-test".into(),
-        access_key_id: ACCESS_KEY.into(),
-        secret_access_key: secret.into(),
-        region: "auto".into(),
-    }
+    (config, stand)
 }
 
 #[tokio::test]
 async fn the_adapter_round_trips_objects_through_an_s3_api() {
-    let (endpoint, bucket) = start().await;
-    let storage = R2Storage::new(config(&endpoint, "test-secret")).unwrap();
+    let (config, stand) = start().await;
+    let storage = R2Storage::new(config).unwrap();
     let key = "tenants/0190-aa/attachments/0190-bb";
 
     assert_eq!(
@@ -140,7 +223,7 @@ async fn the_adapter_round_trips_objects_through_an_s3_api() {
         .await
         .unwrap();
     assert_eq!(
-        bucket
+        stand
             .objects
             .lock()
             .unwrap()
@@ -173,7 +256,7 @@ async fn the_adapter_round_trips_objects_through_an_s3_api() {
         Some(b"direct upload".to_vec())
     );
 
-    let seen = bucket.seen.lock().unwrap().clone();
+    let seen = stand.seen.lock().unwrap().clone();
     assert!(
         seen.iter()
             .any(|line| line == &format!("PUT {key} presigned"))
@@ -183,8 +266,7 @@ async fn the_adapter_round_trips_objects_through_an_s3_api() {
 
 #[tokio::test]
 async fn provider_refusals_surface_as_storage_failures() {
-    let (endpoint, _) = start().await;
-    let mut wrong = config(&endpoint, "test-secret");
+    let (mut wrong, _) = start().await;
     wrong.access_key_id = "someone-else".into();
     let storage = R2Storage::new(wrong).unwrap();
     let error = storage
@@ -200,4 +282,50 @@ async fn provider_refusals_surface_as_storage_failures() {
         !error.contains("test-secret"),
         "errors never echo the secret"
     );
+}
+
+/// Regression for the signing/transport host mismatch: the signature covers a
+/// host without the port that the request actually carries.
+#[tokio::test]
+async fn a_request_signed_for_a_different_host_is_rejected() {
+    let (config, _) = start().await;
+    let key = "tenants/0190-aa/attachments/0190-bb";
+    let path = format!("/{BUCKET}/{key}");
+    let body = b"tampered";
+    let payload_hash = hex::encode(Sha256::digest(body));
+    let now = Utc::now();
+    let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
+    // Sign for the bare loopback host, then send to the endpoint that carries
+    // its (non-default) port, so the signed `Host` differs from the wire one.
+    let signed_host = config
+        .endpoint
+        .split_once("://")
+        .unwrap()
+        .1
+        .split(':')
+        .next()
+        .unwrap()
+        .to_owned();
+    let signed = vec![
+        ("host".to_owned(), signed_host),
+        ("x-amz-content-sha256".to_owned(), payload_hash.clone()),
+        ("x-amz-date".to_owned(), amz_date.clone()),
+        ("content-type".to_owned(), "text/plain".to_owned()),
+    ];
+    let authorization =
+        authorization_header_for_test(&config, "PUT", &path, &signed, &payload_hash, now);
+
+    let response = reqwest::Client::new()
+        .put(format!("{}{path}", config.endpoint))
+        .header("authorization", authorization)
+        .header("x-amz-content-sha256", payload_hash)
+        .header("x-amz-date", amz_date)
+        .header("content-type", "text/plain")
+        .body(body.to_vec())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let text = response.text().await.unwrap();
+    assert!(text.contains("SignatureDoesNotMatch"), "{text}");
 }

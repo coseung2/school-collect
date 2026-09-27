@@ -8,7 +8,9 @@ use std::{future::Future, sync::Arc, time::Duration};
 
 use chrono::Utc;
 use school_collect_application::storage::ObjectStorage;
-use school_collect_db::{expired_attachments, purge_attachment};
+use school_collect_db::{
+    expired_attachments, orphaned_attachments, purge_attachment, purge_attachment_orphan,
+};
 use sqlx::PgPool;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -17,7 +19,9 @@ pub struct PurgeReport {
     pub considered: usize,
     /// Attachments whose bytes and row are gone.
     pub purged: usize,
-    /// Attachments the storage refused; they stay for the next pass.
+    /// Objects whose owning row was gone and whose bytes are now removed too.
+    pub orphans_removed: usize,
+    /// Attachments or objects the storage refused; they stay for the next pass.
     pub failed: usize,
 }
 
@@ -55,6 +59,32 @@ pub async fn purge_expired_attachments(
         }
     }
 
+    // Bytes whose owning row is gone: a taken-over attempt's object, or one
+    // whose cleanup delete failed. They have no metadata left to age out, so
+    // they are removed here instead of lingering untracked in the bucket.
+    let orphans = orphaned_attachments(pool, batch).await?;
+    for orphan in orphans {
+        match storage.delete(&orphan.object_key).await {
+            Ok(()) => {
+                purge_attachment_orphan(pool, orphan.id).await?;
+                report.orphans_removed += 1;
+                tracing::info!(
+                    orphan.id = %orphan.id,
+                    tenant.id = %orphan.tenant_id,
+                    "untracked attachment bytes removed"
+                );
+            }
+            Err(error) => {
+                report.failed += 1;
+                tracing::warn!(
+                    orphan.id = %orphan.id,
+                    reason = %error,
+                    "untracked attachment bytes could not be removed; retrying later"
+                );
+            }
+        }
+    }
+
     Ok(report)
 }
 
@@ -73,6 +103,7 @@ pub async fn run_sweep_until_shutdown(
                 tracing::info!(
                     considered = report.considered,
                     purged = report.purged,
+                    orphans_removed = report.orphans_removed,
                     failed = report.failed,
                     "attachment sweep finished"
                 );

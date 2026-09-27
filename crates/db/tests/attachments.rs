@@ -155,6 +155,31 @@ fn slot(tenant_id: Uuid, item_key: &str, file_name: &str, byte_size: i64) -> New
     }
 }
 
+/// Takes a slot and marks its bytes stored, the way the API does after a `PUT`.
+async fn store_slot(fixture: &Fixture, attachment_id: Uuid, byte_size: i64) {
+    let claim = claim_attachment_upload(&fixture.pool, fixture.tenant, attachment_id, Utc::now())
+        .await
+        .expect("claim");
+    let ClaimUploadOutcome::Claimed { record, .. } = claim else {
+        panic!("the slot must be claimable: {claim:?}");
+    };
+    let outcome = complete_attachment(
+        &fixture.pool,
+        fixture.tenant,
+        attachment_id,
+        record.upload_attempt_id.expect("an attempt id"),
+        byte_size,
+        &"d".repeat(64),
+        Utc::now(),
+    )
+    .await
+    .expect("complete");
+    assert!(
+        matches!(outcome, CompleteAttachmentOutcome::Stored(_)),
+        "the slot must store: {outcome:?}"
+    );
+}
+
 #[tokio::test]
 async fn a_target_opens_a_slot_and_the_server_completes_it() {
     let Some(url) = database_url() else {
@@ -190,11 +215,46 @@ async fn a_target_opens_a_slot_and_the_server_completes_it() {
     assert!(created.checksum_sha256.is_none());
     assert!(created.stored_at.is_none());
 
+    // The slot's own key is a placeholder nobody writes to: the claim gives the
+    // attempt its own object, so two writers can never share one.
+    let claim = claim_attachment_upload(&fixture.pool, fixture.tenant, created.id, Utc::now())
+        .await
+        .expect("claim");
+    let ClaimUploadOutcome::Claimed {
+        record: claimed,
+        superseded_object_key,
+    } = claim
+    else {
+        panic!("the owner must take the slot: {claim:?}");
+    };
+    assert!(
+        superseded_object_key.is_none(),
+        "the first claim replaces no object"
+    );
+    assert_eq!(claimed.status, "uploading");
+    assert_ne!(claimed.object_key, object_key);
+    let attempt = claimed.upload_attempt_id.expect("an attempt id");
+
+    // A writer that does not own the slot cannot complete it.
+    let stranger = complete_attachment(
+        &fixture.pool,
+        fixture.tenant,
+        created.id,
+        Uuid::now_v7(),
+        2048,
+        &"f".repeat(64),
+        Utc::now(),
+    )
+    .await
+    .expect("complete");
+    assert!(matches!(stranger, CompleteAttachmentOutcome::ClaimLost));
+
     // The declared size is a promise: a different body must not be accepted.
     let mismatch = complete_attachment(
         &fixture.pool,
         fixture.tenant,
         created.id,
+        attempt,
         1024,
         &"a".repeat(64),
         Utc::now(),
@@ -208,16 +268,17 @@ async fn a_target_opens_a_slot_and_the_server_completes_it() {
             received: 1024
         }
     ));
-    let still_pending = get_attachment(&fixture.pool, fixture.tenant, created.id)
+    let still_uploading = get_attachment(&fixture.pool, fixture.tenant, created.id)
         .await
         .expect("get")
         .expect("row");
-    assert_eq!(still_pending.status, "pending");
+    assert_eq!(still_uploading.status, "uploading");
 
     let stored = complete_attachment(
         &fixture.pool,
         fixture.tenant,
         created.id,
+        attempt,
         2048,
         &"b".repeat(64),
         Utc::now(),
@@ -239,6 +300,7 @@ async fn a_target_opens_a_slot_and_the_server_completes_it() {
         &fixture.pool,
         fixture.tenant,
         created.id,
+        attempt,
         2048,
         &"b".repeat(64),
         Utc::now(),
@@ -754,9 +816,18 @@ async fn concurrent_requests_cannot_break_attachment_rules() {
     )
     .await
     .expect("draft");
-    school_collect_db::submit(&fixture.pool, fixture.tenant, collect, fixture.contributor)
-        .await
-        .expect("submit");
+    // The answer can only be handed in once every opened slot holds its bytes.
+    for id in &created {
+        store_slot(&fixture, *id, 10).await;
+    }
+    let sent =
+        school_collect_db::submit(&fixture.pool, fixture.tenant, collect, fixture.contributor)
+            .await
+            .expect("submit");
+    assert!(
+        matches!(sent, school_collect_db::SubmitOutcome::Submitted(_)),
+        "every slot is stored, so the answer goes through: {sent:?}"
+    );
     let refused = delete_attachment(
         &fixture.pool,
         fixture.tenant,
@@ -827,48 +898,127 @@ async fn one_upload_owns_a_slot_at_a_time() {
                 .expect("claim")
         }));
     }
-    let mut claimed = 0;
+    let mut claimed = Vec::new();
     let mut busy = 0;
     for task in tasks {
         match task.await.expect("join") {
-            ClaimUploadOutcome::Claimed(_) => claimed += 1,
+            ClaimUploadOutcome::Claimed { record, .. } => claimed.push(record),
             ClaimUploadOutcome::Busy => busy += 1,
             other => panic!("unexpected claim outcome: {other:?}"),
         }
     }
-    assert_eq!((claimed, busy), (1, 7), "one writer, everyone else refused");
+    assert_eq!(
+        (claimed.len(), busy),
+        (1, 7),
+        "one writer, everyone else refused"
+    );
+    let first = claimed.into_iter().next().expect("the winner");
+    let first_attempt = first.upload_attempt_id.expect("an attempt id");
+    let first_key = first.object_key.clone();
+    assert_ne!(first_key, slot_row.object_key);
 
-    // A failed upload hands the slot back and the owner can retry.
-    release_attachment_upload(&fixture.pool, fixture.tenant, slot_row.id, Utc::now())
+    // A failed upload hands the slot back, but only the attempt that still owns
+    // it may release it: a superseded writer must not reopen the slot.
+    assert!(
+        !release_attachment_upload(
+            &fixture.pool,
+            fixture.tenant,
+            slot_row.id,
+            Uuid::now_v7(),
+            Utc::now(),
+        )
         .await
-        .expect("release");
-    assert!(matches!(
-        claim_attachment_upload(&fixture.pool, fixture.tenant, slot_row.id, Utc::now())
-            .await
-            .expect("claim again"),
-        ClaimUploadOutcome::Claimed(_)
-    ));
+        .expect("foreign release"),
+        "a writer that does not own the slot cannot release it"
+    );
+    assert!(
+        release_attachment_upload(
+            &fixture.pool,
+            fixture.tenant,
+            slot_row.id,
+            first_attempt,
+            Utc::now(),
+        )
+        .await
+        .expect("release"),
+        "the owner hands the slot back"
+    );
+
+    // The retry starts a new attempt with its own object; the previous object is
+    // reported so its bytes can be removed instead of becoming untracked.
+    let retry = claim_attachment_upload(&fixture.pool, fixture.tenant, slot_row.id, Utc::now())
+        .await
+        .expect("claim again");
+    let ClaimUploadOutcome::Claimed {
+        record: second,
+        superseded_object_key,
+    } = retry
+    else {
+        panic!("the owner can retry: {retry:?}");
+    };
+    let second_attempt = second.upload_attempt_id.expect("an attempt id");
+    assert_eq!(superseded_object_key.as_deref(), Some(first_key.as_str()));
+    assert_ne!(second.object_key, first_key);
 
     // A claim left behind by a crashed request is taken over after the timeout.
-    let later = Utc::now() + Duration::seconds(UPLOAD_CLAIM_TIMEOUT_SECONDS + 1);
     assert!(matches!(
         claim_attachment_upload(&fixture.pool, fixture.tenant, slot_row.id, Utc::now())
             .await
             .expect("claim while held"),
         ClaimUploadOutcome::Busy
     ));
-    assert!(matches!(
-        claim_attachment_upload(&fixture.pool, fixture.tenant, slot_row.id, later)
-            .await
-            .expect("claim after timeout"),
-        ClaimUploadOutcome::Claimed(_)
-    ));
+    let later = Utc::now() + Duration::seconds(UPLOAD_CLAIM_TIMEOUT_SECONDS + 1);
+    let takeover = claim_attachment_upload(&fixture.pool, fixture.tenant, slot_row.id, later)
+        .await
+        .expect("claim after timeout");
+    let ClaimUploadOutcome::Claimed {
+        record: third,
+        superseded_object_key,
+    } = takeover
+    else {
+        panic!("the abandoned claim is taken over: {takeover:?}");
+    };
+    let third_attempt = third.upload_attempt_id.expect("an attempt id");
+    assert_eq!(
+        superseded_object_key.as_deref(),
+        Some(second.object_key.as_str()),
+        "the taken-over attempt's object is reported for removal"
+    );
 
-    // Completing ends the claim; the slot can no longer be claimed.
+    // The superseded writer can neither complete the slot nor reopen it, so the
+    // bytes it wrote cannot be recorded as this attachment's content.
+    assert!(matches!(
+        complete_attachment(
+            &fixture.pool,
+            fixture.tenant,
+            slot_row.id,
+            second_attempt,
+            10,
+            &"b".repeat(64),
+            later,
+        )
+        .await
+        .expect("complete after takeover"),
+        CompleteAttachmentOutcome::ClaimLost
+    ));
+    assert!(
+        !release_attachment_upload(
+            &fixture.pool,
+            fixture.tenant,
+            slot_row.id,
+            second_attempt,
+            later,
+        )
+        .await
+        .expect("release after takeover")
+    );
+
+    // The holder completes it; the slot can no longer be claimed.
     let stored = complete_attachment(
         &fixture.pool,
         fixture.tenant,
         slot_row.id,
+        third_attempt,
         10,
         &"c".repeat(64),
         later,
@@ -882,6 +1032,94 @@ async fn one_upload_owns_a_slot_at_a_time() {
             .expect("claim stored"),
         ClaimUploadOutcome::AlreadyStored
     ));
+
+    fixture.cleanup().await;
+}
+
+/// A waiting slot and a handed-in answer cannot cross.
+#[tokio::test]
+async fn a_waiting_slot_blocks_the_answer_and_the_answer_blocks_new_slots() {
+    let Some(url) = database_url() else {
+        eprintln!("DATABASE_URL is not set; skipping the submit/upload check");
+        return;
+    };
+    let pool = school_collect_db::connect(&url).await.expect("connect");
+    school_collect_db::MIGRATOR
+        .run(&pool)
+        .await
+        .expect("migrate");
+    let fixture = fixture(pool).await;
+    let collect = new_collect(&fixture, &[item("plan", "계획서")], &[fixture.contributor]).await;
+    publish(&fixture, collect).await;
+
+    let created = create_attachment(
+        &fixture.pool,
+        fixture.tenant,
+        collect,
+        fixture.contributor,
+        slot(fixture.tenant, "plan", "일부.pdf", 10),
+    )
+    .await
+    .expect("create");
+    let CreateAttachmentOutcome::Created(created) = created else {
+        panic!("a target must be able to open a slot: {created:?}");
+    };
+    save_draft(
+        &fixture.pool,
+        fixture.tenant,
+        collect,
+        fixture.contributor,
+        0,
+        &json!({ "plan": "제출" }),
+    )
+    .await
+    .expect("draft");
+
+    // A waiting slot means the bytes are not known yet, so the answer waits too.
+    let blocked =
+        school_collect_db::submit(&fixture.pool, fixture.tenant, collect, fixture.contributor)
+            .await
+            .expect("submit");
+    assert!(
+        matches!(
+            blocked,
+            school_collect_db::SubmitOutcome::AttachmentIncomplete
+        ),
+        "a half-written file must not be handed in: {blocked:?}"
+    );
+
+    // The owner removes the slot; then the answer goes through.
+    let removed = delete_attachment(
+        &fixture.pool,
+        fixture.tenant,
+        created.id,
+        fixture.contributor,
+        true,
+        Utc::now(),
+    )
+    .await
+    .expect("delete");
+    assert!(matches!(removed, DeleteAttachmentOutcome::Deleted { .. }));
+    let sent =
+        school_collect_db::submit(&fixture.pool, fixture.tenant, collect, fixture.contributor)
+            .await
+            .expect("submit");
+    assert!(
+        matches!(sent, school_collect_db::SubmitOutcome::Submitted(_)),
+        "with no waiting slot the answer goes through: {sent:?}"
+    );
+
+    // And once it is in, no new slot opens for it.
+    let late = create_attachment(
+        &fixture.pool,
+        fixture.tenant,
+        collect,
+        fixture.contributor,
+        slot(fixture.tenant, "plan", "늦은.pdf", 10),
+    )
+    .await
+    .expect("create");
+    assert!(matches!(late, CreateAttachmentOutcome::AlreadySubmitted));
 
     fixture.cleanup().await;
 }

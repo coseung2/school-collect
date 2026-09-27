@@ -5,15 +5,16 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    time::{SystemTime, UNIX_EPOCH},
+    sync::Mutex,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::Manager;
+use tokio::sync::oneshot;
 use url::Url;
 
 mod bridge;
 mod browser_login;
 mod drafts;
-#[allow(dead_code)] // Wired into the login flow once the redirect allowlist is approved.
 mod pkce;
 
 pub(crate) const AUTOMATION_RECIPES_FILE: &str = "automation-recipes.tsv";
@@ -1221,6 +1222,111 @@ fn clear_auth_session() -> Result<(), String> {
     }
 }
 
+/// How long the app waits for the identity provider to redirect back before it
+/// gives up and closes the loopback listener.
+const BROWSER_LOGIN_TIMEOUT: Duration = Duration::from_secs(180);
+/// The public anon key is short; anything longer is a mistake, not a header.
+const MAX_ANON_KEY_LEN: usize = 4_096;
+
+/// One in-flight browser login attempt. The sender ends the wait (and closes
+/// the loopback listener); it lives here so `cancel_browser_login` can reach it.
+#[derive(Default)]
+struct BrowserLoginState(Mutex<Option<oneshot::Sender<()>>>);
+
+/// The identity provider base URL is an outbound target like any other, so it
+/// goes through the same `parse_target_url` rules that `validate_target_url`
+/// exposes (http/https, a host, no embedded credentials, bounded length), plus
+/// the https requirement: plain http is allowed only for a loopback test
+/// provider.
+fn validate_identity_base_url(value: &str) -> Result<Url, String> {
+    let mut url = parse_target_url(value)?;
+    if url.scheme() != "https" && url.host_str() != Some("127.0.0.1") {
+        return Err(
+            "identity provider 주소는 https여야 합니다(테스트용 loopback만 http 허용).".to_string(),
+        );
+    }
+    // The provider paths are resolved against this base (`authorize`, `token`),
+    // so a missing trailing slash would silently drop the last segment.
+    if !url.path().ends_with('/') {
+        let path = format!("{}/", url.path());
+        url.set_path(&path);
+    }
+    Ok(url)
+}
+
+/// The anon key is public by design, but it becomes a request header, so it
+/// must still look like one value.
+fn validate_anon_key(value: &str) -> Result<(), String> {
+    if value.trim().is_empty() || value.len() > MAX_ANON_KEY_LEN {
+        return Err("공개 anon key가 올바르지 않습니다.".to_string());
+    }
+    if value.chars().any(char::is_whitespace) {
+        return Err("공개 anon key에는 공백 문자를 쓸 수 없습니다.".to_string());
+    }
+    Ok(())
+}
+
+/// Signs in through the identity provider in the system browser (PKCE).
+///
+/// The renderer passes only public values: the provider base URL, the
+/// publishable anon key and the provider name. No password is accepted, and
+/// the PKCE verifier never leaves this process.
+#[tauri::command]
+async fn start_browser_login(
+    state: tauri::State<'_, BrowserLoginState>,
+    base_url: String,
+    anon_key: String,
+    provider: String,
+) -> Result<browser_login::BrowserLoginSession, browser_login::LoginFailure> {
+    let base_url = validate_identity_base_url(base_url.trim())
+        .map_err(|message| browser_login::LoginFailure::invalid_config(&message))?;
+    validate_anon_key(&anon_key)
+        .map_err(|message| browser_login::LoginFailure::invalid_config(&message))?;
+    let provider = provider.trim().to_string();
+
+    // One attempt at a time. The sender is how the cancel command ends this
+    // attempt, and it is taken back out as soon as the attempt is over.
+    let (cancel, cancelled) = oneshot::channel();
+    {
+        let mut attempt = state.0.lock().map_err(|_| {
+            browser_login::LoginFailure::invalid_config("로그인 상태를 확인하지 못했습니다.")
+        })?;
+        if attempt.is_some() {
+            return Err(browser_login::LoginFailure::already_running());
+        }
+        *attempt = Some(cancel);
+    }
+
+    let result = browser_login::run_browser_login(
+        &base_url,
+        &provider,
+        &anon_key,
+        BROWSER_LOGIN_TIMEOUT,
+        |authorize_url| launch_external_url(authorize_url.as_str()),
+        cancelled,
+    )
+    .await;
+
+    if let Ok(mut attempt) = state.0.lock() {
+        *attempt = None;
+    }
+    result.map_err(browser_login::LoginFailure::from)
+}
+
+/// Stops an in-flight browser login. Cancelling closes the loopback listener,
+/// so a late callback finds nothing to talk to. Returns whether an attempt was
+/// actually cancelled.
+#[tauri::command]
+fn cancel_browser_login(state: tauri::State<'_, BrowserLoginState>) -> bool {
+    let Ok(mut attempt) = state.0.lock() else {
+        return false;
+    };
+    match attempt.take() {
+        Some(cancel) => cancel.send(()).is_ok(),
+        None => false,
+    }
+}
+
 /// Local draft database in the app data directory.
 fn drafts_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
     let directory = app_handle
@@ -1452,6 +1558,7 @@ fn automation_bridge_info(app_handle: tauri::AppHandle) -> Result<BridgeInfo, St
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(BrowserLoginState::default())
         .setup(|app| {
             // The bridge is a convenience for the browser extension; a failure
             // must not stop the desktop app from starting.
@@ -1474,6 +1581,8 @@ pub fn run() {
             save_auth_session,
             load_auth_session,
             clear_auth_session,
+            start_browser_login,
+            cancel_browser_login,
             save_local_draft,
             list_local_drafts,
             load_local_draft,
@@ -1675,6 +1784,46 @@ mod tests {
     fn rejects_embedded_credentials() {
         let error = validate_target_url("https://user:secret@example.invalid/").unwrap_err();
         assert!(error.contains("계정 정보"));
+    }
+
+    #[test]
+    fn identity_base_url_allows_https_and_a_loopback_test_provider() {
+        assert!(validate_identity_base_url("https://project.supabase.co/auth/v1/").is_ok());
+        assert!(validate_identity_base_url("http://127.0.0.1:54321/auth/v1/").is_ok());
+        // A base without the trailing slash still resolves `authorize`/`token`
+        // under the same prefix.
+        assert_eq!(
+            validate_identity_base_url("https://project.supabase.co/auth/v1")
+                .unwrap()
+                .as_str(),
+            "https://project.supabase.co/auth/v1/"
+        );
+    }
+
+    #[test]
+    fn identity_base_url_refuses_plain_http_elsewhere_and_embedded_credentials() {
+        for value in [
+            "http://project.supabase.co/auth/v1/",
+            "http://[::1]:54321/auth/v1/",
+            "ftp://project.supabase.co/auth/v1/",
+            "https://user:secret@project.supabase.co/auth/v1/",
+            "not a url",
+        ] {
+            assert!(
+                validate_identity_base_url(value).is_err(),
+                "accepted identity base URL: {value}"
+            );
+        }
+    }
+
+    #[test]
+    fn anon_key_must_look_like_one_header_value() {
+        assert!(validate_anon_key("sb_publishable_example_key_for_a_project").is_ok());
+        assert!(validate_anon_key("").is_err());
+        assert!(validate_anon_key("   ").is_err());
+        assert!(validate_anon_key("key with space").is_err());
+        assert!(validate_anon_key("key\nInjected: 1").is_err());
+        assert!(validate_anon_key(&"k".repeat(MAX_ANON_KEY_LEN + 1)).is_err());
     }
 
     #[test]

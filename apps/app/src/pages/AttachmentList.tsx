@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Button, ListRow, ListSurface } from "@school-collect/ui";
 import {
   ATTACHMENT_ACCEPT,
@@ -25,6 +25,7 @@ export function AttachmentList({
   editable,
   itemKey,
   itemLabel,
+  onBusyChange,
   onChanged,
   tenantId,
   token,
@@ -34,6 +35,7 @@ export function AttachmentList({
   editable: boolean;
   itemKey: string;
   itemLabel: string;
+  onBusyChange?: (itemKey: string, busy: boolean) => void;
   onChanged: () => Promise<void>;
   tenantId: string;
   token: string;
@@ -59,10 +61,23 @@ export function AttachmentList({
       setNotice(await action());
     } catch (error) {
       setProblem(messageOf(error));
+      // A failed upload or delete still changes server state, so re-read the
+      // list instead of leaving a slot on screen that is already gone.
+      try {
+        await onChanged();
+      } catch {
+        // Keep the message the action produced.
+      }
     } finally {
       setBusy(null);
     }
   }
+
+  // The page disables its submit button while any attachment is being sent, so
+  // an answer cannot be handed in while a slot is still half-written.
+  useEffect(() => {
+    onBusyChange?.(itemKey, busy !== null);
+  }, [busy, itemKey, onBusyChange]);
 
   async function onPick(files: FileList | null) {
     const file = files?.[0];
@@ -121,33 +136,37 @@ export function AttachmentList({
               title={attachment.fileName}
             />
           ))}
-          {editable
-            ? unfinished.map((attachment) => (
-                <ListRow
-                  action={
-                    <Button
-                      aria-label={`${attachment.fileName} 지우기`}
-                      disabled={busy !== null}
-                      onClick={() =>
-                        void run(`delete-${attachment.id}`, async () => {
-                          await deleteAttachment(token, tenantId, attachment.id);
-                          await onChanged();
-                          return `'${attachment.fileName}'을(를) 지웠습니다.`;
-                        })
-                      }
-                      size="small"
-                      variant="quiet"
-                    >
-                      지우기
-                    </Button>
-                  }
-                  description="올리기가 끝나지 않았습니다. 지우고 다시 올려 주세요."
-                  key={attachment.id}
-                  meta={formatSize(attachment.byteSize)}
-                  title={attachment.fileName}
-                />
-              ))
-            : null}
+          {unfinished.map((attachment) => (
+            <ListRow
+              action={
+                editable ? (
+                  <Button
+                    aria-label={`${attachment.fileName} 지우기`}
+                    disabled={busy !== null}
+                    onClick={() =>
+                      void run(`delete-${attachment.id}`, async () => {
+                        await deleteAttachment(token, tenantId, attachment.id);
+                        await onChanged();
+                        return `'${attachment.fileName}'을(를) 지웠습니다.`;
+                      })
+                    }
+                    size="small"
+                    variant="quiet"
+                  >
+                    지우기
+                  </Button>
+                ) : undefined
+              }
+              description={
+                editable
+                  ? "올리기가 끝나지 않았습니다. 지우고 다시 올려 주세요."
+                  : "올리기가 끝나지 않은 파일입니다."
+              }
+              key={attachment.id}
+              meta={formatSize(attachment.byteSize)}
+              title={attachment.fileName}
+            />
+          ))}
         </ListSurface>
       ) : null}
       {editable ? (

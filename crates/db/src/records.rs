@@ -131,6 +131,9 @@ pub enum SubmitOutcome {
     Submitted(SubmissionRecord),
     AlreadySubmitted,
     NothingToSubmit,
+    /// A slot is still waiting for its bytes; handing the answer in now would
+    /// hide a file that never arrived.
+    AttachmentIncomplete,
     CollectNotOpen {
         status: String,
     },
@@ -958,6 +961,30 @@ pub async fn submit(
     .bind(user_id)
     .fetch_optional(&mut *tx)
     .await?;
+
+    // The answer row is locked before the unfinished slots. That is the order
+    // every writer uses for these two tables, so a submit cannot deadlock with
+    // an upload, and a slot that appears while the answer row is locked cannot
+    // slip in behind this check. A slot past its retention deadline is ignored:
+    // it can never hold bytes again, so it must not trap the answer.
+    let unfinished = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM school_collect.collect_attachments
+         WHERE tenant_id = $1 AND collect_id = $2 AND user_id = $3
+           AND status IN ('pending', 'uploading')
+           AND expires_at > $4
+         ORDER BY id
+         FOR UPDATE",
+    )
+    .bind(tenant_id)
+    .bind(collect_id)
+    .bind(user_id)
+    .bind(Utc::now())
+    .fetch_all(&mut *tx)
+    .await?;
+    if !unfinished.is_empty() {
+        tx.rollback().await?;
+        return Ok(SubmitOutcome::AttachmentIncomplete);
+    }
 
     match existing {
         None => {

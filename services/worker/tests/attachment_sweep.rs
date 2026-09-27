@@ -12,7 +12,7 @@ use school_collect_application::storage::{
 };
 use school_collect_db::{
     NewAttachment, NewCollect, NewCollectItem, create_attachment, create_collect, create_tenant,
-    transition_collect, upsert_user,
+    record_attachment_orphan, transition_collect, upsert_user,
 };
 use school_collect_worker::{purge_expired_attachments, run_sweep_until_shutdown};
 use sqlx::PgPool;
@@ -263,6 +263,71 @@ async fn the_sweep_removes_expired_attachments_and_keeps_the_rest() {
         .map_err(|error| format!("count failed: {error}"))?;
         if still_there != 1 {
             return Err("a storage failure keeps the row for a retry".to_owned());
+        }
+
+        // Bytes whose owning row is gone are removed too, so no object outlives
+        // the row that would have tracked it.
+        let orphan_key = format!(
+            "tenants/{}/attachments/{}/orphan",
+            fixture.tenant,
+            Uuid::now_v7()
+        );
+        storage
+            .put(&orphan_key, b"orphan".to_vec(), "application/pdf")
+            .await
+            .map_err(|error| format!("orphan put failed: {error}"))?;
+        record_attachment_orphan(&fixture.pool, fixture.tenant, &orphan_key)
+            .await
+            .map_err(|error| format!("orphan record failed: {error}"))?;
+        let report = purge_expired_attachments(&fixture.pool, &storage, 100)
+            .await
+            .map_err(|error| format!("sweep failed: {error}"))?;
+        if report.orphans_removed < 1 || report.failed != 0 {
+            return Err(format!("the untracked bytes were not removed: {report:?}"));
+        }
+        if storage
+            .get(&orphan_key)
+            .await
+            .map_err(|error| format!("get failed: {error}"))?
+            .is_some()
+        {
+            return Err("the untracked bytes must be gone".to_owned());
+        }
+        let orphans: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM school_collect.attachment_orphans WHERE tenant_id = $1",
+        )
+        .bind(fixture.tenant)
+        .fetch_one(&fixture.pool)
+        .await
+        .map_err(|error| format!("count failed: {error}"))?;
+        if orphans != 0 {
+            return Err(format!("the orphan row must be gone: {orphans}"));
+        }
+
+        // A storage failure keeps the orphan for the next pass.
+        let stubborn_key = format!(
+            "tenants/{}/attachments/{}/stubborn",
+            fixture.tenant,
+            Uuid::now_v7()
+        );
+        record_attachment_orphan(&fixture.pool, fixture.tenant, &stubborn_key)
+            .await
+            .map_err(|error| format!("orphan record failed: {error}"))?;
+        let report = purge_expired_attachments(&fixture.pool, &RefusingStorage, 100)
+            .await
+            .map_err(|error| format!("sweep with a refusing store failed: {error}"))?;
+        if report.failed < 1 {
+            return Err(format!("a refusing store must be reported: {report:?}"));
+        }
+        let orphans: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM school_collect.attachment_orphans WHERE tenant_id = $1",
+        )
+        .bind(fixture.tenant)
+        .fetch_one(&fixture.pool)
+        .await
+        .map_err(|error| format!("count failed: {error}"))?;
+        if orphans != 1 {
+            return Err(format!("a refusing store keeps the orphan: {orphans}"));
         }
 
         // The long-running loop stops when the shutdown future resolves.
