@@ -128,11 +128,11 @@ jobs:
       - name: Verify migration outcome and absence of demo seed rows
         run: |
           test "$(psql "$DATABASE_URL" -tAc "select schema_version from app_meta")" = "v2-bootstrap"
-          test "$(psql "$DATABASE_URL" -tAc "select count(*) from _sqlx_migrations where success")" = "2"
-          test "$(psql "$DATABASE_URL" -tAc "select count(*) from information_schema.tables where table_schema='school_collect' and table_name in ('tenants','users','memberships','collects','collect_items','collect_assignments','collect_submissions','audit_events','outbox_events')")" = "9"
+          test "$(psql "$DATABASE_URL" -tAc "select count(*) from _sqlx_migrations where success")" = "$(ls migrations/v2/*.sql | wc -l)"
+          test "$(psql "$DATABASE_URL" -tAc "select count(*) from information_schema.tables where table_schema='school_collect' and table_name in ('tenants','users','memberships','invitations','collects','collect_items','collect_assignments','collect_submissions','audit_events','outbox_events')")" = "10"
           test "$(psql "$DATABASE_URL" -tAc "select count(*) from school_collect.collects")" = "0"
           test "$(psql "$DATABASE_URL" -tAc "select count(*) from school_collect.users")" = "0"
-          test "$(psql "$DATABASE_URL" -tAc "select count(*) from information_schema.tables where table_schema='public' and table_name in ('tenants','users','memberships','collects','collect_items','collect_assignments','collect_submissions','audit_events','outbox_events')")" = "0"
+          test "$(psql "$DATABASE_URL" -tAc "select count(*) from information_schema.tables where table_schema='public' and table_name in ('tenants','users','memberships','invitations','collects','collect_items','collect_assignments','collect_submissions','audit_events','outbox_events')")" = "0"
       - name: Re-running migrations must be a no-op
         run: cargo run -p school-collect-migrator --locked
       - name: Missing configuration must fail startup instead of degrading

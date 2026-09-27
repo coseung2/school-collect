@@ -3,8 +3,10 @@ use std::time::Duration;
 use anyhow::Context;
 use sqlx::{PgConnection, PgPool, postgres::PgPoolOptions};
 
+pub mod invitations;
 pub mod records;
 
+pub use invitations::*;
 pub use records::*;
 
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations/v2");

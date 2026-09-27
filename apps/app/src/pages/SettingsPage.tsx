@@ -1,14 +1,16 @@
 import { useState } from "react";
-import { Button, Card, Status } from "@school-collect/ui";
-import { type Membership, type SessionInfo } from "../api";
-import { roleOf } from "../helpers";
+import { Button, Card, FormField, Status } from "@school-collect/ui";
+import { acceptInvitation, type Membership, type SessionInfo } from "../api";
+import { messageOf, roleOf } from "../helpers";
 
 export function SettingsPage({
+  onMembershipChanged,
   onSignIn,
   session,
   tenant,
   token,
 }: {
+  onMembershipChanged?: () => void;
   onSignIn: () => void;
   session: SessionInfo | null;
   tenant: Membership | null;
@@ -18,6 +20,10 @@ export function SettingsPage({
     null,
   );
   const [error, setError] = useState<string | null>(null);
+  const [inviteCode, setInviteCode] = useState("");
+  const [inviteBusy, setInviteBusy] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [inviteNotice, setInviteNotice] = useState<string | null>(null);
 
   async function check() {
     setError(null);
@@ -30,6 +36,28 @@ export function SettingsPage({
     } catch {
       setHealth(null);
       setError("API에 연결하지 못했습니다.");
+    }
+  }
+
+  async function acceptCode(event: React.FormEvent) {
+    event.preventDefault();
+    if (!token) {
+      return;
+    }
+    setInviteBusy(true);
+    setInviteError(null);
+    setInviteNotice(null);
+    try {
+      const accepted = await acceptInvitation(token, inviteCode.trim());
+      setInviteCode("");
+      setInviteNotice(
+        `${accepted.membership.tenantName} 학교에 ${roleOf(accepted.membership.role)}로 합류했습니다.`,
+      );
+      onMembershipChanged?.();
+    } catch (caught) {
+      setInviteError(messageOf(caught));
+    } finally {
+      setInviteBusy(false);
     }
   }
 
@@ -98,6 +126,45 @@ export function SettingsPage({
           )}
         </Card>
       )}
+
+      {token ? (
+        <Card>
+          <h2>초대 코드로 합류</h2>
+          <p className="app-card-description">
+            학교에서 받은 초대 코드를 입력하면 그 학교의 구성원으로 합류합니다.
+            코드는 초대한 사람이 직접 전달하며 14일 뒤에 만료됩니다.
+          </p>
+          <form className="app-form" onSubmit={acceptCode}>
+            <FormField htmlFor="invite-accept-code" label="초대 코드" required>
+              <input
+                autoComplete="off"
+                id="invite-accept-code"
+                onChange={(event) => setInviteCode(event.target.value)}
+                placeholder="64자리 초대 코드"
+                required
+                value={inviteCode}
+              />
+            </FormField>
+            {inviteError ? (
+              <p className="app-form__error" role="alert">
+                {inviteError}
+              </p>
+            ) : null}
+            {inviteNotice ? (
+              <p className="app-form__notice">{inviteNotice}</p>
+            ) : null}
+            <div className="app-form__actions">
+              <Button
+                disabled={inviteBusy || inviteCode.trim().length === 0}
+                loading={inviteBusy}
+                type="submit"
+              >
+                합류하기
+              </Button>
+            </div>
+          </form>
+        </Card>
+      ) : null}
     </div>
   );
 }

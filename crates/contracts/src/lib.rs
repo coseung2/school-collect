@@ -216,3 +216,51 @@ pub struct VersionConflictResponse {
     pub request_id: String,
     pub current_version: i64,
 }
+
+/// Invites a teacher to the caller's school. The role is restricted to the
+/// non-admin roles so an invitation can never hand out admin rights.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateInvitationRequest {
+    pub email: String,
+    #[serde(default)]
+    pub role: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct InvitationDto {
+    pub id: String,
+    pub email: String,
+    pub role: String,
+    pub status: String,
+    pub created_at: String,
+    pub expires_at: String,
+    pub accepted_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct InvitationListResponse {
+    pub invitations: Vec<InvitationDto>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateInvitationResponse {
+    pub invitation: InvitationDto,
+    /// The plaintext invite code is returned exactly once, when it is created.
+    pub code: String,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AcceptInvitationRequest {
+    pub code: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AcceptInvitationResponse {
+    pub membership: MembershipDto,
+}
