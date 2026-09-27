@@ -21,7 +21,7 @@
 | S-03 | 항목·대상 편집과 권한 규칙 / 완료(PR #41, `70dcbfe`) | S-01, 구성원 변경 시 S-02 | 배포 전후 변경·역할 변경·미배정 제출 정책 확정, 서버 검증·충돌 처리·변경 기록과 UI 검증 |
 | S-04 | 파일 첨부 / 계획 | S-01, C-03 승인된 저장소 설정 | 권한 확인 후 private R2 업로드/다운로드, 크기·유형·만료·보존 정책, 실패/재시도·학교 간 접근 차단 |
 | S-05 | 세션 유지·offline 초안 / 계획 | S-01, C-01/C-02 | 외부 브라우저 PKCE + OS 보안 저장소, 사용자/학교별 SQLite 초안, 재시작 복구·재전송·충돌·로그아웃 정리 |
-| S-06 | 알림·재처리용 outbox/worker / 계획 | S-01 | 업무 변경+outbox 단일 transaction, relay/JetStream/idempotent 처리, commit 후 ACK, retry/dead-letter·중복 전달 복구 |
+| S-06 | 알림·재처리용 outbox/worker / 완료(PR #43, `e722bce`) | S-01 | 업무 변경+outbox 단일 transaction, relay/JetStream/idempotent 처리, commit 후 ACK, retry/dead-letter·중복 전달 복구 |
 | S-07 | 결과 내보내기·전체 흐름 검증 / 계획 | S-02~S-06, 출시 시 C-02~C-05 | CSV/문서 결과의 권한·누락·재처리 검증, 학교 A/B와 역할별 전체 흐름을 통합 SHA에서 검증 |
 
 공통 ID는 [TEAM_BACKLOG.md](TEAM_BACKLOG.md)를 따릅니다. 첨부·offline·worker는 S-01 계약이 고정되면 독립 범위로 진행할 수 있습니다. 실제 운영 자원 연결은 계정·환경이 확정된 뒤 진행합니다.
@@ -53,6 +53,22 @@ PR #41(`feat/collect-item-editing`)로 배포 전후 편집 규칙을 develop에
 - 실제 개발 DB: `crates/db/tests/collect_editing.rs` 2개가 항목 개편·배포 후 추가·답변 있는 항목 삭제 거부·버전 충돌·마감 후 거부와 대상 추가·viewer/외부인 거부·답변 있는 대상 제거 거부·미배정 저장·제출 거부를 확인했습니다. CI `postgres` 작업이 이 테스트를 실행합니다. 기존 `collect_flow_e2e` 2개도 그대로 통과했습니다.
 - 실제 Tauri 창(WebView2 CDP): 로그인 → 자료수합 → 수합 상세 → `항목 편집`(이름 수정·항목 추가) 저장 → `대상 편집` 저장까지 화면에서 확인했습니다. 검증용 계정·학교·수합은 정리했습니다.
 - 아직 아님: 거부 경로(답변 있는 항목 삭제 등)의 화면 조작 검증과 편집 이력 화면 표시.
+
+## outbox와 재처리 (S-06)
+
+PR #43(`feat/outbox-relay`)로 업무 변경과 이벤트를 한 transaction에 쓰고 worker가 배달·재처리하는 경로를 develop에 통합했습니다.
+
+- 이벤트 기록: `collect.created`, `collect.published`, `collect.closed`, `collect.submitted`, `membership.joined`를 각 업무 transaction 안에서 함께 씁니다. payload에는 식별자·상태·버전만 담고 학생 이름이나 본문은 넣지 않습니다.
+- 선점과 lease: `claim_outbox_batch`가 `FOR UPDATE SKIP LOCKED`와 `claimed_until` lease로 배치를 예약합니다. 선점이 한 번의 commit되는 UPDATE라서 lease 없이는 두 relay가 같은 행을 함께 가져갈 수 있었고, 그 문제를 lease로 막았습니다. 죽은 worker의 행은 lease가 만료되면 다시 선점됩니다.
+- 배달·재처리: 브로커 ack 뒤에만 `published_at`을 기록하고, 실패는 시도 횟수에 비례한 지연으로 재시도하며 한도를 넘으면 `dead_lettered_at`·`last_error`로 남깁니다. `/metrics`에 pending·published·dead-lettered gauge를 노출합니다.
+- JetStream: 이벤트 id를 `Nats-Msg-Id`로 넣어 브로커가 중복 publish를 버리게 하고, 소비자는 event id로 중복을 제거합니다(at-least-once). `DATABASE_URL`·`NATS_URL`이 없으면 worker는 기동에 실패합니다.
+
+검증 (2026-09-27):
+
+- `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo test --workspace --locked`(91개), foundation 25개, repository guard.
+- 실제 개발 DB에서 relay 테스트 6개(배달 후 재선점 없음, 실패 → 재시도 → dead-letter, 동시 relay 중복 선점 없음, 업무 transaction과 이벤트 동시 기록·거부된 전이는 이벤트 없음, 선점 시 시도 횟수 증가, 재시도 예약) 통과.
+- CI `postgres` 작업이 DB 쪽 relay 테스트를, 새 `nats-outbox` 작업이 NATS JetStream 컨테이너와 함께 실제 배달·ack·중복 제거(같은 id 두 번 publish → 1건)를 확인했습니다.
+- 아직 아님: 이벤트를 소비하는 서비스(알림 발송 등). 이 슬라이스는 배달·재처리까지입니다.
 
 ## 이미 있는 기반과 남은 검증
 
