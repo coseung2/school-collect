@@ -15,6 +15,10 @@ const AUTOMATION_RECIPES_QUARANTINE_FILE: &str = "automation-recipes.invalid.tsv
 const MAX_RECIPE_NAME_LEN: usize = 80;
 const MAX_RECIPE_ID_LEN: usize = 128;
 const MAX_TARGET_URL_LEN: usize = 2048;
+/// 자동입력 레시피 하나가 채울 수 있는 필드 수입니다.
+const MAX_RECIPE_FIELDS: usize = 40;
+const MAX_FIELD_LABEL_LEN: usize = 80;
+const MAX_LOCATOR_VALUE_LEN: usize = 300;
 /// 한 사용자 계정이 보관할 수 있는 업무 버튼 수입니다.
 const MAX_RECIPES: usize = 100;
 /// 손상된 행을 보관하는 격리 파일의 상한입니다. 넘으면 복구를 멈추고 원본을 보존합니다.
@@ -24,6 +28,38 @@ const MAX_QUARANTINE_BYTES: usize = 512 * 1024;
 #[serde(rename_all = "snake_case")]
 pub(crate) enum AutomationKind {
     Shortcut,
+    Fill,
+}
+
+/// 화면 요소를 찾는 방법입니다.
+///
+/// 임의 JavaScript나 자유 형식 XPath를 받지 않도록 종류를 고정하고,
+/// 값은 각 종류의 문법에 맞는지 검사합니다.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LocatorKind {
+    /// 요소 id
+    Id,
+    /// 폼 컨트롤 name 속성
+    Name,
+    /// label 또는 aria-label 텍스트
+    Label,
+    /// 제한된 문자만 허용하는 CSS selector
+    Css,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AutomationLocator {
+    pub(crate) kind: LocatorKind,
+    pub(crate) value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AutomationField {
+    pub(crate) label: String,
+    pub(crate) locator: AutomationLocator,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -33,6 +69,9 @@ pub(crate) struct AutomationRecipe {
     pub(crate) name: String,
     pub(crate) target_url: String,
     pub(crate) kind: AutomationKind,
+    /// 자동입력 레시피가 채울 필드입니다. 바로가기는 비어 있습니다.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) fields: Vec<AutomationField>,
 }
 
 fn validate_plain_field(value: &str) -> Result<(), String> {
@@ -75,6 +114,86 @@ pub(crate) fn normalize_target_url(value: &str) -> Result<String, String> {
     Ok(parse_target_url(value)?.to_string())
 }
 
+/// CSS selector로 허용하는 문자입니다. 선택자 목록(`,`), 규칙 블록(`{}`), 이스케이프(`\`)와
+/// 스크립트 실행으로 이어질 수 있는 표기는 받지 않습니다.
+fn validate_css_locator(value: &str) -> Result<(), String> {
+    const FORBIDDEN: [char; 9] = ['{', '}', ';', ',', '\\', '`', '@', '!', '\''];
+
+    if value
+        .chars()
+        .any(|character| FORBIDDEN.contains(&character))
+    {
+        return Err("selector에 사용할 수 없는 문자가 있습니다.".to_string());
+    }
+    if !value.chars().all(|character| {
+        character.is_ascii_alphanumeric() || "#._-[]=\":()*^$~+ >".contains(character)
+    }) {
+        return Err("selector에 사용할 수 없는 문자가 있습니다.".to_string());
+    }
+
+    let lowered = value.to_ascii_lowercase();
+    if lowered.contains("javascript:") {
+        return Err("selector에 사용할 수 없는 표기가 있습니다.".to_string());
+    }
+    if value.starts_with('>') || value.ends_with('>') || value.contains(">>") {
+        return Err("selector의 결합 표기가 올바르지 않습니다.".to_string());
+    }
+
+    // 괄호는 우리가 만드는 nth-child()/nth-of-type()에만 허용합니다.
+    // 그 밖의 함수형 선택자(:is, :has, :not 등)는 받지 않습니다.
+    if value.matches('(').count() != value.matches(')').count() {
+        return Err("selector의 괄호가 닫히지 않았습니다.".to_string());
+    }
+    let mut cursor = 0;
+    while let Some(open_offset) = lowered[cursor..].find('(') {
+        let open = cursor + open_offset;
+        if !(lowered[..open].ends_with("nth-child") || lowered[..open].ends_with("nth-of-type")) {
+            return Err("selector에 사용할 수 없는 함수형 표기가 있습니다.".to_string());
+        }
+        let Some(close_offset) = lowered[open..].find(')') else {
+            return Err("selector의 괄호가 닫히지 않았습니다.".to_string());
+        };
+        let inner = &lowered[open + 1..open + close_offset];
+        if inner.is_empty()
+            || !inner.chars().all(|character| {
+                character.is_ascii_digit() || matches!(character, 'n' | '+' | '-' | ' ')
+            })
+        {
+            return Err("selector의 nth 표기가 올바르지 않습니다.".to_string());
+        }
+        cursor = open + close_offset + 1;
+    }
+
+    Ok(())
+}
+
+fn validate_locator(locator: &AutomationLocator) -> Result<(), String> {
+    let value = locator.value.trim();
+    if value.is_empty() || value.len() > MAX_LOCATOR_VALUE_LEN {
+        return Err("화면 요소 위치 값은 1~300자로 입력하세요.".to_string());
+    }
+    validate_plain_field(value)?;
+
+    match locator.kind {
+        LocatorKind::Id => {
+            if !value.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | ':')
+            }) {
+                return Err("요소 id에 사용할 수 없는 문자가 있습니다.".to_string());
+            }
+        }
+        LocatorKind::Name => {
+            if value.contains(['"', '\\', ']']) {
+                return Err("name 값에 사용할 수 없는 문자가 있습니다.".to_string());
+            }
+        }
+        LocatorKind::Label => {}
+        LocatorKind::Css => validate_css_locator(value)?,
+    }
+
+    Ok(())
+}
+
 pub(crate) fn validate_recipe(recipe: &AutomationRecipe) -> Result<(), String> {
     let id = recipe.id.trim();
     let name = recipe.name.trim();
@@ -89,7 +208,44 @@ pub(crate) fn validate_recipe(recipe: &AutomationRecipe) -> Result<(), String> {
     validate_plain_field(id)?;
     validate_plain_field(name)?;
     validate_target_url(recipe.target_url.trim())?;
+
+    match recipe.kind {
+        AutomationKind::Shortcut => {
+            if !recipe.fields.is_empty() {
+                return Err("바로가기에는 입력 필드를 둘 수 없습니다.".to_string());
+            }
+        }
+        AutomationKind::Fill => {
+            if recipe.fields.is_empty() || recipe.fields.len() > MAX_RECIPE_FIELDS {
+                return Err(format!(
+                    "자동입력 레시피는 필드 1~{MAX_RECIPE_FIELDS}개가 필요합니다."
+                ));
+            }
+            for field in &recipe.fields {
+                let label = field.label.trim();
+                if label.is_empty() || label.len() > MAX_FIELD_LABEL_LEN {
+                    return Err("필드 이름은 1~80자로 입력하세요.".to_string());
+                }
+                validate_plain_field(label)?;
+                validate_locator(&field.locator)?;
+            }
+        }
+    }
+
     Ok(())
+}
+
+/// 저장 전에 값 표기를 통일하고 검증합니다. 앱 명령과 브리지가 같은 규칙을 씁니다.
+pub(crate) fn normalize_recipe(mut recipe: AutomationRecipe) -> Result<AutomationRecipe, String> {
+    recipe.id = recipe.id.trim().to_string();
+    recipe.name = recipe.name.trim().to_string();
+    recipe.target_url = normalize_target_url(recipe.target_url.trim())?;
+    for field in &mut recipe.fields {
+        field.label = field.label.trim().to_string();
+        field.locator.value = field.locator.value.trim().to_string();
+    }
+    validate_recipe(&recipe)?;
+    Ok(recipe)
 }
 
 pub(crate) fn automation_config_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -108,30 +264,62 @@ pub(crate) fn automation_recipes_path(app_handle: &tauri::AppHandle) -> Result<P
     Ok(automation_config_dir(app_handle)?.join(AUTOMATION_RECIPES_FILE))
 }
 
-fn encode_recipe(recipe: &AutomationRecipe) -> String {
-    format!(
-        "{}\tshortcut\t{}\t{}",
+/// 저장된 레시피를 읽기만 합니다. 조회 경로는 원본을 덮어쓰지 않습니다.
+pub(crate) fn read_automation_recipes(path: &Path) -> Result<Vec<AutomationRecipe>, String> {
+    Ok(RecipeFile::read(path)?.recipes)
+}
+
+/// 바로가기는 4열, 자동입력은 필드 JSON을 담은 5열로 기록합니다.
+/// 기존 4열 파일을 그대로 읽을 수 있도록 5열은 선택 사항입니다.
+fn encode_recipe(recipe: &AutomationRecipe) -> Result<String, String> {
+    let kind = match recipe.kind {
+        AutomationKind::Shortcut => "shortcut",
+        AutomationKind::Fill => "fill",
+    };
+    let head = format!(
+        "{}\t{kind}\t{}\t{}",
         recipe.id, recipe.name, recipe.target_url
-    )
+    );
+    if recipe.fields.is_empty() {
+        return Ok(head);
+    }
+
+    let payload = serde_json::to_string(&recipe.fields)
+        .map_err(|error| format!("자동화 설정을 저장하지 못했습니다: {error}"))?;
+    Ok(format!("{head}\t{payload}"))
 }
 
 fn decode_recipe(line: &str) -> Result<AutomationRecipe, String> {
-    let mut fields = line.splitn(4, '\t');
+    let mut columns = line.splitn(5, '\t');
     // 저장·검증과 같은 기준을 쓰도록 읽을 때도 값을 trim합니다.
-    let id = fields.next().unwrap_or("").trim();
-    let kind = fields.next().unwrap_or("").trim();
-    let name = fields.next().unwrap_or("").trim();
-    let target_url = fields.next().unwrap_or("").trim();
+    let id = columns.next().unwrap_or("").trim();
+    let kind = columns.next().unwrap_or("").trim();
+    let name = columns.next().unwrap_or("").trim();
+    let target_url = columns.next().unwrap_or("").trim();
+    let payload = columns.next().unwrap_or("").trim();
 
-    if kind != "shortcut" || id.is_empty() || name.is_empty() || target_url.is_empty() {
+    if id.is_empty() || name.is_empty() || target_url.is_empty() {
         return Err("자동화 설정 형식이 올바르지 않습니다.".to_string());
     }
 
+    let kind = match kind {
+        "shortcut" => AutomationKind::Shortcut,
+        "fill" => AutomationKind::Fill,
+        _ => return Err("자동화 설정 형식이 올바르지 않습니다.".to_string()),
+    };
+    let fields = if payload.is_empty() {
+        Vec::new()
+    } else {
+        serde_json::from_str(payload)
+            .map_err(|_| "자동화 설정의 필드 형식이 올바르지 않습니다.".to_string())?
+    };
+
     let recipe = AutomationRecipe {
         id: id.to_string(),
-        kind: AutomationKind::Shortcut,
+        kind,
         name: name.to_string(),
         target_url: target_url.to_string(),
+        fields,
     };
     validate_recipe(&recipe)?;
     Ok(recipe)
@@ -261,11 +449,11 @@ fn remove_automation_recipe(path: &Path, recipe_id: &str) -> Result<Vec<Automati
 }
 
 fn write_automation_recipes(path: &Path, recipes: &[AutomationRecipe]) -> Result<(), String> {
-    let mut content = recipes
-        .iter()
-        .map(encode_recipe)
-        .collect::<Vec<_>>()
-        .join("\n");
+    let mut lines = Vec::with_capacity(recipes.len());
+    for recipe in recipes {
+        lines.push(encode_recipe(recipe)?);
+    }
+    let mut content = lines.join("\n");
     if !content.is_empty() {
         content.push('\n');
     }
@@ -335,13 +523,9 @@ fn list_automation_recipes(app_handle: tauri::AppHandle) -> Result<Vec<Automatio
 #[tauri::command]
 fn save_automation_recipe(
     app_handle: tauri::AppHandle,
-    mut recipe: AutomationRecipe,
+    recipe: AutomationRecipe,
 ) -> Result<Vec<AutomationRecipe>, String> {
-    recipe.id = recipe.id.trim().to_string();
-    recipe.name = recipe.name.trim().to_string();
-    recipe.target_url = normalize_target_url(recipe.target_url.trim())?;
-    validate_recipe(&recipe)?;
-
+    let recipe = normalize_recipe(recipe)?;
     let path = automation_recipes_path(&app_handle)?;
     upsert_automation_recipe(&path, recipe)
 }
@@ -501,9 +685,112 @@ mod tests {
             name: "기안".to_string(),
             target_url: "https://example.invalid/draft".to_string(),
             kind: AutomationKind::Shortcut,
+            fields: Vec::new(),
         };
-        let decoded = decode_recipe(&encode_recipe(&recipe)).unwrap();
+        let decoded = decode_recipe(&encode_recipe(&recipe).unwrap()).unwrap();
         assert_eq!(decoded, recipe);
+    }
+
+    fn fill_field(label: &str, kind: LocatorKind, value: &str) -> AutomationField {
+        AutomationField {
+            label: label.to_string(),
+            locator: AutomationLocator {
+                kind,
+                value: value.to_string(),
+            },
+        }
+    }
+
+    fn fill_recipe(id: &str, name: &str, fields: Vec<AutomationField>) -> AutomationRecipe {
+        AutomationRecipe {
+            id: id.to_string(),
+            name: name.to_string(),
+            target_url: "https://example.invalid/list".to_string(),
+            kind: AutomationKind::Fill,
+            fields,
+        }
+    }
+
+    #[test]
+    fn fill_recipe_round_trip_keeps_locators() {
+        let recipe = fill_recipe(
+            "recipe-fill",
+            "기안 작성",
+            vec![
+                fill_field("제목", LocatorKind::Id, "title"),
+                fill_field("담당", LocatorKind::Name, "owner"),
+                fill_field("기안일", LocatorKind::Label, "기안일"),
+                fill_field(
+                    "비고",
+                    LocatorKind::Css,
+                    "#main > form > div:nth-of-type(2) > textarea",
+                ),
+            ],
+        );
+
+        let decoded = decode_recipe(&encode_recipe(&recipe).unwrap()).unwrap();
+
+        assert_eq!(decoded, recipe);
+        assert_eq!(decoded.fields.len(), 4);
+    }
+
+    #[test]
+    fn rejects_fields_on_a_shortcut_recipe() {
+        let mut recipe = shortcut_recipe("recipe-1", "기안", "https://example.invalid/draft");
+        recipe.fields = vec![fill_field("제목", LocatorKind::Id, "title")];
+
+        assert!(validate_recipe(&recipe).is_err());
+    }
+
+    #[test]
+    fn rejects_a_fill_recipe_without_fields() {
+        let recipe = fill_recipe("recipe-fill", "기안 작성", Vec::new());
+
+        assert!(validate_recipe(&recipe).is_err());
+    }
+
+    #[test]
+    fn rejects_unsafe_locator_values() {
+        for field in [
+            fill_field("제목", LocatorKind::Css, "div; body"),
+            fill_field("제목", LocatorKind::Css, "div, span"),
+            fill_field("제목", LocatorKind::Css, ":is(div)"),
+            fill_field("제목", LocatorKind::Css, "div:has(> input)"),
+            fill_field("제목", LocatorKind::Id, "title with space"),
+            fill_field("제목", LocatorKind::Name, "a\"b"),
+            fill_field("제목", LocatorKind::Label, ""),
+        ] {
+            let recipe = fill_recipe("recipe-fill", "기안 작성", vec![field.clone()]);
+            assert!(
+                validate_recipe(&recipe).is_err(),
+                "accepted locator: {field:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_a_fill_recipe_beyond_the_field_limit() {
+        let fields = (0..=MAX_RECIPE_FIELDS)
+            .map(|index| fill_field(&format!("필드{index}"), LocatorKind::Id, "title"))
+            .collect::<Vec<_>>();
+        let recipe = fill_recipe("recipe-fill", "기안 작성", fields);
+
+        assert!(validate_recipe(&recipe).is_err());
+    }
+
+    #[test]
+    fn normalizes_field_whitespace_before_saving() {
+        let recipe = normalize_recipe(fill_recipe(
+            " recipe-fill ",
+            " 기안 작성 ",
+            vec![fill_field(" 제목 ", LocatorKind::Id, " title ")],
+        ))
+        .unwrap();
+
+        assert_eq!(recipe.id, "recipe-fill");
+        assert_eq!(recipe.name, "기안 작성");
+        assert_eq!(recipe.fields[0].label, "제목");
+        assert_eq!(recipe.fields[0].locator.value, "title");
     }
 
     #[test]
@@ -589,6 +876,7 @@ mod tests {
             name: name.to_string(),
             target_url: target_url.to_string(),
             kind: AutomationKind::Shortcut,
+            fields: Vec::new(),
         }
     }
 
