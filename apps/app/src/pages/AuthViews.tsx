@@ -5,6 +5,7 @@ import {
   identityConfigured,
   signInWithPassword,
   signUpWithPassword,
+  type AuthSession,
   type Membership,
 } from "../api";
 import { messageOf } from "../helpers";
@@ -22,7 +23,7 @@ export function SignInView({
   onSignedIn,
 }: {
   onBack?: () => void;
-  onSignedIn: (token: string) => void;
+  onSignedIn: (session: AuthSession) => void;
 }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -36,8 +37,8 @@ export function SignInView({
     setError(null);
     setNotice(null);
     try {
-      const accessToken = await signInWithPassword(email.trim(), password);
-      onSignedIn(accessToken);
+      const session = await signInWithPassword(email.trim(), password);
+      onSignedIn(session);
     } catch (caught) {
       setError(messageOf(caught));
     } finally {

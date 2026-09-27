@@ -1068,6 +1068,114 @@ fn resolve_recipe_target(path: &Path, recipe_id: &str) -> Result<String, String>
     Ok(recipe.target_url)
 }
 
+/// Session handed to the OS credential store.
+///
+/// Tokens never touch the recipe files, and nothing here is logged. The store
+/// is Windows-first: other platforms report it as unavailable instead of
+/// writing a token to a plain file.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct StoredAuthSession {
+    pub(crate) access_token: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) refresh_token: Option<String>,
+    pub(crate) user_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) email: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) expires_at_ms: Option<u64>,
+}
+
+/// Windows Credential Manager rejects blobs larger than 2560 bytes, so the
+/// stored JSON stays well below that.
+const MAX_SESSION_BYTES: usize = 2_048;
+const SESSION_SERVICE: &str = "kr.schoolcollect.app";
+const SESSION_ACCOUNT: &str = "auth-session";
+
+fn validate_auth_session(session: &StoredAuthSession) -> Result<String, String> {
+    if session.access_token.trim().is_empty() {
+        return Err("access token이 비어 있습니다.".to_string());
+    }
+    for value in [
+        Some(session.access_token.as_str()),
+        session.refresh_token.as_deref(),
+        Some(session.user_id.as_str()),
+        session.email.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        validate_plain_field(value)?;
+    }
+
+    let encoded = serde_json::to_string(session)
+        .map_err(|error| format!("세션을 저장할 수 없습니다: {error}"))?;
+    if encoded.len() > MAX_SESSION_BYTES {
+        return Err("세션이 보안 저장소 크기 제한을 넘습니다.".to_string());
+    }
+    Ok(encoded)
+}
+
+#[cfg(windows)]
+fn auth_session_entry() -> Result<keyring::Entry, String> {
+    keyring::Entry::new(SESSION_SERVICE, SESSION_ACCOUNT)
+        .map_err(|error| format!("보안 저장소를 열지 못했습니다: {error}"))
+}
+
+/// Saves the session in the OS credential store.
+#[tauri::command]
+fn save_auth_session(session: StoredAuthSession) -> Result<(), String> {
+    let encoded = validate_auth_session(&session)?;
+
+    #[cfg(windows)]
+    {
+        auth_session_entry()?
+            .set_password(&encoded)
+            .map_err(|error| format!("세션을 보안 저장소에 저장하지 못했습니다: {error}"))?;
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = encoded;
+        Err("이 플랫폼에서는 아직 보안 저장소를 지원하지 않습니다.".to_string())
+    }
+}
+
+/// Reads the stored session. A missing entry is `None`, not an error.
+#[tauri::command]
+fn load_auth_session() -> Result<Option<StoredAuthSession>, String> {
+    #[cfg(windows)]
+    {
+        match auth_session_entry()?.get_password() {
+            Ok(encoded) => serde_json::from_str::<StoredAuthSession>(&encoded)
+                .map(Some)
+                .map_err(|_| "저장된 세션을 읽지 못했습니다.".to_string()),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(error) => Err(format!("세션을 읽지 못했습니다: {error}")),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(None)
+    }
+}
+
+/// Removes the stored session. Signing out must not leave a token behind.
+#[tauri::command]
+fn clear_auth_session() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        match auth_session_entry()?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(error) => Err(format!("세션을 지우지 못했습니다: {error}")),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(())
+    }
+}
+
 #[tauri::command]
 fn app_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
@@ -1112,7 +1220,10 @@ pub fn run() {
             list_automation_watch_state,
             record_automation_watch_scan,
             acknowledge_automation_watch,
-            set_automation_watch_paused
+            set_automation_watch_paused,
+            save_auth_session,
+            load_auth_session,
+            clear_auth_session
         ])
         .run(tauri::generate_context!())
         .expect("failed to run School Collect");
@@ -1125,6 +1236,30 @@ mod tests {
     #[test]
     fn accepts_https_target_without_credentials() {
         assert!(validate_target_url("https://example.invalid/portal#draft").is_ok());
+    }
+
+    #[test]
+    fn stored_session_must_fit_the_credential_store() {
+        let session = StoredAuthSession {
+            access_token: "a".repeat(64),
+            refresh_token: Some("r".repeat(32)),
+            user_id: "user-1".to_string(),
+            email: Some("teacher@example.test".to_string()),
+            expires_at_ms: Some(1_790_000_000_000),
+        };
+        assert!(validate_auth_session(&session).is_ok());
+
+        let mut empty = session.clone();
+        empty.access_token = "   ".to_string();
+        assert!(validate_auth_session(&empty).is_err());
+
+        let mut oversized = session.clone();
+        oversized.access_token = "a".repeat(MAX_SESSION_BYTES + 1);
+        assert!(validate_auth_session(&oversized).is_err());
+
+        let mut broken = session.clone();
+        broken.user_id = "user\t1".to_string();
+        assert!(validate_auth_session(&broken).is_err());
     }
 
     #[test]
