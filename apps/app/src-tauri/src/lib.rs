@@ -11,6 +11,7 @@ use tauri::Manager;
 use url::Url;
 
 mod bridge;
+mod browser_login;
 mod drafts;
 #[allow(dead_code)] // Wired into the login flow once the redirect allowlist is approved.
 mod pkce;

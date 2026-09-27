@@ -20,7 +20,7 @@
 | S-02 | 구성원 초대·합류 / 완료(PR #28, `9416c6c`) | S-01 | 초대된 계정이 해당 학교 contributor로 합류해 수합 제출; 다른 학교·계정에는 권한이 생기지 않음. 다음은 S-03 |
 | S-03 | 항목·대상 편집과 권한 규칙 / 완료(PR #41, `70dcbfe`) | S-01, 구성원 변경 시 S-02 | 배포 전후 변경·역할 변경·미배정 제출 정책 확정, 서버 검증·충돌 처리·변경 기록과 UI 검증 |
 | S-04 | 파일 첨부 / 구현 중(PR #58·#59·#60, 2차 검토 보강 #69, 화면 #70, R2 adapter) | S-01, C-03 승인된 저장소 설정 | 완료: metadata·보존 규칙, 업로드·다운로드 API와 저장소 port(학교 간 접근 차단), 만료 정리 worker, 제출 작성·관리자 검토 화면, private R2 adapter·presigned URL(AWS 예제·mock 검증) / 남음: 실제 R2 bucket·credential 연결 확인(소유자 자원), presigned 직접 업로드 전환 여부 |
-| S-05 | 세션 유지·offline 초안 / 진행 중(PR #45, PR #46, PR #65) | S-01, C-01/C-02 | 완료: OS 보안 저장소 세션(재시작 복구·갱신·로그아웃 정리)과 사용자/학교별 SQLite 초안(재시작 복구·재전송·충돌·로그아웃 정리), 외부 브라우저 로그인의 PKCE·state·loopback 콜백 검증 모듈(단위 테스트 7개) / 남음: provider redirect 허용 목록 등록(소유자) 후 로그인 화면 연결 |
+| S-05 | 세션 유지·offline 초안 / 진행 중(PR #45, PR #46, PR #65, 브라우저 로그인 흐름) | S-01, C-01/C-02 | 완료: OS 보안 저장소 세션(재시작 복구·갱신·로그아웃 정리)과 사용자/학교별 SQLite 초안(재시작 복구·재전송·충돌·로그아웃 정리), 외부 브라우저 로그인의 PKCE·state·loopback 콜백 검증과 전체 흐름(콜백 수신·code 교환·취소·만료, 가짜 provider 테스트) / 남음: provider redirect 허용 목록 등록(소유자) 후 로그인 화면 연결 |
 | S-06 | 알림·재처리용 outbox/worker / 완료(PR #43, `e722bce`) | S-01 | 업무 변경+outbox 단일 transaction, relay/JetStream/idempotent 처리, commit 후 ACK, retry/dead-letter·중복 전달 복구 |
 | S-07 | 결과 내보내기·전체 흐름 검증 / 완료(PR #48, PR #50, PR #53) | S-02~S-06, 출시 시 C-02~C-05 | 완료: CSV 결과의 권한·누락 검증, 화면 내보내기 버튼, 마감 후·다른 학교 내보내기 경계, 역할 4종 단일 시나리오를 통합 SHA에서 검증 |
 
@@ -123,6 +123,8 @@ PR #45(세션 보안 저장소)와 PR #46(오프라인 초안)로 세션 유지�
 - 세션: 로그인하면 access token·refresh token·만료 시각·사용자 정보를 OS 자격 증명 저장소(Windows)에 저장합니다. 비밀번호는 저장하지 않습니다. 앱 시작 시 저장된 세션을 읽고, 만료 임박이면 refresh token으로 갱신하며, 실패하면 저장된 세션을 지우고 다시 로그인하게 합니다. 로그아웃은 저장된 세션을 지웁니다.
 - 초안: 임시 저장·제출은 로컬 SQLite(`submission-drafts.sqlite`, 사용자·학교·수합 단위)에 먼저 쓰고 서버로 보냅니다. 서버가 받으면 로컬 초본을 지웁니다. 화면을 열 때 로컬 초안이 있으면 그 값으로 복구하고 안내를 보여 줍니다. 로그아웃은 그 사용자의 초안을 지웁니다.
 - 한계: 항목 정의는 서버에서 오므로 작성 화면을 처음 여는 데는 연결이 필요합니다(초안 본문만 로컬). 외부 브라우저 PKCE는 identity provider의 redirect 허용 목록 결정이 필요해 별도 슬라이스로 둡니다.
+- 외부 브라우저 로그인 흐름(`apps/app/src-tauri/src/browser_login.rs`): 127.0.0.1의 임의 포트에 listener를 열고, S256 challenge·state를 담은 authorize URL을 만든 뒤, 콜백 하나를 받아 검증하고 verifier로 code를 교환합니다(Supabase `grant_type=pkce`). 첫 콜백·취소·만료 중 하나로 시도가 끝나며 listener는 그때 닫혀, 늦게 오거나 재생된 콜백은 연결되지 않습니다. token endpoint는 https만(테스트용 loopback 제외) 허용하고, 교환 실패는 상태 코드만 알립니다.
+- 검증(가짜 provider, 단위 테스트 5개): 맞는 콜백 → 교환 성공과 verifier가 challenge와 일치·token endpoint로만 전송·이후 재생 콜백 연결 불가, 다른 state·provider 오류 → 교환 요청 0건, 거절된 code → 400 교환 오류, 취소·만료 → 시도 종료와 늦은 콜백 연결 불가, http token endpoint 거절.
 
 검증 (2026-09-27, Windows):
 

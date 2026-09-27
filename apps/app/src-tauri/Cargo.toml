@@ -16,6 +16,8 @@ axum = { workspace = true }
 # PKCE (S-05): versions already resolved in Cargo.lock through other crates.
 base64 = "0.22"
 getrandom = "0.2"
+# Token exchange for the browser login; the workspace reqwest (rustls) is already locked.
+reqwest = { workspace = true }
 # Pinned to the libsqlite3-sys version the workspace already uses through sqlx.
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { workspace = true }
