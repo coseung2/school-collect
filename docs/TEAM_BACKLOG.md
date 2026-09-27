@@ -17,11 +17,11 @@
 
 | ID | 작업 | 현재 / 남은 것 | 완료 조건 |
 | --- | --- | --- | --- |
-| C-01 | Design System·AppShell·영역 경계 | 기본 DS/AppShell 통합; PR #54에서 설정·narrow 결함 수정. 남은 것은 Figma DS 확장(Library/Code Connect, 추가 컴포넌트) | 개인 화면은 로그인/학교/API 장애에 막히지 않음, 학교 화면은 membership 요구, 기기/학교 설정 구분, 키보드·narrow·offline·permission 검증 (2026-09-27 실제 창에서 확인) |
+| C-01 | Design System·AppShell·영역 경계 | 기본 DS/AppShell 통합; PR #54에서 설정·narrow 결함 수정; PR #66에서 Select·Checkbox 추가와 제품 화면 적용. 남은 것은 Dialog·Sheet·Toast(Figma 승인 필요)와 Library/Code Connect | 개인 화면은 로그인/학교/API 장애에 막히지 않음, 학교 화면은 membership 요구, 기기/학교 설정 구분, 키보드·narrow·offline·permission 검증 (2026-09-27 실제 창에서 확인) |
 | C-02 | 서버 인증·권한·오류·관측 / 완료(PR #39, `7285981`) | OIDC/JWKS·user upsert·membership RBAC·request ID 구현 + 키 회전/장애/캐시, 네 역할, 요청 ID·redaction 부정 테스트, 요청 ID span과 `/metrics` | 남은 것: RLS는 필요성 판단 후속(적용 완료로 표시하지 않음), 운영 수집기 연결 |
-| C-03 | 학교 서버 환경·데이터·복구 | 로컬 Docker/배포 구성 있음; 운영 연결 미완 | staging/prod 분리, HTTPS/CORS/CSP, runtime/migrator 최소 권한, Infisical 주입, backup/restore drill과 RPO/RTO |
-| C-04 | 저장소 보안·협업 | HEAD 자료 정리·보호 설정 과거 검증 기록 있음 | 나머지 credential 확인, 승인된 history 범위·복구·공개 사본 한계, 미검증 merge 차단, 협업자 추가 시 approval/code-owner 강화 |
-| C-05 | 앱 설치·서명·업데이트·플랫폼 | Windows build/smoke 기록 있고 PR #54에서 통합 SHA native 검증을 마쳤습니다. 남은 것은 서명·업데이트(소유자 결정) | 변경 통합 SHA의 native 검증, 승인된 서명/업데이트·복구; Linux/macOS/mobile은 해당 대상을 제공하기 전 검증 |
+| C-03 | 학교 서버 환경·데이터·복구 | 로컬 Docker/배포 구성 있음; PR #62로 백업·복구 drill 스크립트를 CI에서 매번 실행(schema·migration·테이블 13개 행 수·canary 대조). 운영 연결 미완 | staging/prod 분리, HTTPS/CORS/CSP, runtime/migrator 최소 권한, Infisical 주입, 운영 DB 대상 drill과 RPO/RTO |
+| C-04 | 저장소 보안·협업 | HEAD 자료 정리·보호 설정 과거 검증 기록 있음; PR #64로 전체 이력 스캔(155 커밋, HEAD 0건)과 rewrite 범위 후보 3묶음 기록 | 나머지 credential 폐기 확인, 승인된 history rewrite 실행·공개 사본 한계, 미검증 merge 차단, 협업자 추가 시 approval/code-owner 강화 |
+| C-05 | 앱 설치·서명·업데이트·플랫폼 | PR #54에서 통합 SHA native 검증; PR #63으로 Windows 설치 파일(NSIS, 현재 사용자 설치)을 CI에서 매번 생성·검사(서명 없음). 남은 것은 서명 인증서·업데이트 채널(소유자 결정) | 변경 통합 SHA의 native 검증, 승인된 서명/업데이트·복구; Linux/macOS/mobile은 해당 대상을 제공하기 전 검증 |
 
 C-03은 학교 서버에 의존하는 기능의 운영 게이트입니다. C-05의 Windows 검증과 모바일 검증은 구분합니다. Figma Library/Code Connect·추가 컴포넌트·interaction/accessibility는 C-01 후속입니다.
 

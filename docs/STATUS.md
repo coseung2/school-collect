@@ -26,6 +26,13 @@
 - S-04 파일 첨부 1차(metadata 계약·보존 규칙)는 PR #58(`e3a541c`)로 develop에 통합했습니다. 병합 전 CI 7개가 성공했고, 실제 개발 DB에서 `crates/db/tests/attachments.rs` 5개(슬롯 열기·완료·목록/조회·삭제 규칙·만료/purge)가 통과했습니다.
 - S-04 2차(업로드·다운로드 API와 저장소 port)는 PR #59(`2486f8d`)로 develop에 통합했습니다. 병합 전 CI 7개가 성공했고, 실제 provider+PostgreSQL E2E `attachment_flow_end_to_end`가 업로드·조회·목록·삭제와 다른 학교 접근 404/403을 확인한 뒤 생성한 계정·행을 모두 삭제합니다.
 - S-04 3차(보존 기간 정리 sweep)는 PR #60(`aaa55c5`)로 develop에 통합했습니다. 병합 전 CI 7개가 성공했고, 실제 개발 DB에서 worker `attachment_sweep` 1개(만료 첨부 삭제, bytes 삭제 실패 시 행 유지)와 relay 6개가 통과했습니다. 통합 SHA `aaa55c5`에서 E2E 5개와 `@example.test` 잔여 0을 다시 확인했습니다.
+- 독립 검토가 저장소 안에서 선행 가능하다고 밝힌 나머지 범위를 PR #62~#66으로 통합했습니다. 각 PR은 병합 전 CI 7개가 성공했습니다.
+  - C-03 백업·복구 drill(PR #62, `74e1149`): CI `postgres` 작업이 dump → 빈 DB 복구 → schema version·migration 5개·`school_collect` 테이블 13개 행 수·canary 행을 대조합니다. 첫 실행에서 client가 입력을 가로채 테이블 1개만 검사하던 결함을 CI 로그로 찾아 고쳤습니다.
+  - C-05 Windows 설치 파일(PR #63, `73067bd`): CI가 `School Collect_0.2.0_x64-setup.exe`(약 2.97MB)를 매번 만들고 서명 상태(`NotSigned`)를 기록합니다. updater는 켜지 않았습니다.
+  - C-04 전체 이력 스캔(PR #64, `8829326`): 155개 커밋에서 HEAD 0건, 과거 revision의 rewrite 후보 3묶음을 [SECURITY_BASELINE.md](SECURITY_BASELINE.md)에 기록했습니다. 값은 출력하지 않습니다.
+  - S-05 PKCE·state 검증(PR #65, `d6c86a3`): 단위 테스트 7개(RFC 7636 공식 값 포함). 로그인 화면 연결은 redirect 허용 목록 결정 후입니다.
+  - C-01 Select·Checkbox(PR #66, `cbddb20`): 실제 브라우저에서 접근성 이름·키보드 토글·40/36px 높이·640px 넘침 없음을 확인했고, 검증 계정·학교를 지웠습니다(잔여 0).
+  - 이 시점 `cargo test --workspace --locked`는 125개입니다.
 - 학교 화면의 로그인 이후 흐름과 과거 native/API/DB·브라우저 검증, 외부 운영 설정은 이번에 재실행·재조회하지 않았습니다. CI 성공도 production 배포를 대신하지 않습니다.
 
 ## 학교업무 / 개인기능 상태
@@ -47,7 +54,7 @@ PR #24/#25는 모두 develop에 병합됐습니다(`f573bfb`, `11a0af0`). 병합
 - 수정: 확장 권한 문서가 `scripting`을 빠뜨렸고, 감시의 "본문 미저장" 문구가 사용자 선택을 반영하지 못했습니다. 문서와 확장 README를 실제 동작에 맞췄습니다.
 - 검증 보강: 통합 SHA `02f16a2`와 수정 통합 SHA `67e7dc1`에서 실제 provider·PostgreSQL E2E 4개를 다시 통과시켰고, 남은 계정·행이 0임을 확인했습니다. `394f9c9 -> 02f16a2` 차이는 문서뿐이라 그 이전 CI(V2 Architecture 성공)가 같은 앱·서버 코드를 덮고, `02f16a2 -> 67e7dc1`은 이 검토 대응 변경(초안 접근·정리·문서)입니다.
 - 남은 blocker(소유자 결정·외부 자원 필요): S-04 private R2 adapter·presigned·화면, S-05 외부 브라우저 PKCE, C-03 staging/prod·최소 권한 DB·backup/restore drill, C-05 서명·업데이트. 승격 전에 닫아야 합니다.
-- 검토자가 저장소 안에서 선행 가능하다고 밝힌 범위를 진행했습니다: S-04 attachment contract·storage port·개발 adapter·만료 sweep까지 PR #58~#60으로 통합했습니다. C-03 backup/restore 검증 스크립트와 C-05 bundle/updater 설정은 이후 슬라이스로 남아 있습니다.
+- 검토자가 저장소 안에서 선행 가능하다고 밝힌 범위를 모두 진행했습니다: S-04 attachment contract·storage port·개발 adapter·만료 sweep(PR #58~#60), C-03 backup/restore drill(#62), C-05 설치 파일 번들(#63), C-04 full-history scan과 rewrite 범위(#64), S-05 PKCE state 검증(#65), C-01 Select·Checkbox(#66). Dialog·Sheet·Toast와 updater는 각각 Figma 승인과 서명 키가 필요해 남겨 두었습니다.
 - 기존 한계(이번에 바뀌지 않음): 자동화는 아직 `origin`까지만 비교합니다(월/화면 식별자 미구현).
 
 ## 단계 상태
