@@ -4,9 +4,11 @@ use anyhow::Context;
 use sqlx::{PgConnection, PgPool, postgres::PgPoolOptions};
 
 pub mod invitations;
+pub mod outbox;
 pub mod records;
 
 pub use invitations::*;
+pub use outbox::*;
 pub use records::*;
 
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations/v2");

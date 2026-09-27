@@ -329,6 +329,22 @@ pub async fn create_collect(
         Some(collect.id),
     )
     .await?;
+    crate::outbox::insert_outbox(
+        &mut tx,
+        Some(tenant_id),
+        crate::outbox::NewOutboxEvent {
+            topic: "school_collect.collects",
+            event_type: "collect.created",
+            aggregate_id: Some(collect.id),
+            payload: &crate::outbox::collect_event_payload(
+                collect.id,
+                &collect.status,
+                collect.version,
+                collect.updated_at,
+            ),
+        },
+    )
+    .await?;
 
     tx.commit().await?;
     Ok(collect)
@@ -737,6 +753,26 @@ pub async fn transition_collect(
         Some(collect_id),
     )
     .await?;
+    crate::outbox::insert_outbox(
+        &mut tx,
+        Some(tenant_id),
+        crate::outbox::NewOutboxEvent {
+            topic: "school_collect.collects",
+            event_type: if to == "closed" {
+                "collect.closed"
+            } else {
+                "collect.published"
+            },
+            aggregate_id: Some(collect_id),
+            payload: &crate::outbox::collect_event_payload(
+                updated.id,
+                &updated.status,
+                updated.version,
+                updated.updated_at,
+            ),
+        },
+    )
+    .await?;
 
     tx.commit().await?;
     Ok(TransitionOutcome::Changed(updated))
@@ -960,6 +996,22 @@ pub async fn submit(
                 "collect.submitted",
                 "collect_submission",
                 Some(submitted.id),
+            )
+            .await?;
+            crate::outbox::insert_outbox(
+                &mut tx,
+                Some(tenant_id),
+                crate::outbox::NewOutboxEvent {
+                    topic: "school_collect.submissions",
+                    event_type: "collect.submitted",
+                    aggregate_id: Some(collect_id),
+                    payload: &serde_json::json!({
+                        "collectId": collect_id,
+                        "submissionId": submitted.id,
+                        "userId": user_id,
+                        "version": submitted.version,
+                    }),
+                },
             )
             .await?;
 
