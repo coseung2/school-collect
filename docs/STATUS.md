@@ -9,14 +9,14 @@
 - `git fetch origin` 후 PR #24(S-01, `f573bfb`)와 PR #25(P-01, `11a0af0`), 계획 문서 PR #26(`65058b3`)을 develop에 통합했습니다.
 - 두 PR 모두 병합 전 CI 6개(`repository-checks`, `rust-and-web`, `lockfiles-verified`, `postgres`, `server-image`, `tauri-windows-smoke`)가 성공했습니다.
 - 병합 후 실제 데스크톱 창에서 로그인 없는 개인 화면 열기, 레시피 등록·열기·삭제·실행 취소·재시작 보존을 확인했고, 학교 화면은 Permission 상태로 표시되는 것을 확인했습니다.
-- S-02 초대는 실제 Supabase 로그인과 실제 PostgreSQL에서 E2E(`membership_invitation_end_to_end`)로 확인했고, 생성한 계정·행은 테스트가 삭제했습니다.
+- S-02 초대는 실제 Supabase 로그인과 실제 PostgreSQL에서 E2E(`membership_invitation_end_to_end`)로 확인했고, 생성한 계정·행은 테스트가 삭제했습니다. PR #28(`9416c6c`)로 develop에 통합했습니다.
 - 학교 화면의 로그인 이후 흐름과 과거 native/API/DB·브라우저 검증, 외부 운영 설정은 이번에 재실행·재조회하지 않았습니다. CI 성공도 production 배포를 대신하지 않습니다.
 
 ## 학교업무 / 개인기능 상태
 
 | 영역 | 통합된 것 | 통합 전 구현 | 남은 우선 작업 |
 | --- | --- | --- | --- |
-| 학교업무 | PR #19·#24 통합(`f573bfb`) | S-02 초대 API·화면 구현과 실제 프로젝트 E2E(리뷰 대기) | S-03 항목·대상 편집과 권한 규칙 |
+| 학교업무 | PR #19·#24 통합(`f573bfb`) + S-02 초대·합류 통합(`9416c6c`) | 없음 | S-03 항목·대상 편집과 권한 규칙 |
 | 개인기능 | PR #25로 로컬 바로가기·로그인 없는 개인 화면 통합(`11a0af0`), 실제 창 검증 완료 | 없음 | P-02 브라우저 확장·현재 화면 등록 |
 | 공통 기반 | PR #17 DS/AppShell, PR #20 Docker 스택, PR #24 병합에서 학교/개인 화면 경계 정리 | 없음 | C-01 설정·offline 세부, C-02~C-05 보안·운영·배포 |
 
