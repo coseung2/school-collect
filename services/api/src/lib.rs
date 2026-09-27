@@ -44,8 +44,7 @@ use tower_http::{
 use utoipa::OpenApi;
 use uuid::Uuid;
 
-pub mod storage;
-pub use storage::FileStorage;
+pub use school_collect_application::storage::FileStorage;
 
 /// Shared request state.
 ///
