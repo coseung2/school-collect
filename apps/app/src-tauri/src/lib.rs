@@ -1089,7 +1089,10 @@ pub(crate) struct StoredAuthSession {
 /// Windows Credential Manager rejects blobs larger than 2560 bytes, so the
 /// stored JSON stays well below that.
 const MAX_SESSION_BYTES: usize = 2_048;
+// The credential-store entry only exists on platforms with a store.
+#[cfg(windows)]
 const SESSION_SERVICE: &str = "kr.schoolcollect.app";
+#[cfg(windows)]
 const SESSION_ACCOUNT: &str = "auth-session";
 
 fn validate_auth_session(session: &StoredAuthSession) -> Result<String, String> {
