@@ -20,7 +20,7 @@
 | S-02 | 구성원 초대·합류 / 완료(PR #28, `9416c6c`) | S-01 | 초대된 계정이 해당 학교 contributor로 합류해 수합 제출; 다른 학교·계정에는 권한이 생기지 않음. 다음은 S-03 |
 | S-03 | 항목·대상 편집과 권한 규칙 / 완료(PR #41, `70dcbfe`) | S-01, 구성원 변경 시 S-02 | 배포 전후 변경·역할 변경·미배정 제출 정책 확정, 서버 검증·충돌 처리·변경 기록과 UI 검증 |
 | S-04 | 파일 첨부 / 계획 | S-01, C-03 승인된 저장소 설정 | 권한 확인 후 private R2 업로드/다운로드, 크기·유형·만료·보존 정책, 실패/재시도·학교 간 접근 차단 |
-| S-05 | 세션 유지·offline 초안 / 계획 | S-01, C-01/C-02 | 외부 브라우저 PKCE + OS 보안 저장소, 사용자/학교별 SQLite 초안, 재시작 복구·재전송·충돌·로그아웃 정리 |
+| S-05 | 세션 유지·offline 초안 / 진행 중(PR #45, PR #46) | S-01, C-01/C-02 | 완료: OS 보안 저장소 세션(재시작 복구·갱신·로그아웃 정리)과 사용자/학교별 SQLite 초안(재시작 복구·재전송·충돌·로그아웃 정리) / 남음: 외부 브라우저 PKCE |
 | S-06 | 알림·재처리용 outbox/worker / 완료(PR #43, `e722bce`) | S-01 | 업무 변경+outbox 단일 transaction, relay/JetStream/idempotent 처리, commit 후 ACK, retry/dead-letter·중복 전달 복구 |
 | S-07 | 결과 내보내기·전체 흐름 검증 / 계획 | S-02~S-06, 출시 시 C-02~C-05 | CSV/문서 결과의 권한·누락·재처리 검증, 학교 A/B와 역할별 전체 흐름을 통합 SHA에서 검증 |
 
@@ -71,6 +71,19 @@ PR #43(`feat/outbox-relay`)로 업무 변경과 이벤트를 한 transaction에 
 - 아직 아님: 이벤트를 소비하는 서비스(알림 발송 등). 이 슬라이스는 배달·재처리까지입니다.
 
 ## 이미 있는 기반과 남은 검증
+
+## 세션 유지와 offline 초안 (S-05)
+
+PR #45(세션 보안 저장소)와 PR #46(오프라인 초안)로 세션 유지와 초안 보관을 develop에 통합했습니다. 외부 브라우저 PKCE 로그인은 남아 있습니다.
+
+- 세션: 로그인하면 access token·refresh token·만료 시각·사용자 정보를 OS 자격 증명 저장소(Windows)에 저장합니다. 비밀번호는 저장하지 않습니다. 앱 시작 시 저장된 세션을 읽고, 만료 임박이면 refresh token으로 갱신하며, 실패하면 저장된 세션을 지우고 다시 로그인하게 합니다. 로그아웃은 저장된 세션을 지웁니다.
+- 초안: 임시 저장·제출은 로컬 SQLite(`submission-drafts.sqlite`, 사용자·학교·수합 단위)에 먼저 쓰고 서버로 보냅니다. 서버가 받으면 로컬 초본을 지웁니다. 화면을 열 때 로컬 초안이 있으면 그 값으로 복구하고 안내를 보여 줍니다. 로그아웃은 그 사용자의 초안을 지웁니다.
+- 한계: 항목 정의는 서버에서 오므로 작성 화면을 처음 여는 데는 연결이 필요합니다(초안 본문만 로컬). 외부 브라우저 PKCE는 identity provider의 redirect 허용 목록 결정이 필요해 별도 슬라이스로 둡니다.
+
+검증 (2026-09-27, Windows):
+
+- `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo test --workspace --locked`(95개), 앱 typecheck/build, foundation 25개, repository guard. 초안 저장소 단위 테스트 3개(사용자·학교 분리, 재저장 교체, 로그아웃 정리, 잘못된 식별자·크기 초과 거부)를 포함합니다.
+- 실제 Tauri 창: 로그인 → Windows 자격 증명 관리자에 세션 항목 생성 → 앱 재시작 후 로그인 유지 → 로그아웃 시 항목 삭제. API를 끈 상태에서 임시 저장 → 로컬 SQLite에 초안 기록, 재시작 후 제출 화면에서 값 복구, API 복구 후 임시 저장 → 서버 저장·로컬 초안 삭제, 로그아웃 → 재로그인 시 초안 없음을 확인했습니다. 검증용 계정·행·초안 파일은 정리했습니다.
 
 인증과 membership RBAC를 새로 시작하는 작업으로 되돌리지 않습니다. `crates/auth`의 OIDC/JWKS 검증, `crates/db/src/records.rs`의 사용자 upsert·membership 조회, `services/api/src/lib.rs`의 권한 및 request ID 처리가 이미 있습니다.
 
