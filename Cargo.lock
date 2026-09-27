@@ -3763,6 +3763,7 @@ dependencies = [
 name = "school-collect-domain"
 version = "0.2.0"
 dependencies = [
+ "chrono",
  "serde",
  "uuid",
 ]

@@ -43,5 +43,47 @@ class SchemaContractTests(unittest.TestCase):
         self.assertNotIn("INSERT INTO collects", self.sql)
 
 
+class AttachmentSchemaTests(unittest.TestCase):
+    """첨부 metadata 표가 정책 입력을 모두 보관하는지 확인합니다."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.sql = (
+            ROOT / "migrations" / "v2" / "0005_collect_attachments.sql"
+        ).read_text(encoding="utf-8")
+
+    def test_attachment_rows_keep_policy_inputs(self):
+        self.assertIn(
+            "CREATE TABLE IF NOT EXISTS school_collect.collect_attachments", self.sql
+        )
+        for column in (
+            "tenant_id",
+            "collect_id",
+            "user_id",
+            "item_key",
+            "file_name",
+            "content_type",
+            "byte_size",
+            "checksum_sha256",
+            "object_key",
+            "expires_at",
+        ):
+            self.assertIn(column, self.sql)
+        self.assertIn("status IN ('pending', 'stored', 'deleted')", self.sql)
+
+    def test_attachment_rows_are_tenant_scoped_and_cascade(self):
+        self.assertIn(
+            "REFERENCES school_collect.tenants(id) ON DELETE CASCADE", self.sql
+        )
+        self.assertIn(
+            "FOREIGN KEY (tenant_id, collect_id) "
+            "REFERENCES school_collect.collects(tenant_id, id) ON DELETE CASCADE",
+            self.sql,
+        )
+
+    def test_attachment_migration_has_no_demo_seed(self):
+        self.assertNotIn("INSERT INTO", self.sql)
+
+
 if __name__ == "__main__":
     unittest.main()
