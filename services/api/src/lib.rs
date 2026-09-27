@@ -27,7 +27,8 @@ use school_collect_db::{
     AcceptInvitationOutcome, AttachmentRecord, ClaimUploadOutcome, CollectRecord,
     CompleteAttachmentOutcome, CreateAttachmentOutcome, CreateInvitationOutcome,
     DeleteAttachmentOutcome, InvitationRecord, NewAttachment, NewCollectItem, SaveDraftOutcome,
-    SubmitOutcome, TransitionOutcome, UpdateAssignmentsOutcome, UpdateItemsOutcome, UserRecord,
+    SlotOwnership, SubmitOutcome, TransitionOutcome, UpdateAssignmentsOutcome, UpdateItemsOutcome,
+    UserRecord,
 };
 use school_collect_domain::{
     MembershipRole,
@@ -1025,6 +1026,38 @@ async fn upload_attachment_content(
     };
     let attempt_key = record.object_key.clone();
 
+    // A writer whose claim was taken over can wake up here, after the takeover
+    // and after any cleanup already ran. Ask who owns the slot again before
+    // sending anything, so a superseded attempt never creates an object that
+    // only a later sweep would notice.
+    match school_collect_db::attachment_slot_ownership(
+        &state.pool,
+        tenant_id,
+        record.id,
+        attempt_id,
+    )
+    .await
+    {
+        Ok(SlotOwnership::Held) => {}
+        Ok(SlotOwnership::Lost) => {
+            return failure(
+                &headers,
+                StatusCode::CONFLICT,
+                "attachment_upload_superseded",
+                "이 첨부 파일은 다른 시도가 이어받았습니다. 목록을 새로 고친 뒤 다시 시도해 주세요.",
+            );
+        }
+        Ok(SlotOwnership::Gone) => {
+            return failure(
+                &headers,
+                StatusCode::CONFLICT,
+                "attachment_not_open",
+                "이미 제출했거나 마감된 수합에는 파일을 올릴 수 없습니다.",
+            );
+        }
+        Err(_) => return storage_failure(&headers),
+    }
+
     // From here on every failure removes the written bytes and hands the slot
     // back, so neither an orphan object nor a stuck claim is left behind.
     let abandon = |key: String| {
@@ -1038,8 +1071,13 @@ async fn upload_attachment_content(
                     reason = %error,
                     "failed upload left bytes behind; recording them for the retention sweep"
                 );
-                if let Err(error) =
-                    school_collect_db::record_attachment_orphan(&pool, tenant_id, &key).await
+                if let Err(error) = school_collect_db::record_attachment_orphan(
+                    &pool,
+                    tenant_id,
+                    attachment_id,
+                    &key,
+                )
+                .await
                 {
                     tracing::warn!(reason = %error, "leftover bytes could not be recorded");
                 }

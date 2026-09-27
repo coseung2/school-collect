@@ -53,6 +53,8 @@ async fn main() -> anyhow::Result<()> {
         JetStreamConsumer::from_context(publisher.context().clone(), CONSUMER_NAME).await?,
     );
     let consumer_batch = read_number("WORKER_CONSUMER_BATCH", 50)?;
+    let consumer_idle = Duration::from_millis(read_number("WORKER_CONSUMER_IDLE_MS", 1_000)?);
+    let consumer_backoff = Duration::from_millis(read_number("WORKER_CONSUMER_BACKOFF_MS", 5_000)?);
     let effect: Arc<dyn EventEffect> = Arc::new(RecordOnlyEffect);
     tracing::info!(consumer = CONSUMER_NAME, "outbox consumer started");
 
@@ -95,6 +97,8 @@ async fn main() -> anyhow::Result<()> {
         consumer,
         effect,
         consumer_batch,
+        consumer_idle,
+        consumer_backoff,
         async {
             let _ = tokio::signal::ctrl_c().await;
         },

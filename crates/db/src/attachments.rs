@@ -234,16 +234,19 @@ pub async fn claim_attachment_upload(
         .map(|_| object_key);
     // Recording the superseded object in the same transaction that stops
     // pointing the row at it is what keeps it tracked: once this commits, a
-    // crash before any storage call cannot lose the key, and a late `PUT` from
-    // the writer that just lost the slot is still covered when the sweep runs.
+    // crash before any storage call cannot lose the key. The record carries the
+    // attachment it came from, so it lives exactly as long as the slot does and
+    // a writer that resumes late is still covered.
     if let Some(superseded) = &superseded_object_key {
         sqlx::query(
-            "INSERT INTO school_collect.attachment_orphans (id, tenant_id, object_key)
-             VALUES ($1, $2, $3)
+            "INSERT INTO school_collect.attachment_orphans
+               (id, tenant_id, attachment_id, object_key)
+             VALUES ($1, $2, $3, $4)
              ON CONFLICT (object_key) DO NOTHING",
         )
         .bind(Uuid::now_v7())
         .bind(tenant_id)
+        .bind(attachment_id)
         .bind(superseded)
         .execute(&mut *tx)
         .await?;
@@ -659,6 +662,11 @@ pub struct ExpiredAttachment {
 /// Deleted rows are included on purpose: their bytes may still be in storage
 /// if removal failed, and their metadata (file name, owner) must not outlive
 /// the retention period either.
+///
+/// A row whose claim is still live is skipped: a writer that is actually
+/// running must not have its slot (and the object it is writing) removed
+/// underneath it. A claim that was abandoned stops being live after
+/// [`UPLOAD_CLAIM_TIMEOUT_SECONDS`], so the next pass takes that row.
 pub async fn expired_attachments(
     pool: &PgPool,
     now: DateTime<Utc>,
@@ -667,11 +675,14 @@ pub async fn expired_attachments(
     let records = sqlx::query_as::<_, ExpiredAttachment>(
         "SELECT id, tenant_id, object_key FROM school_collect.collect_attachments
          WHERE expires_at <= $1
+           AND (upload_claimed_at IS NULL
+                OR upload_claimed_at <= $1 - make_interval(secs => $3))
          ORDER BY expires_at
          LIMIT $2",
     )
     .bind(now)
     .bind(limit)
+    .bind(UPLOAD_CLAIM_TIMEOUT_SECONDS as f64)
     .fetch_all(pool)
     .await?;
     Ok(records)
@@ -693,6 +704,10 @@ pub struct OrphanAttachment {
     pub id: Uuid,
     pub tenant_id: Uuid,
     pub object_key: String,
+    /// Whether the attachment this record came from is already gone. While it
+    /// exists the record is kept and re-checked, because a superseded writer
+    /// may still send bytes to this key.
+    pub attachment_missing: bool,
 }
 
 /// Remembers bytes whose owner gave them up, so the sweep removes them.
@@ -704,15 +719,18 @@ pub struct OrphanAttachment {
 pub async fn record_attachment_orphan(
     pool: &PgPool,
     tenant_id: Uuid,
+    attachment_id: Uuid,
     object_key: &str,
 ) -> anyhow::Result<()> {
     sqlx::query(
-        "INSERT INTO school_collect.attachment_orphans (id, tenant_id, object_key)
-         VALUES ($1, $2, $3)
+        "INSERT INTO school_collect.attachment_orphans
+           (id, tenant_id, attachment_id, object_key)
+         VALUES ($1, $2, $3, $4)
          ON CONFLICT (object_key) DO NOTHING",
     )
     .bind(Uuid::now_v7())
     .bind(tenant_id)
+    .bind(attachment_id)
     .bind(object_key)
     .execute(pool)
     .await?;
@@ -721,22 +739,21 @@ pub async fn record_attachment_orphan(
 
 /// Objects the sweep still has to remove.
 ///
-/// Only rows recorded before `created_before` are returned. A fresh row may
-/// still belong to a writer whose claim was just taken over: it can send its
-/// bytes a little longer, so the tracking is kept until that window passed
-/// instead of being cleared while a late `PUT` could recreate the object.
+/// Every recorded key is returned, oldest first, together with whether the
+/// attachment it came from still exists. Age is not a proof that a superseded
+/// writer stopped, so the record is not retired on age; it is retired once the
+/// slot it belonged to is gone.
 pub async fn orphaned_attachments(
     pool: &PgPool,
-    created_before: DateTime<Utc>,
     limit: i64,
 ) -> anyhow::Result<Vec<OrphanAttachment>> {
     let records = sqlx::query_as::<_, OrphanAttachment>(
-        "SELECT id, tenant_id, object_key FROM school_collect.attachment_orphans
-         WHERE created_at <= $1
-         ORDER BY created_at
-         LIMIT $2",
+        "SELECT o.id, o.tenant_id, o.object_key, (a.id IS NULL) AS attachment_missing
+         FROM school_collect.attachment_orphans o
+         LEFT JOIN school_collect.collect_attachments a ON a.id = o.attachment_id
+         ORDER BY o.created_at
+         LIMIT $1",
     )
-    .bind(created_before)
     .bind(limit)
     .fetch_all(pool)
     .await?;
@@ -751,6 +768,47 @@ pub async fn purge_attachment_orphan(pool: &PgPool, orphan_id: Uuid) -> anyhow::
         .await?
         .rows_affected();
     Ok(removed > 0)
+}
+
+/// Whether an attempt still owns the slot it is about to write bytes to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlotOwnership {
+    /// The slot is gone, or something already stored it, so there is nothing to
+    /// write.
+    Gone,
+    /// Another attempt owns the slot now.
+    Lost,
+    /// This attempt still owns the slot.
+    Held,
+}
+
+/// Reads the current owner of a slot.
+///
+/// A writer whose claim was taken over can wake up long after it stopped being
+/// the owner. Asking again just before the bytes are sent means it stops
+/// instead of creating an object that only a later cleanup would notice.
+pub async fn attachment_slot_ownership(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    attachment_id: Uuid,
+    attempt_id: Uuid,
+) -> anyhow::Result<SlotOwnership> {
+    let current = sqlx::query_as::<_, (String, Option<Uuid>)>(
+        "SELECT status, upload_attempt_id FROM school_collect.collect_attachments
+         WHERE tenant_id = $1 AND id = $2",
+    )
+    .bind(tenant_id)
+    .bind(attachment_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(match current {
+        None => SlotOwnership::Gone,
+        Some((status, _)) if status == "deleted" || status == "stored" => SlotOwnership::Gone,
+        Some((status, owner)) if status == "uploading" && owner == Some(attempt_id) => {
+            SlotOwnership::Held
+        }
+        Some(_) => SlotOwnership::Lost,
+    })
 }
 
 async fn insert_audit(
