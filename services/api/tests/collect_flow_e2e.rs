@@ -446,7 +446,7 @@ async fn authenticated_collect_flow_end_to_end() {
             &format!("/v1/collects/{collect_id}/submission"),
             Some(&alpha.access_token),
             Some(&alpha_tenant),
-            Some(json!({ "expectedVersion": 0, "payload": { "note": "first" } })),
+            Some(json!({ "expectedVersion": 0, "payload": { "plan": "first" } })),
         )
         .await;
         if status != StatusCode::OK || saved["version"] != 1 {
@@ -460,7 +460,7 @@ async fn authenticated_collect_flow_end_to_end() {
             &format!("/v1/collects/{collect_id}/submission"),
             Some(&alpha.access_token),
             Some(&alpha_tenant),
-            Some(json!({ "expectedVersion": 0, "payload": { "note": "stale" } })),
+            Some(json!({ "expectedVersion": 0, "payload": { "plan": "stale" } })),
         )
         .await;
         if status != StatusCode::CONFLICT
@@ -507,7 +507,7 @@ async fn authenticated_collect_flow_end_to_end() {
             &format!("/v1/collects/{collect_id}/submission"),
             Some(&alpha.access_token),
             Some(&alpha_tenant),
-            Some(json!({ "expectedVersion": 2, "payload": { "note": "after submit" } })),
+            Some(json!({ "expectedVersion": 2, "payload": { "plan": "after submit" } })),
         )
         .await;
         if status != StatusCode::CONFLICT {
@@ -536,7 +536,7 @@ async fn authenticated_collect_flow_end_to_end() {
             &format!("/v1/collects/{collect_id}/submission"),
             Some(&alpha.access_token),
             Some(&alpha_tenant),
-            Some(json!({ "expectedVersion": 2, "payload": { "note": "after close" } })),
+            Some(json!({ "expectedVersion": 2, "payload": { "plan": "after close" } })),
         )
         .await;
         if status != StatusCode::CONFLICT {
@@ -556,10 +556,56 @@ async fn authenticated_collect_flow_end_to_end() {
         .await;
         if status != StatusCode::OK
             || detail["submission"]["status"] != "submitted"
-            || detail["submission"]["payload"]["note"] != "first"
+            || detail["submission"]["payload"]["plan"] != "first"
         {
             return Err(format!(
                 "stored submission was not readable: {status} {detail}"
+            ));
+        }
+
+        // Results stay exportable after the collect closes, and the file keeps
+        // the member row even though the export runs in a later state.
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/collects/{collect_id}/export"))
+                    .header(
+                        header::AUTHORIZATION,
+                        format!("Bearer {}", alpha.access_token),
+                    )
+                    .header("x-tenant-id", &alpha_tenant)
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("router");
+        if response.status() != StatusCode::OK {
+            return Err(format!("export after close failed: {}", response.status()));
+        }
+        let bytes = axum::body::to_bytes(response.into_body(), 1_000_000)
+            .await
+            .expect("csv body");
+        let csv = String::from_utf8(bytes.to_vec()).expect("utf8 csv");
+        if !csv.contains("first") {
+            return Err(format!("exported csv lost the answer: {csv}"));
+        }
+
+        // The other school's admin cannot export this collect even with a valid
+        // token: the tenant boundary is checked before anything is read.
+        let (status, refused) = call(
+            &app,
+            "GET",
+            &format!("/v1/collects/{collect_id}/export"),
+            Some(&beta.access_token),
+            Some(&alpha_tenant),
+            None,
+        )
+        .await;
+        if status != StatusCode::FORBIDDEN {
+            return Err(format!(
+                "cross-school export was not refused: {status} {refused}"
             ));
         }
 

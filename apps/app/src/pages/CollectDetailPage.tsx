@@ -12,6 +12,7 @@ import {
 } from "@school-collect/ui";
 import {
   closeCollect,
+  exportCollectCsv,
   fetchCollect,
   fetchCollectStatus,
   listMembers,
@@ -23,6 +24,7 @@ import {
   type CollectStatus,
   type Member,
 } from "../api";
+import { exportFileName, saveExportFile } from "../files";
 import {
   canManage,
   formatDue,
@@ -253,6 +255,29 @@ export function CollectDetailPage({
     }
   }
 
+  /** 결과를 CSV로 받아 다운로드 폴더에 저장합니다. */
+  async function exportResults() {
+    if (!detail) {
+      return;
+    }
+    setBusy(true);
+    setEditError(null);
+    setEditNotice(null);
+    setNotice(null);
+    try {
+      const csv = await exportCollectCsv(token, tenantId, detail.id);
+      const path = await saveExportFile(
+        exportFileName(detail.title, new Date()),
+        csv,
+      );
+      setNotice(`결과를 저장했습니다: ${path}`);
+    } catch (caught) {
+      setEditError(messageOf(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="app-page">
       <div className="app-detail-head">
@@ -290,6 +315,22 @@ export function CollectDetailPage({
           </p>
         ) : null}
         {notice ? <p className="app-form__notice">{notice}</p> : null}
+        {editError ? (
+          <p className="app-form__error" role="alert">
+            {editError}
+          </p>
+        ) : null}
+        <div className="app-row-actions">
+          <Button
+            disabled={busy}
+            loading={busy}
+            onClick={() => void exportResults()}
+            size="small"
+            variant="secondary"
+          >
+            결과 CSV 내보내기
+          </Button>
+        </div>
         {canPublish && !hasItems ? (
           <p className="app-form__error" role="status">
             항목이 없으면 배포할 수 없습니다. 수합을 다시 만들 때 항목을 넣어 주세요.

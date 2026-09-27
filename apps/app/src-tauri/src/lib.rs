@@ -1238,6 +1238,69 @@ fn clear_local_drafts(app_handle: tauri::AppHandle, user_id: String) -> Result<u
     drafts::clear_user_drafts(&path, user_id.trim())
 }
 
+/// Largest export the desktop app writes to disk.
+const MAX_EXPORT_BYTES: usize = 4 * 1024 * 1024;
+
+/// Keeps only a file name, never a path, so an export cannot escape the folder.
+fn sanitize_export_name(file_name: &str) -> Result<String, String> {
+    let trimmed = file_name.trim();
+    if trimmed.is_empty() || trimmed.chars().count() > 120 {
+        return Err("파일 이름이 올바르지 않습니다.".to_string());
+    }
+    if trimmed.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|'])
+        || trimmed.contains("..")
+        || trimmed.starts_with('.')
+    {
+        return Err("파일 이름에 사용할 수 없는 문자가 있습니다.".to_string());
+    }
+    if trimmed.contains(['\t', '\r', '\n']) {
+        return Err("파일 이름에 사용할 수 없는 문자가 있습니다.".to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
+/// Writes an exported file into the user's Downloads folder.
+///
+/// The renderer sends text it already received from the API; the app never
+/// invents the content. An existing file is never overwritten: a numeric suffix
+/// is added instead.
+#[tauri::command]
+fn save_export_file(
+    app_handle: tauri::AppHandle,
+    file_name: String,
+    content: String,
+) -> Result<String, String> {
+    let file_name = sanitize_export_name(&file_name)?;
+    if content.len() > MAX_EXPORT_BYTES {
+        return Err("내보낼 내용이 너무 큽니다.".to_string());
+    }
+
+    let directory = app_handle
+        .path()
+        .download_dir()
+        .map_err(|error| format!("다운로드 폴더를 찾지 못했습니다: {error}"))?;
+    fs::create_dir_all(&directory)
+        .map_err(|error| format!("다운로드 폴더를 만들지 못했습니다: {error}"))?;
+
+    let (stem, extension) = match file_name.rsplit_once('.') {
+        Some((stem, extension)) if !stem.is_empty() => (stem.to_string(), format!(".{extension}")),
+        _ => (file_name.clone(), String::new()),
+    };
+
+    let mut target = directory.join(&file_name);
+    let mut counter = 1;
+    while target.exists() {
+        target = directory.join(format!("{stem} ({counter}){extension}"));
+        counter += 1;
+        if counter > 1_000 {
+            return Err("같은 이름의 파일이 너무 많습니다.".to_string());
+        }
+    }
+
+    write_file_atomically(&target, &content)?;
+    Ok(target.to_string_lossy().to_string())
+}
+
 #[tauri::command]
 fn app_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
@@ -1290,7 +1353,8 @@ pub fn run() {
             list_local_drafts,
             load_local_draft,
             delete_local_draft,
-            clear_local_drafts
+            clear_local_drafts,
+            save_export_file
         ])
         .run(tauri::generate_context!())
         .expect("failed to run School Collect");
@@ -1327,6 +1391,49 @@ mod tests {
         let mut broken = session.clone();
         broken.user_id = "user\t1".to_string();
         assert!(validate_auth_session(&broken).is_err());
+    }
+
+    #[test]
+    fn export_file_names_stay_inside_the_downloads_folder() {
+        assert_eq!(
+            sanitize_export_name("collect-2026-09-27.csv").unwrap(),
+            "collect-2026-09-27.csv"
+        );
+        assert_eq!(
+            sanitize_export_name("결과 내보내기.csv").unwrap(),
+            "결과 내보내기.csv"
+        );
+
+        for rejected in [
+            "",
+            "   ",
+            "../escape.csv",
+            "..\\escape.csv",
+            "folder/file.csv",
+            "folder\\file.csv",
+            ".hidden.csv",
+            "line\nbreak.csv",
+            &"a".repeat(121),
+        ] {
+            assert!(
+                sanitize_export_name(rejected).is_err(),
+                "{rejected} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn stored_session_round_trips_through_json() {
+        let session = StoredAuthSession {
+            access_token: "a".repeat(64),
+            refresh_token: Some("r".repeat(32)),
+            user_id: "user-1".to_string(),
+            email: Some("teacher@example.test".to_string()),
+            expires_at_ms: Some(1_790_000_000_000),
+        };
+        let encoded = serde_json::to_string(&session).expect("encode");
+        let decoded: StoredAuthSession = serde_json::from_str(&encoded).expect("decode");
+        assert_eq!(decoded, session);
     }
 
     #[test]

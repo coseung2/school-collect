@@ -302,6 +302,43 @@ export const fetchCollectStatus = (
   id: string,
 ) => request<CollectStatus>(`/v1/collects/${id}/status`, { token, tenantId });
 
+/**
+ * Result export as CSV text.
+ *
+ * The response is not JSON, so it is fetched separately from `request`.
+ */
+export async function exportCollectCsv(
+  token: string,
+  tenantId: string,
+  id: string,
+): Promise<string> {
+  const response = await fetch(`${apiBaseUrl}/v1/collects/${id}/export`, {
+    headers: {
+      Accept: "text/csv",
+      Authorization: `Bearer ${token}`,
+      "x-tenant-id": tenantId,
+    },
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    let code = "request_failed";
+    let message = "결과를 내보내지 못했습니다.";
+    try {
+      const body = JSON.parse(text) as Record<string, unknown>;
+      if (typeof body.code === "string") {
+        code = body.code;
+      }
+      if (typeof body.message === "string") {
+        message = body.message;
+      }
+    } catch {
+      // The server sent something other than JSON; keep the default message.
+    }
+    throw new ApiError(response.status, code, message, null);
+  }
+  return text;
+}
+
 export const listMembers = (token: string, tenantId: string) =>
   request<{ members: Member[] }>("/v1/members", { token, tenantId });
 
