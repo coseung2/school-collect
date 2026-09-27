@@ -39,7 +39,7 @@
 
 | 영역 | 통합된 것 | 통합 전 구현 | 남은 우선 작업 |
 | --- | --- | --- | --- |
-| 학교업무 | PR #19·#24(`f573bfb`) + S-02(`9416c6c`) + S-03(`70dcbfe`) + S-06(`e722bce`) + S-05 세션·초안(`93cebdc`) + S-07 내보내기·역할 검증(`9860710`, `88b0a38`, `9b63abf`) + S-04 첨부 metadata·API·sweep(`e3a541c`, `2486f8d`, `aaa55c5`) | 없음 | S-05 외부 브라우저 PKCE(provider redirect 결정 필요), S-04 4차(private R2 adapter·presigned capability·제출 작성·검토 화면 — 저장소 자원 필요) |
+| 학교업무 | PR #19·#24(`f573bfb`) + S-02(`9416c6c`) + S-03(`70dcbfe`) + S-06(`e722bce`) + S-05 세션·초안(`93cebdc`)·브라우저 로그인 흐름(`9579a05`) + S-07 내보내기·역할 검증(`9860710`, `88b0a38`, `9b63abf`) + S-04 첨부 metadata·API·sweep·화면·R2 adapter(`e3a541c`, `2486f8d`, `aaa55c5`, `64aad02`, `04de924`) | 없음 | S-05 로그인 화면 연결(provider redirect 등록 필요), S-04 실제 R2 bucket 연결(bucket·credential 필요) |
 | 개인기능 | PR #25 개인 화면(`11a0af0`) + PR #30 브리지·확장(`795dc26`) + PR #32·#33 자동입력 엔진(`5318a96`) + PR #35 표 입력(`09b3f88`) + PR #37 감시(`e5415dc`) + PR #51 레시피 추천(`8704d95`) 통합 | 없음 | P-05 앱 데이터 연결(데이터 원천·권한 계약 대기) |
 | 공통 기반 | PR #17 DS/AppShell, PR #20 Docker 스택, PR #24 병합에서 학교/개인 화면 경계 정리, PR #54 설정·narrow 보완 | 없음 | C-01 Figma DS 확장, C-02~C-05 보안·운영·배포(소유자 결정·외부 자원 필요) |
 
@@ -53,7 +53,7 @@ PR #24/#25는 모두 develop에 병합됐습니다(`f573bfb`, `11a0af0`). 병합
 - 수정: E2E 정리가 panic 경로에서 보장되지 않았습니다. `TestCleanup` 가드가 panic에도 provider 계정과 행을 지우고, 네 테스트 모두 정리 후 남은 행 0을 확인합니다.
 - 수정: 확장 권한 문서가 `scripting`을 빠뜨렸고, 감시의 "본문 미저장" 문구가 사용자 선택을 반영하지 못했습니다. 문서와 확장 README를 실제 동작에 맞췄습니다.
 - 검증 보강: 통합 SHA `02f16a2`와 수정 통합 SHA `67e7dc1`에서 실제 provider·PostgreSQL E2E 4개를 다시 통과시켰고, 남은 계정·행이 0임을 확인했습니다. `394f9c9 -> 02f16a2` 차이는 문서뿐이라 그 이전 CI(V2 Architecture 성공)가 같은 앱·서버 코드를 덮고, `02f16a2 -> 67e7dc1`은 이 검토 대응 변경(초안 접근·정리·문서)입니다.
-- 남은 blocker(소유자 결정·외부 자원 필요): S-04 private R2 adapter·presigned·화면, S-05 외부 브라우저 PKCE, C-03 staging/prod·최소 권한 DB·backup/restore drill, C-05 서명·업데이트. 승격 전에 닫아야 합니다.
+- 남은 blocker(소유자 결정·외부 자원 필요): S-04 실제 R2 bucket·credential, S-05 provider redirect 등록, C-03 staging/prod·최소 권한 DB·운영 DB 복구 훈련, C-05 서명·업데이트. 승격 전에 닫아야 합니다(1차 검토 시점 기록, 이후 진행은 아래 2차 검토 절).
 - 검토자가 저장소 안에서 선행 가능하다고 밝힌 범위를 모두 진행했습니다: S-04 attachment contract·storage port·개발 adapter·만료 sweep(PR #58~#60), C-03 backup/restore drill(#62), C-05 설치 파일 번들(#63), C-04 full-history scan과 rewrite 범위(#64), S-05 PKCE state 검증(#65), C-01 Select·Checkbox(#66). Dialog·Sheet·Toast와 updater는 각각 Figma 승인과 서명 키가 필요해 남겨 두었습니다.
 - 자동화 화면 확인: 1차 검토의 MEDIUM 지적(origin만 비교)에 따라 origin과 path를 함께 비교하도록 고쳤습니다. 화면 안의 월·학기 식별은 아직 없습니다([AUTOMATION_DESIGN.md](AUTOMATION_DESIGN.md) "화면 확인").
 
@@ -71,6 +71,14 @@ PR #24/#25는 모두 develop에 병합됐습니다(`f573bfb`, `11a0af0`). 병합
 - 자동화 화면(F12): PR #68로 origin+path 비교를 통합했습니다.
 - 검토가 지적한 문서 부정확: #64는 문서·스크립트만 바꿔 `repository-checks` 한 개만 실행됐습니다. "#62~#66 각각 CI 7개"는 #64에 대해 사실이 아니었습니다. `docs/PERSONAL_PLAN.md`의 확장 권한에 `scripting`을 추가했습니다.
 
+2차 검토가 "저장소 안에서 더 할 수 있는 것"으로 분류한 나머지 작업도 통합했습니다. 각 PR은 병합 전 CI 7개가 성공했습니다.
+
+- 첨부 화면(PR #70, `64aad02`): 제출 작성 화면의 항목별 첨부·받기·지우기, 관리자 수합 상세의 제출 첨부 받기. 실제 Tauri 창에서 올리기 → `.exe` 요청 전 거절 → 받기(원본과 바이트 일치) → 지우기(저장소 0개) → 첨부 후 제출 → 관리자 화면 표시를 확인했고, 640·1280px 가로 넘침이 없었습니다. 이 검증에서 API CORS가 `DELETE`를 막던 결함을 찾아 고치고 preflight 테스트로 고정했습니다.
+- R2 adapter(PR #71, `04de924`): `R2Storage`가 같은 저장소 port를 SigV4로 구현하고, `R2_*` 네 값이 모두 있으면 api·worker가 R2를 씁니다(일부만 있으면 기동 거부). 서명은 AWS 공개 예제 값과 일치하고, 요청 흐름은 loopback S3 stand-in으로 확인했습니다(presigned PUT 포함).
+- 브라우저 로그인 흐름(PR #72, `9579a05`): loopback listener → authorize URL → 콜백 1회 검증 → verifier로 code 교환, 취소·만료 시 listener 종료. 가짜 provider 테스트 5개(성공·재생 거부·다른 state·provider 오류·거절 code·취소·만료·http endpoint 거부).
+- 설치 수명 주기(PR #73, `6508be1`): CI Windows runner에서 0.2.0 설치 → 0.2.1로 같은 위치 업그레이드 → 제거 후 파일·제거 항목 없음을 확인했습니다.
+- 이 시점 `cargo test --workspace --locked`는 141개, foundation 34개입니다.
+
 ## 단계 상태
 
 | 단계 | 상태 | 확인된 내용 | 남은 게이트 |
@@ -81,7 +89,7 @@ PR #24/#25는 모두 develop에 병합됐습니다(`f573bfb`, `11a0af0`). 병합
 | 4. Figma | 시안 승인 | Design System/Product 핵심 UI 승인, Stage 5 기본 token/component mapping | interaction/accessibility detail, Library/Code Connect 후속 |
 | 5. Code DS/AppShell | 완료 (PR #17, `9697363`) | `packages/ui` token/component와 실제 Tauri AppShell, 상태·키보드·wide/narrow 검증 | Figma Library/Code Connect 후속 |
 | 6. Auth/Data/Ops | 구현 중 | Supabase Auth 실로그인 + ES256/JWKS 검증, user/membership provisioning, tenant RBAC, Collect 상태 전이와 version 충돌까지 실제 프로젝트·실제 DB에서 E2E 통과. C-02로 키 회전·장애·캐시, 네 역할, 요청 ID·redaction, `/metrics`와 풀 재사용 학교 격리를 보강. S-06 outbox relay·S-05 세션/초안·S-04 첨부 metadata·API·sweep을 통합 | R2 실제 연결, backup/restore drill, 환경 분리 (NATS relay·SQLite 초안·세션 영속화는 통합) |
-| 7. Collect | 구현 중 | PR #19 기본 흐름, PR #24 항목·대상·제출 현황·내 배정·구성원 화면, S-03 편집, S-07 결과 내보내기·화면·역할 4종 검증, S-04 첨부 1~3차를 통합하고 실제 프로젝트 E2E 5개로 확인 | 첨부 4차(R2 adapter·presigned·화면), offline 세부 |
+| 7. Collect | 구현 중 | PR #19 기본 흐름, PR #24 항목·대상·제출 현황·내 배정·구성원 화면, S-03 편집, S-07 결과 내보내기·화면·역할 4종 검증, S-04 첨부(metadata·API·sweep·화면·R2 adapter)를 통합하고 실제 프로젝트 E2E 5개와 실제 창으로 확인 | 실제 R2 bucket 연결, offline 세부 |
 
 ## 확인된 원격 상태
 
