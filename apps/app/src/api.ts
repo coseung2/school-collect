@@ -179,6 +179,8 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 
 type TokenResponse = {
   access_token?: string;
+  refresh_token?: string;
+  expires_in?: number;
   user?: { id?: string; email?: string };
   error?: string;
   error_description?: string;
@@ -209,7 +211,7 @@ async function identityRequest(path: string, body: unknown): Promise<TokenRespon
 export async function signInWithPassword(
   email: string,
   password: string,
-): Promise<string> {
+): Promise<AuthSession> {
   const result = await identityRequest(
     "token?grant_type=password",
     { email, password },
@@ -217,7 +219,44 @@ export async function signInWithPassword(
   if (!result.access_token) {
     throw new ApiError(401, "no_token", "로그인 응답에 토큰이 없습니다.", null);
   }
-  return result.access_token;
+  return {
+    accessToken: result.access_token,
+    refreshToken: result.refresh_token ?? null,
+    userId: result.user?.id ?? "",
+    email: result.user?.email ?? email,
+    expiresAtMs: result.expires_in ? Date.now() + result.expires_in * 1000 : null,
+  };
+}
+
+/**
+ * Session handed between the shell and the OS credential store.
+ *
+ * Only the identity provider's own tokens are kept; the password is never
+ * stored.
+ */
+export type AuthSession = {
+  accessToken: string;
+  refreshToken: string | null;
+  userId: string;
+  email: string | null;
+  expiresAtMs: number | null;
+};
+
+/** Exchanges a refresh token for a new access token. */
+export async function refreshAuthSession(refreshToken: string): Promise<AuthSession> {
+  const result = await identityRequest("token?grant_type=refresh_token", {
+    refresh_token: refreshToken,
+  });
+  if (!result.access_token) {
+    throw new ApiError(401, "no_token", "세션을 갱신하지 못했습니다.", null);
+  }
+  return {
+    accessToken: result.access_token,
+    refreshToken: result.refresh_token ?? refreshToken,
+    userId: result.user?.id ?? "",
+    email: result.user?.email ?? null,
+    expiresAtMs: result.expires_in ? Date.now() + result.expires_in * 1000 : null,
+  };
 }
 
 export async function signUpWithPassword(

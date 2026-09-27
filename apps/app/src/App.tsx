@@ -8,11 +8,12 @@ import {
   PermissionState,
   type NavigationItem,
 } from "@school-collect/ui";
-import { ApiError, fetchSession, type SessionInfo } from "./api";
+import { ApiError, fetchSession, refreshAuthSession, type SessionInfo } from "./api";
 import { canManage, messageOf, useOnline } from "./helpers";
 import { AssignmentPage } from "./pages/AssignmentPage";
 import { AssignmentsPage } from "./pages/AssignmentsPage";
 import { CreateSchoolCard, SignInView } from "./pages/AuthViews";
+import { clearAuthSession, loadAuthSession, saveAuthSession } from "./session";
 import { AutomationPage } from "./pages/AutomationPage";
 import { CollectDetailPage } from "./pages/CollectDetailPage";
 import { CollectsPage } from "./pages/CollectsPage";
@@ -93,10 +94,51 @@ export default function App() {
     setActiveTenantId(null);
     setBootError(null);
     setSignInOpen(false);
+    // 저장된 세션을 지워 다음 실행에서 토큰이 남지 않게 합니다.
+    void clearAuthSession();
     // 로그인 없이 쓸 수 있는 화면에 머무르고, 멤버십이 필요한 화면에서만 홈으로 돌아갑니다.
     if (routeNeedsMembership(parseHash(window.location.hash))) {
       navigate({ page: "overview" });
     }
+  }, []);
+
+  /**
+   * Restores the session saved in the OS credential store.
+   *
+   * An expired access token is refreshed when a refresh token exists; if that
+   * fails the stored session is dropped and the user signs in again.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const stored = await loadAuthSession();
+      if (cancelled || !stored) {
+        return;
+      }
+      const expiringSoon =
+        stored.expiresAtMs !== null && stored.expiresAtMs - Date.now() < 60_000;
+      if (expiringSoon && stored.refreshToken) {
+        try {
+          const refreshed = await refreshAuthSession(stored.refreshToken);
+          await saveAuthSession(refreshed);
+          if (!cancelled) {
+            setToken(refreshed.accessToken);
+          }
+          return;
+        } catch {
+          await clearAuthSession();
+          return;
+        }
+      }
+      if (expiringSoon) {
+        await clearAuthSession();
+        return;
+      }
+      setToken(stored.accessToken);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -349,7 +391,9 @@ export default function App() {
         onBack={() => setSignInOpen(false)}
         onSignedIn={(next) => {
           setSignInOpen(false);
-          setToken(next);
+          setToken(next.accessToken);
+          // 세션은 OS 보안 저장소에만 저장합니다(비밀번호는 저장하지 않습니다).
+          void saveAuthSession(next);
         }}
       />
     );

@@ -23,3 +23,9 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 tower = { workspace = true }
+
+# The session lives in the OS credential store, which is Windows-first: other
+# platforms report that the store is unavailable instead of writing tokens to a
+# plain file.
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
