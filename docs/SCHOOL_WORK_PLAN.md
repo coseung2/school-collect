@@ -22,7 +22,7 @@
 | S-04 | 파일 첨부 / 계획 | S-01, C-03 승인된 저장소 설정 | 권한 확인 후 private R2 업로드/다운로드, 크기·유형·만료·보존 정책, 실패/재시도·학교 간 접근 차단 |
 | S-05 | 세션 유지·offline 초안 / 진행 중(PR #45, PR #46) | S-01, C-01/C-02 | 완료: OS 보안 저장소 세션(재시작 복구·갱신·로그아웃 정리)과 사용자/학교별 SQLite 초안(재시작 복구·재전송·충돌·로그아웃 정리) / 남음: 외부 브라우저 PKCE |
 | S-06 | 알림·재처리용 outbox/worker / 완료(PR #43, `e722bce`) | S-01 | 업무 변경+outbox 단일 transaction, relay/JetStream/idempotent 처리, commit 후 ACK, retry/dead-letter·중복 전달 복구 |
-| S-07 | 결과 내보내기·전체 흐름 검증 / 계획 | S-02~S-06, 출시 시 C-02~C-05 | CSV/문서 결과의 권한·누락·재처리 검증, 학교 A/B와 역할별 전체 흐름을 통합 SHA에서 검증 |
+| S-07 | 결과 내보내기·전체 흐름 검증 / 진행 중(PR #48) | S-02~S-06, 출시 시 C-02~C-05 | 완료: CSV 결과의 권한·누락 검증 / 남음: 학교 A/B·역할별 전체 흐름을 통합 SHA에서 검증, 화면 내보내기 버튼 |
 
 공통 ID는 [TEAM_BACKLOG.md](TEAM_BACKLOG.md)를 따릅니다. 첨부·offline·worker는 S-01 계약이 고정되면 독립 범위로 진행할 수 있습니다. 실제 운영 자원 연결은 계정·환경이 확정된 뒤 진행합니다.
 
@@ -70,7 +70,15 @@ PR #43(`feat/outbox-relay`)로 업무 변경과 이벤트를 한 transaction에 
 - CI `postgres` 작업이 DB 쪽 relay 테스트를, 새 `nats-outbox` 작업이 NATS JetStream 컨테이너와 함께 실제 배달·ack·중복 제거(같은 id 두 번 publish → 1건)를 확인했습니다.
 - 아직 아님: 이벤트를 소비하는 서비스(알림 발송 등). 이 슬라이스는 배달·재처리까지입니다.
 
-## 이미 있는 기반과 남은 검증
+## 결과 내보내기 (S-07 1차)
+
+PR #48(`feat/result-export`)로 수합 결과 CSV 내보내기를 develop에 통합했습니다.
+
+- `GET /v1/collects/{id}/export`(Manage 권한)가 항목 머리글과 `이름·역할·배정 상태·제출 상태·제출 시각`, 항목별 값을 CSV로 돌려줍니다.
+- 배정된 구성원은 제출하지 않았어도 행이 나오고 항목 칸이 비어 있어 누락이 파일에서 드러납니다. 값은 쉼표·따옴표·줄바꿈이 있을 때만 인용하고 내부 따옴표를 두 번 반복하며, Excel용 UTF-8 BOM을 붙입니다.
+- contributor·viewer는 403이고, 내보내기는 `collect.exported` 감사 이벤트로 남습니다.
+
+검증 (2026-09-27): `cargo fmt/clippy/test`(98개), foundation 25개, repository guard, CSV 인용·누락 단위 테스트 2개, 실제 프로젝트 E2E `result_export_end_to_end`(담당자 200·두 구성원 행·쉼표 값 인용·감사 1건, 교사 403). 남은 것: 학교 A/B·역할별 전체 흐름을 통합 SHA에서 검증하는 시나리오와 화면의 내보내기 버튼.
 
 ## 세션 유지와 offline 초안 (S-05)
 
@@ -88,6 +96,8 @@ PR #45(세션 보안 저장소)와 PR #46(오프라인 초안)로 세션 유지�
 인증과 membership RBAC를 새로 시작하는 작업으로 되돌리지 않습니다. `crates/auth`의 OIDC/JWKS 검증, `crates/db/src/records.rs`의 사용자 upsert·membership 조회, `services/api/src/lib.rs`의 권한 및 request ID 처리가 이미 있습니다.
 
 C-02에서는 JWKS 갱신/장애, 잘못된 토큰, 네 역할(`admin`, `coordinator`, `contributor`, `viewer`), pooled connection의 학교 경계, 모든 오류의 request ID·redaction을 부정 테스트와 관측 근거로 보강합니다. RLS는 필요성을 판단하는 후속이며 적용 완료로 표시하지 않습니다.
+
+## 이미 있는 기반과 남은 검증
 
 ## 변경 책임과 전체 완료 기준
 
