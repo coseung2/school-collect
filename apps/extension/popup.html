@@ -8,8 +8,8 @@
   <body>
     <h1>School Collect</h1>
     <p class="hint">
-      현재 탭을 School Collect의 업무 버튼으로 등록합니다. 페이지 내용, 쿠키,
-      로그인 정보는 보내지 않습니다.
+      현재 탭을 업무 버튼으로 등록하거나 화면 요소를 골라 자동입력 레시피를
+      만듭니다. 페이지 내용, 쿠키, 로그인 정보는 보내지 않습니다.
     </p>
 
     <label for="token">연결 토큰</label>
@@ -26,6 +26,7 @@
 
     <hr />
 
+    <h2>바로가기</h2>
     <label for="name">버튼 이름</label>
     <input
       id="name"
@@ -37,7 +38,42 @@
       <button id="register" type="button">현재 화면 등록</button>
     </div>
 
+    <hr />
+
+    <h2>자동입력 레시피</h2>
+    <div class="row">
+      <button id="pick" type="button" class="secondary">화면에서 요소 선택</button>
+    </div>
+
+    <div id="picker" hidden>
+      <p id="picked" class="hint"></p>
+      <div id="candidates" class="candidates"></div>
+      <label for="field-label">필드 이름</label>
+      <input id="field-label" type="text" maxlength="80" placeholder="예: 제목" />
+      <div class="row">
+        <button id="add-field" type="button">필드 추가</button>
+      </div>
+    </div>
+
+    <ul id="fields" class="fields"></ul>
+
+    <label for="recipe-name">레시피 이름</label>
+    <input id="recipe-name" type="text" maxlength="80" placeholder="예: 기안 작성" />
+    <div class="row">
+      <button id="save-recipe" type="button">자동입력 레시피 저장</button>
+    </div>
+
+    <hr />
+
+    <h2>미리보기</h2>
+    <label for="recipe-select">저장된 자동입력 레시피</label>
+    <select id="recipe-select"></select>
+    <div class="row">
+      <button id="preview" type="button" class="secondary">미리보기(dry-run)</button>
+    </div>
+    <ul id="preview-results" class="fields"></ul>
+
     <p id="status" role="status"></p>
-    <script src="popup.js"></script>
+    <script type="module" src="popup.js"></script>
   </body>
 </html>

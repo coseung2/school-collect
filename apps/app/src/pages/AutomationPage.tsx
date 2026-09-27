@@ -11,10 +11,11 @@ import {
   Status,
 } from "@school-collect/ui";
 import {
+  automationKindLabel,
   automationErrorMessage,
   createShortcutRecipe,
   deleteAutomationRecipe,
-  describeAutomationTarget,
+  describeAutomationRecipe,
   fetchAutomationBridgeInfo,
   listAutomationRecipes,
   openAutomationRecipe,
@@ -258,8 +259,9 @@ export function AutomationPage() {
           <div>
             <h2>내 업무 버튼</h2>
             <p className="app-card-description">
-              다음 단계에서 현재 화면 등록, 표 자동입력, 신규 신청 감시를 같은 레시피에
-              연결합니다.
+              확장 팝업에서 현재 화면을 바로가기로 등록하거나, 화면 요소를 골라
+              자동입력 레시피를 만들 수 있습니다. 자동입력 실행과 결과 검증은 확장에서
+              하고, 이 목록은 저장된 레시피를 보여 줍니다.
             </p>
           </div>
           <Button disabled={loading} onClick={() => void load()} size="small" variant="quiet">
@@ -337,13 +339,17 @@ export function AutomationPage() {
                   ) : (
                     <div className="app-row-actions">
                       <Button
-                        aria-label={`${recipe.name} 열기`}
+                        aria-label={
+                          recipe.kind === "fill"
+                            ? `${recipe.name} 화면 열기`
+                            : `${recipe.name} 열기`
+                        }
                         disabled={busy}
                         onClick={() => void open(recipe)}
                         size="small"
                         variant="secondary"
                       >
-                        열기
+                        {recipe.kind === "fill" ? "화면 열기" : "열기"}
                       </Button>
                       <Button
                         aria-label={`${recipe.name} 삭제`}
@@ -357,9 +363,9 @@ export function AutomationPage() {
                     </div>
                   )
                 }
-                description={describeAutomationTarget(recipe.targetUrl)}
+                description={describeAutomationRecipe(recipe)}
                 key={recipe.id}
-                status={<Status tone="info">바로가기</Status>}
+                status={<Status tone="info">{automationKindLabel(recipe.kind)}</Status>}
                 title={recipe.name}
               />
             ))}
