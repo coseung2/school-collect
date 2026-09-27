@@ -6,11 +6,12 @@
 
 use chrono::{Duration, Utc};
 use school_collect_db::{
-    CompleteAttachmentOutcome, CreateAttachmentOutcome, DeleteAttachmentOutcome, NewAttachment,
-    NewCollect, NewCollectItem, complete_attachment, create_attachment, create_collect,
-    create_tenant, delete_attachment, expired_attachments, get_attachment,
-    list_collect_attachments, list_submission_attachments, purge_attachment, save_draft,
-    transition_collect, upsert_user,
+    ClaimUploadOutcome, CompleteAttachmentOutcome, CreateAttachmentOutcome,
+    DeleteAttachmentOutcome, NewAttachment, NewCollect, NewCollectItem,
+    UPLOAD_CLAIM_TIMEOUT_SECONDS, claim_attachment_upload, complete_attachment, create_attachment,
+    create_collect, create_tenant, delete_attachment, expired_attachments, get_attachment,
+    list_collect_attachments, list_submission_attachments, purge_attachment,
+    release_attachment_upload, save_draft, transition_collect, upsert_user,
 };
 use school_collect_domain::attachments::{
     MAX_ATTACHMENTS_PER_ITEM, MAX_ATTACHMENTS_PER_SUBMISSION,
@@ -785,6 +786,102 @@ async fn concurrent_requests_cannot_break_attachment_rules() {
     .await
     .expect("manager delete");
     assert!(matches!(removed, DeleteAttachmentOutcome::Deleted { .. }));
+
+    fixture.cleanup().await;
+}
+
+#[tokio::test]
+async fn one_upload_owns_a_slot_at_a_time() {
+    let Some(url) = database_url() else {
+        eprintln!("DATABASE_URL is not set; skipping the upload claim check");
+        return;
+    };
+    let pool = school_collect_db::connect(&url).await.expect("connect");
+    school_collect_db::MIGRATOR
+        .run(&pool)
+        .await
+        .expect("migrate");
+    let fixture = fixture(pool).await;
+    let collect = new_collect(&fixture, &[item("plan", "계획서")], &[fixture.contributor]).await;
+    publish(&fixture, collect).await;
+    let CreateAttachmentOutcome::Created(slot_row) = create_attachment(
+        &fixture.pool,
+        fixture.tenant,
+        collect,
+        fixture.contributor,
+        slot(fixture.tenant, "plan", "동시.pdf", 10),
+    )
+    .await
+    .expect("create") else {
+        panic!("the target must be able to open a slot");
+    };
+
+    // Many uploads at once: exactly one becomes the writer.
+    let mut tasks = Vec::new();
+    for _ in 0..8 {
+        let pool = fixture.pool.clone();
+        let (tenant, id) = (fixture.tenant, slot_row.id);
+        tasks.push(tokio::spawn(async move {
+            claim_attachment_upload(&pool, tenant, id, Utc::now())
+                .await
+                .expect("claim")
+        }));
+    }
+    let mut claimed = 0;
+    let mut busy = 0;
+    for task in tasks {
+        match task.await.expect("join") {
+            ClaimUploadOutcome::Claimed(_) => claimed += 1,
+            ClaimUploadOutcome::Busy => busy += 1,
+            other => panic!("unexpected claim outcome: {other:?}"),
+        }
+    }
+    assert_eq!((claimed, busy), (1, 7), "one writer, everyone else refused");
+
+    // A failed upload hands the slot back and the owner can retry.
+    release_attachment_upload(&fixture.pool, fixture.tenant, slot_row.id, Utc::now())
+        .await
+        .expect("release");
+    assert!(matches!(
+        claim_attachment_upload(&fixture.pool, fixture.tenant, slot_row.id, Utc::now())
+            .await
+            .expect("claim again"),
+        ClaimUploadOutcome::Claimed(_)
+    ));
+
+    // A claim left behind by a crashed request is taken over after the timeout.
+    let later = Utc::now() + Duration::seconds(UPLOAD_CLAIM_TIMEOUT_SECONDS + 1);
+    assert!(matches!(
+        claim_attachment_upload(&fixture.pool, fixture.tenant, slot_row.id, Utc::now())
+            .await
+            .expect("claim while held"),
+        ClaimUploadOutcome::Busy
+    ));
+    assert!(matches!(
+        claim_attachment_upload(&fixture.pool, fixture.tenant, slot_row.id, later)
+            .await
+            .expect("claim after timeout"),
+        ClaimUploadOutcome::Claimed(_)
+    ));
+
+    // Completing ends the claim; the slot can no longer be claimed.
+    let stored = complete_attachment(
+        &fixture.pool,
+        fixture.tenant,
+        slot_row.id,
+        10,
+        &"c".repeat(64),
+        later,
+    )
+    .await
+    .expect("complete");
+    assert!(matches!(stored, CompleteAttachmentOutcome::Stored(_)));
+    assert!(matches!(
+        claim_attachment_upload(&fixture.pool, fixture.tenant, slot_row.id, later)
+            .await
+            .expect("claim stored"),
+        ClaimUploadOutcome::AlreadyStored
+    ));
 
     fixture.cleanup().await;
 }

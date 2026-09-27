@@ -70,7 +70,7 @@ export function CollectDetailPage({
   // Review aid only: the status list still renders when files cannot load.
   const loadAttachments = useCallback(async () => {
     try {
-      setAttachments((await listAttachments(token, tenantId, collectId)).attachments);
+      setAttachments((await listAttachments(token, tenantId, collectId, "review")).attachments);
     } catch {
       setAttachments([]);
     }

@@ -144,6 +144,7 @@ R2는 private bucket을 기본으로 합니다. 서버가 tenant/resource 권한
 - 정책(domain): 파일 1개 최대 10 MiB, 항목당 5개, 제출당 20개, 허용 형식 목록(HWP/HWPX·Office·PDF·PNG/JPEG·text·zip), 보존 180일. 만료된 행은 retention sweep이 bytes를 지운 뒤 row를 지웁니다.
 - 접근 규칙: 읽기는 소유자 또는 관리자, 삭제는 관리자 또는 제출 전 소유자. 모든 조회·변경은 tenant로 한정됩니다. 제출 여부는 삭제 transaction 안에서 첨부·제출 행을 잠그고 확인하므로 제출과 삭제가 겹쳐도 규칙이 깨지지 않습니다. 슬롯 열기는 배정 행을 잠가 항목당·제출당 개수 제한을 동시 요청에서도 지킵니다.
 - 한 번 쓰기: 저장이 끝난 첨부에 다시 올리면 bytes를 건드리기 전에 409(`attachment_already_stored`)로 거절합니다. 바꾸려면 지우고 새 슬롯을 엽니다.
+- 한 슬롯에 한 writer: 올리기는 먼저 슬롯을 `pending → uploading`으로 한 번의 UPDATE로 차지합니다(migration `0007`). 동시에 온 다른 올리기는 저장소를 건드리기 전에 409(`attachment_upload_in_progress`)로 거절되므로, 저장된 bytes는 항상 행이 기록한 checksum의 bytes입니다. 올리기가 실패하면(저장소·DB 오류, 크기 불일치, 만료) 쓴 bytes를 지우고 슬롯을 `pending`으로 돌려 다시 올릴 수 있게 합니다. 요청이 죽어 남은 차지는 5분 뒤 다시 차지할 수 있습니다.
 - 삭제 순서: 행을 먼저 숨기고 bytes를 지웁니다. bytes 삭제가 실패해도 이미 아무도 읽을 수 없고, 보존 기간이 지나면 sweep이 다시 지웁니다.
 - API: `POST /v1/collects/{id}/attachments`(슬롯 열기) → `PUT /v1/attachments/{id}/content`(bytes, 선언 크기·형식·checksum 검증) → `GET /v1/attachments/{id}`·`/content`, `GET /v1/collects/{id}/attachments`(담당자는 자기 파일, 관리자는 전체), `DELETE /v1/attachments/{id}`.
 - bytes는 `ObjectStorage` port(`crates/application`) 뒤에 있습니다. 개발은 `APP_ATTACHMENT_DIR`의 디렉터리 adapter를 쓰고, 운영은 private R2 adapter로 바꿉니다. 저장소가 설정되지 않으면 첨부 endpoint는 503으로 거절하며, 개발 외 환경에서는 `APP_ATTACHMENT_DIR` 없이 기동하지 않습니다.

@@ -62,7 +62,7 @@ export function AssignmentPage({
   // storage not configured), the text answer still works.
   const loadAttachments = useCallback(async () => {
     try {
-      const value = await listAttachments(token, tenantId, collectId);
+      const value = await listAttachments(token, tenantId, collectId, "mine");
       setAttachments(value.attachments);
       setAttachmentError(null);
     } catch (caught) {

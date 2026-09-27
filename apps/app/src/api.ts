@@ -462,7 +462,7 @@ export type Attachment = {
   fileName: string;
   contentType: string;
   byteSize: number;
-  status: "pending" | "stored" | "deleted";
+  status: "pending" | "uploading" | "stored" | "deleted";
   expiresAt: string;
   storedAt: string | null;
   createdAt: string;
@@ -501,12 +501,21 @@ export function attachmentContentType(file: File): string | null {
   return TYPE_BY_EXTENSION[extension] ?? null;
 }
 
-/** Files the caller may see for one collect (their own, or everyone's for a manager). */
-export const listAttachments = (token: string, tenantId: string, collectId: string) =>
-  request<{ attachments: Attachment[] }>(`/v1/collects/${collectId}/attachments`, {
-    token,
-    tenantId,
-  });
+/**
+ * Files for one collect. `mine` returns only the caller's own files, which is
+ * what the submission screen needs even for a manager who also answers;
+ * `review` returns everything the caller may see (every file for a manager).
+ */
+export const listAttachments = (
+  token: string,
+  tenantId: string,
+  collectId: string,
+  scope: "mine" | "review",
+) =>
+  request<{ attachments: Attachment[] }>(
+    `/v1/collects/${collectId}/attachments${scope === "mine" ? "?scope=mine" : ""}`,
+    { token, tenantId },
+  );
 
 /**
  * Opens a slot, then sends the bytes. The server derives the object key and
@@ -539,26 +548,38 @@ export async function uploadAttachment(
     body: { itemKey, fileName: file.name, contentType, byteSize: file.size },
   });
 
-  const response = await fetch(`${apiBaseUrl}${slot.upload.url}`, {
-    method: slot.upload.method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "x-tenant-id": tenantId,
-      "Content-Type": contentType,
-    },
-    body: file,
-  });
-  const text = await response.text();
-  const parsed = (text ? JSON.parse(text) : null) as Record<string, unknown> | null;
-  if (!response.ok) {
-    throw new ApiError(
-      response.status,
-      typeof parsed?.code === "string" ? parsed.code : "request_failed",
-      typeof parsed?.message === "string" ? parsed.message : "파일을 올리지 못했습니다.",
-      null,
-    );
+  try {
+    const response = await fetch(`${apiBaseUrl}${slot.upload.url}`, {
+      method: slot.upload.method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "x-tenant-id": tenantId,
+        "Content-Type": contentType,
+      },
+      body: file,
+    });
+    const text = await response.text();
+    const parsed = (text ? JSON.parse(text) : null) as Record<string, unknown> | null;
+    if (!response.ok) {
+      throw new ApiError(
+        response.status,
+        typeof parsed?.code === "string" ? parsed.code : "request_failed",
+        typeof parsed?.message === "string" ? parsed.message : "파일을 올리지 못했습니다.",
+        null,
+      );
+    }
+    return parsed as unknown as Attachment;
+  } catch (error) {
+    // The slot counts against the per-item limit; remove it so a failed upload
+    // does not quietly use up a place. If this also fails (offline), the list
+    // shows the unfinished slot with its own delete button.
+    try {
+      await deleteAttachment(token, tenantId, slot.attachment.id);
+    } catch {
+      // Left for the user to remove from the list.
+    }
+    throw error;
   }
-  return parsed as unknown as Attachment;
 }
 
 export const deleteAttachment = (token: string, tenantId: string, attachmentId: string) =>

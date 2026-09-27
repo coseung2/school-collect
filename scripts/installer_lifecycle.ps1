@@ -94,9 +94,13 @@ if ($second.Location -ne $first.Location) {
 # `_?=` would keep the uninstaller from copying itself; /S alone is the normal path.
 Invoke-Silently $second.Uninstaller @('/S')
 # The NSIS uninstaller finishes removing files after its process exits.
-for ($i = 0; $i -lt 30 -and (Test-Path -LiteralPath $second.Exe); $i++) { Start-Sleep -Seconds 1 }
+for ($i = 0; $i -lt 30 -and (Test-Path -LiteralPath $second.Location); $i++) { Start-Sleep -Seconds 1 }
 if (Test-Path -LiteralPath $second.Exe) { Fail "app executable still present after uninstall" }
+if (Test-Path -LiteralPath $second.Location) {
+    $left = @(Get-ChildItem -LiteralPath $second.Location -Recurse -Force | Select-Object -ExpandProperty FullName)
+    Fail "install directory still present after uninstall ($($left.Count) entries: $($left -join ', '))"
+}
 if (@(Get-UninstallEntries).Count -ne 0) { Fail 'uninstall entry still present after uninstall' }
-"  removed files and uninstall entry"
+"  removed the install directory and uninstall entry"
 
 "installer lifecycle OK: install $OlderVersion -> upgrade $NewerVersion -> uninstall"

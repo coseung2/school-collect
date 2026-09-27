@@ -101,11 +101,7 @@ impl R2Storage {
 
     pub fn new(config: R2Config) -> Result<Self, StorageError> {
         let endpoint = config.endpoint.trim_end_matches('/');
-        if !(endpoint.starts_with("https://") || endpoint.starts_with("http://127.0.0.1")) {
-            return Err(StorageError::Unavailable(
-                "R2 endpoint must be https (http only for a local test server)".into(),
-            ));
-        }
+        validate_endpoint(endpoint)?;
         if config.bucket.trim().is_empty()
             || config.access_key_id.trim().is_empty()
             || config.secret_access_key.trim().is_empty()
@@ -300,6 +296,48 @@ fn validate_key(key: &str) -> Result<(), StorageError> {
         Ok(())
     } else {
         Err(StorageError::Failed("invalid object key".into()))
+    }
+}
+
+/// The endpoint is exactly `scheme://host[:port]`. A path, query, fragment or
+/// credentials would end up in the signed `Host` or request line, so the
+/// adapter would start but every request would fail its signature; refuse at
+/// start-up instead. Plain http is allowed only for a loopback test server.
+fn validate_endpoint(endpoint: &str) -> Result<(), StorageError> {
+    let refuse = |why: &str| {
+        Err(StorageError::Unavailable(format!(
+            "R2_ENDPOINT must be https://<account-id>.r2.cloudflarestorage.com ({why})"
+        )))
+    };
+    let Some((scheme, authority)) = endpoint.split_once("://") else {
+        return refuse("missing scheme");
+    };
+    if authority.is_empty() {
+        return refuse("missing host");
+    }
+    if authority.contains(['/', '?', '#', '@', ' ']) {
+        return refuse("no path, query, fragment or credentials");
+    }
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((host, port)) => (host, Some(port)),
+        None => (authority, None),
+    };
+    if let Some(port) = port
+        && (port.is_empty() || !port.chars().all(|c| c.is_ascii_digit()))
+    {
+        return refuse("invalid port");
+    }
+    let host_ok = !host.is_empty()
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'));
+    if !host_ok {
+        return refuse("invalid host");
+    }
+    match scheme {
+        "https" => Ok(()),
+        "http" if host == "127.0.0.1" => Ok(()),
+        _ => refuse("https only; http is for a loopback test server"),
     }
 }
 
@@ -532,6 +570,32 @@ mod tests {
             assert!(validate_key(key).is_err(), "{key:?}");
         }
         assert!(validate_key("tenants/0190-aa/attachments/0190-bb").is_ok());
+    }
+
+    #[test]
+    fn endpoints_are_bare_hosts() {
+        for good in [
+            "https://abc123.r2.cloudflarestorage.com",
+            "https://abc123.r2.cloudflarestorage.com:443",
+            "http://127.0.0.1:9000",
+        ] {
+            assert!(validate_endpoint(good).is_ok(), "{good}");
+        }
+        for bad in [
+            "abc123.r2.cloudflarestorage.com",
+            "https://",
+            "https://abc123.r2.cloudflarestorage.com/bucket",
+            "https://abc123.r2.cloudflarestorage.com?x=1",
+            "https://abc123.r2.cloudflarestorage.com#x",
+            "https://user:pass@abc123.r2.cloudflarestorage.com",
+            "https://abc123.r2.cloudflarestorage.com:",
+            "https://abc123.r2.cloudflarestorage.com:44x",
+            "http://abc123.r2.cloudflarestorage.com",
+            "http://localhost:9000",
+            "ftp://abc123.r2.cloudflarestorage.com",
+        ] {
+            assert!(validate_endpoint(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

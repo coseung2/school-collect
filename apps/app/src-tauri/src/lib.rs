@@ -1385,24 +1385,45 @@ fn save_to_downloads(
         .map_err(|error| format!("다운로드 폴더를 찾지 못했습니다: {error}"))?;
     fs::create_dir_all(&directory)
         .map_err(|error| format!("다운로드 폴더를 만들지 못했습니다: {error}"))?;
+    write_new_file_in(&directory, &file_name, content)
+        .map(|path| path.to_string_lossy().to_string())
+}
 
+/// Writes `content` to a file that did not exist, trying `name`, then
+/// `stem (1).ext`, `stem (2).ext`, ... The existence check and the creation
+/// are one step (`create_new`), so two saves at once can never take the same
+/// name and an existing file is never overwritten or truncated.
+fn write_new_file_in(directory: &Path, file_name: &str, content: &[u8]) -> Result<PathBuf, String> {
     let (stem, extension) = match file_name.rsplit_once('.') {
         Some((stem, extension)) if !stem.is_empty() => (stem.to_string(), format!(".{extension}")),
-        _ => (file_name.clone(), String::new()),
+        _ => (file_name.to_string(), String::new()),
     };
 
-    let mut target = directory.join(&file_name);
-    let mut counter = 1;
-    while target.exists() {
-        target = directory.join(format!("{stem} ({counter}){extension}"));
-        counter += 1;
-        if counter > 1_000 {
-            return Err("같은 이름의 파일이 너무 많습니다.".to_string());
+    for counter in 0..=1_000 {
+        let candidate = if counter == 0 {
+            directory.join(file_name)
+        } else {
+            directory.join(format!("{stem} ({counter}){extension}"))
+        };
+        let mut file = match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(format!("파일을 저장하지 못했습니다: {error}")),
+        };
+        let written = file.write_all(content).and_then(|()| file.sync_all());
+        if let Err(error) = written {
+            // A partial file under the chosen name must not be left behind.
+            drop(file);
+            let _ = fs::remove_file(&candidate);
+            return Err(format!("파일을 저장하지 못했습니다: {error}"));
         }
+        return Ok(candidate);
     }
-
-    write_bytes_atomically(&target, content)?;
-    Ok(target.to_string_lossy().to_string())
+    Err("같은 이름의 파일이 너무 많습니다.".to_string())
 }
 
 #[tauri::command]
@@ -1585,6 +1606,55 @@ mod tests {
         assert!(token_subject("a.b").is_err());
         assert!(token_subject("a.b.c.d").is_err());
         assert!(token_subject("e30.e30.sig").is_err()); // `{}` has no subject
+    }
+
+    #[test]
+    fn saving_never_overwrites_and_parallel_saves_get_distinct_names() {
+        let directory = std::env::temp_dir().join(format!(
+            "sc-save-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+
+        // An existing file and a leftover `.tmp` sibling both stay untouched.
+        fs::write(directory.join("계획서.pdf"), b"original").unwrap();
+        fs::write(directory.join("계획서.pdf.tmp"), b"someone else's temp").unwrap();
+        let saved = write_new_file_in(&directory, "계획서.pdf", b"new").unwrap();
+        assert_eq!(saved.file_name().unwrap(), "계획서 (1).pdf");
+        assert_eq!(fs::read(directory.join("계획서.pdf")).unwrap(), b"original");
+        assert_eq!(
+            fs::read(directory.join("계획서.pdf.tmp")).unwrap(),
+            b"someone else's temp"
+        );
+
+        // Sixteen saves of one name at once: sixteen different files, no loss.
+        let handles: Vec<_> = (0..16)
+            .map(|index| {
+                let directory = directory.clone();
+                std::thread::spawn(move || {
+                    let body = format!("copy-{index}");
+                    let path =
+                        write_new_file_in(&directory, "보고서.txt", body.as_bytes()).unwrap();
+                    (path, body)
+                })
+            })
+            .collect();
+        let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        let names: std::collections::HashSet<_> = results.iter().map(|(p, _)| p.clone()).collect();
+        assert_eq!(names.len(), 16, "every save got its own file");
+        for (path, body) in &results {
+            assert_eq!(
+                fs::read_to_string(path).unwrap(),
+                *body,
+                "no save was overwritten"
+            );
+        }
+
+        fs::remove_dir_all(&directory).unwrap();
     }
 
     /// Unsigned JWT-shaped token carrying only a subject, for local checks.
