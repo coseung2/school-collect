@@ -139,6 +139,16 @@ jobs:
         run: cargo test -p school-collect-db --locked
       - name: Outbox relay (database side)
         run: cargo test -p school-collect-worker --locked
+      - name: Backup and restore drill
+        shell: bash
+        env:
+          SOURCE_DATABASE_URL: postgres://school_collect:school_collect_ci@127.0.0.1:5432/school_collect
+          RESTORE_DATABASE_URL: postgres://school_collect:school_collect_ci@127.0.0.1:5432/school_collect_restore
+          PG_CLIENT_IMAGE: postgres:18
+          DRILL_CANARY: "1"
+        run: |
+          psql "$SOURCE_DATABASE_URL" -c 'CREATE DATABASE school_collect_restore'
+          bash scripts/backup_restore_drill.sh
       - name: Missing configuration must fail startup instead of degrading
         shell: bash
         env:
