@@ -28,6 +28,20 @@ pub struct PurgeReport {
     pub failed: usize,
 }
 
+impl PurgeReport {
+    /// Whether the round had nothing to do at all.
+    ///
+    /// A round that only touched orphan records still counts as work: skipping
+    /// it would silence a removal that failed and was left for the next pass.
+    pub fn is_idle(&self) -> bool {
+        self.considered == 0
+            && self.purged == 0
+            && self.orphans_removed == 0
+            && self.orphans_kept == 0
+            && self.failed == 0
+    }
+}
+
 /// Removes one batch of expired attachments.
 pub async fn purge_expired_attachments(
     pool: &PgPool,
@@ -107,8 +121,20 @@ pub async fn run_sweep_until_shutdown(
 ) {
     run_every(interval, shutdown, || async {
         match purge_expired_attachments(&pool, storage.as_ref(), batch).await {
-            Ok(report) if report.considered == 0 => {}
-            Ok(report) => {
+            // Only a round with nothing to do at all stays quiet. Everything
+            // else is reported, so orphan work and its failures cannot vanish
+            // from the logs just because no attachment expired this time.
+            Ok(report) if report.failed > 0 => {
+                tracing::warn!(
+                    considered = report.considered,
+                    purged = report.purged,
+                    orphans_removed = report.orphans_removed,
+                    orphans_kept = report.orphans_kept,
+                    failed = report.failed,
+                    "attachment sweep finished with failures; those items stay for the next pass"
+                );
+            }
+            Ok(report) if !report.is_idle() => {
                 tracing::info!(
                     considered = report.considered,
                     purged = report.purged,
@@ -118,6 +144,8 @@ pub async fn run_sweep_until_shutdown(
                     "attachment sweep finished"
                 );
             }
+            // Nothing expired and no orphan record needed attention.
+            Ok(_) => {}
             Err(error) => {
                 tracing::error!(%error, "attachment sweep round failed");
             }
@@ -152,7 +180,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::run_every;
+    use super::{PurgeReport, run_every};
     use std::{
         sync::{
             Arc,
@@ -160,6 +188,39 @@ mod tests {
         },
         time::Duration,
     };
+
+    #[test]
+    fn a_round_is_idle_only_when_it_had_nothing_to_do() {
+        assert!(PurgeReport::default().is_idle());
+        assert!(
+            !PurgeReport {
+                considered: 1,
+                ..PurgeReport::default()
+            }
+            .is_idle()
+        );
+        assert!(
+            !PurgeReport {
+                orphans_removed: 1,
+                ..PurgeReport::default()
+            }
+            .is_idle()
+        );
+        assert!(
+            !PurgeReport {
+                orphans_kept: 1,
+                ..PurgeReport::default()
+            }
+            .is_idle()
+        );
+        assert!(
+            !PurgeReport {
+                failed: 1,
+                ..PurgeReport::default()
+            }
+            .is_idle()
+        );
+    }
 
     #[tokio::test(start_paused = true)]
     async fn rounds_are_spaced_by_the_full_interval() {

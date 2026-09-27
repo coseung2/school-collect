@@ -135,6 +135,15 @@ PR #24/#25는 모두 develop에 병합됐습니다(`f573bfb`, `11a0af0`). 병합
 
 - PR #82(`e3bb4ff`)로 develop에 통합했습니다. 첫 CI 실행에서 `psql`이 `INSERT ... RETURNING` 결과 뒤에 명령 태그(`INSERT 0 1`)를 덧붙여 캡처한 id가 깨졌고, outer 문을 SELECT(데이터 변경 CTE)로 바꾸고 캡처 값이 단일 uuid인지 검사하도록 고쳐 다시 통과했습니다. 병합 후 CI 7개가 성공했고, `nats-outbox` 작업은 runtime 역할로 넣은 due 이벤트 1건(`0ad25b12-…`)이 relay → JetStream → 소비 commit → ACK와 `published_at` 기록까지 실제로 통과함을 확인했습니다. `postgres` 작업은 runtime 역할 API의 `/ready` 200과 drill(`migrations=10 tables=15`)을 확인했습니다.
 
+### 7차 독립 검토 (2026-09-28, `828a873`)
+
+같은 검토자(gpt-6-astra, 매우높음)의 판정은 **REVISE_LOCAL**이었습니다. 6차 지적 중 F1~F3은 구현 기준으로 닫힘, N1·N5는 닫힘, F4·N6은 부분(문서 기준점이 최신 커밋과 어긋남)으로 보았고, 저장소 안 결함 2개를 지적했습니다. 모두 이번 PR에서 고쳤습니다.
+
+- F4·N6(문서 기준점): `docs/V2_PLAN.md`가 원격 조회 SHA를 현재 팁처럼 적어 최신 커밋과 어긋났습니다. 이제 문서가 적는 원격 SHA는 "문서 갱신 커밋을 뺀 마지막 코드 통합 커밋"이고 실제 팁은 `git log -1 --format=%h origin/develop`으로 확인한다고 명시했으며, 학교업무 통합 행의 SHA(`6508be1` → `e3bb4ff`)와 PR 목록(`#75`·`#77`·`#79`·`#81`·`#82`)을 갱신했습니다.
+- orphan 전용 sweep 실패 관측: `services/worker/src/attachments.rs`가 `considered == 0`이면 회차 보고를 통째로 생략해, 만료 첨부가 없고 orphan 삭제만 실패한 회차가 로그에 남지 않았습니다. `PurgeReport::is_idle`로 "아무 일도 없던 회차"만 조용히 넘기고, 실패가 있으면 warn 요약을 남깁니다(단위 테스트 `a_round_is_idle_only_when_it_had_nothing_to_do`).
+- P-02·S-03 완료 표현: 두 행이 "완료"이면서 미검증 항목을 함께 적어 서로 어긋났습니다. `docs/SCHOOL_WORK_PLAN.md` S-03 행과 `docs/PERSONAL_PLAN.md` P-02 행을 "완료: … / 남음: …" 형식으로 분리하고 `docs/TEAM_BACKLOG.md` 표에도 같은 남은 검증을 적었습니다. 남은 것은 거부 경로 화면 조작·편집 이력 화면 표시(S-03)와 도구 모음 팝업·`activeTab` 경로·실제 업무 사이트 등록(P-02)입니다.
+- 검증: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo test --workspace --locked`(164개), worker sweep·소비·relay 테스트, foundation 34개, repository guard 0건.
+
 ## 단계 상태
 
 | 단계 | 상태 | 확인된 내용 | 남은 게이트 |
