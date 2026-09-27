@@ -33,6 +33,20 @@ export async function openAutomationRecipe(recipeId: string): Promise<void> {
   return invoke<void>("open_automation_recipe", { recipeId });
 }
 
+export type AutomationBridgeInfo = {
+  port: number;
+  token: string;
+  extensionId: string;
+};
+
+/**
+ * 확장 연결에 필요한 값입니다. 브리지는 127.0.0.1에만 열리고 토큰이 있어야
+ * 요청을 받습니다.
+ */
+export async function fetchAutomationBridgeInfo(): Promise<AutomationBridgeInfo> {
+  return invoke<AutomationBridgeInfo>("automation_bridge_info");
+}
+
 const UNKNOWN_AUTOMATION_ERROR = "알 수 없는 오류가 발생했습니다.";
 
 /**

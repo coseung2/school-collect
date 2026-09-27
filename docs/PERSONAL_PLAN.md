@@ -11,7 +11,8 @@
 | 이름·URL로 바로가기 등록, 열기·삭제·새로고침, 로컬 파일 저장·손상 행 복구 | PR #25 (`11a0af0`) | 완료: develop 통합 |
 | 로그인 없는 개인 화면, `open_automation_recipe(recipeId)`로 저장된 주소 실행 | PR #25 (`11a0af0`, `apps/app/src/pages/AutomationPage.tsx`) | 완료: `#automation` 로컬 라우트 |
 | 실제 Tauri 창에서 등록·열기·삭제·실행 취소·재시작 | [AUTOMATION_DESIGN.md](AUTOMATION_DESIGN.md) | 완료(2026-09-27, Windows) |
-| 현재 탭 등록, DOM 자동입력, 행렬 입력, 새 신청 감시 | 해당 브랜치 AUTOMATION_DESIGN 기록 | 계획, 미구현 |
+| 브라우저 확장으로 현재 탭 등록, 로컬 브리지(`127.0.0.1:43110`) | `feat/personal-bridge-extension`, [AUTOMATION_DESIGN.md](AUTOMATION_DESIGN.md) | 구현: 브랜치(PR 리뷰 대기) |
+| DOM 자동입력, 행렬 입력, 새 신청 감시 | [AUTOMATION_DESIGN.md](AUTOMATION_DESIGN.md) | 계획, 미구현 |
 
 개인기능은 PR #25로 develop에 통합됐고, 병합 과정에서 학교 화면 구조는 PR #24 방식을 유지하며 개인 화면을 `pages/AutomationPage.tsx`와 `#automation` 라우트로 분리했습니다. 상세 설계와 검증 기록은 [AUTOMATION_DESIGN.md](AUTOMATION_DESIGN.md)에 있습니다.
 
@@ -28,7 +29,7 @@
 | ID | 작업 / 상태 | 선행 | 완료 조건 |
 | --- | --- | --- | --- |
 | P-01 | 바로가기 통합·안정화 / 완료(PR #25, `11a0af0`) | C-01 공통 진입 계약 | 로그인 없이 등록/조회/삭제/열기, 재시작 보존, 손상·복구 실패 시 원본 보존, 실제 창 검증 완료 |
-| P-02 | 브라우저 확장·현재 화면 등록 / 계획 | P-01 | 사용자가 현재 탭을 선택해 이름을 붙여 등록, 허용 origin·command schema만 통과, cookie/token/password 전달 금지 |
+| P-02 | 브라우저 확장·현재 화면 등록 / 구현(브랜치, PR 리뷰 대기) | P-01 | 사용자가 현재 탭을 선택해 이름을 붙여 등록, 허용 origin·command schema만 통과, cookie/token/password 전달 금지 |
 | P-03 | 결정론적 DOM 레시피 엔진 / 계획 | P-02 | dry-run -> 입력 계획 확인 -> 실행 -> 결과 검증, 페이지/요소 모호 시 중단, 사용자 최종 저장 |
 | P-04 | 학생 × 날짜 행렬 입력 / 계획 | P-03 | 학년도/학년/반/번호 등으로 행 식별, 날짜 열·교차 셀 확인, 중복·누락·불일치 중단, 부분 실패 표시 |
 | P-05 | 출결 등 앱 데이터 연결 / 계획 | P-04, 실제 데이터 원천·권한 계약 | 출처·필드 매핑 확정, 필요한 학교 API만 권한에 맞게 조회, 미리보기·검토·최소 보존·정리 검증 |
@@ -47,6 +48,21 @@
 - 레시피 100개·격리 파일 512 KiB 상한과 Unix 0600 권한, 격리 실패 시 원본 보존을 테스트로 확인했습니다. Windows는 사용자 프로필 ACL을 따릅니다.
 - 실제 Tauri 창에서 로그인 전 열기 -> 등록 -> 열기 -> 재시작 보존 -> 삭제 -> 실행 취소를 확인했습니다. 학교 화면은 Permission 상태로 남았습니다.
 
+## P-02에서 구현한 것 (브랜치)
+
+`feat/personal-bridge-extension`에서 데스크톱 앱의 제한된 로컬 브리지와 Chrome/Edge 확장을 추가했습니다. 세부 계약과 검증 기록은 [AUTOMATION_DESIGN.md](AUTOMATION_DESIGN.md)의 "2단계"에 있습니다.
+
+- 브리지는 `127.0.0.1:43110`에만 열리고, 짝 맞춘 토큰(`automation-bridge.token`, 64자 hex)과 고정 확장 ID origin을 함께 확인합니다. 토큰은 상수 시간 비교이고, 브라우저가 `Origin`을 보내면 `chrome-extension://dfobjphjganlegjomdgmaaphbjcgpoea`와 정확히 같아야 합니다.
+- 브리지가 제공하는 것은 상태 확인과 바로가기 생성뿐입니다. URL 열기, 쿠키·DOM 접근, 임의 JavaScript 실행은 없습니다.
+- 확장은 `apps/extension`을 "압축해제된 확장 프로그램"으로 로드해 쓰고, `manifest.json`의 `key`로 ID를 고정합니다. 권한은 `activeTab`·`storage`와 `http://127.0.0.1:43110/*`뿐이고, 등록 값은 현재 탭의 제목과 주소입니다.
+- 앱의 `업무 자동화` 화면에는 포트·토큰·확장 ID를 보여 주는 "브라우저 확장 연결" 카드가 있습니다.
+
+검증한 것과 아직 아닌 것:
+
+- 통과: Rust 단위·통합 테스트(워크스페이스 46개), clippy `-D warnings`, 앱 typecheck/build, foundation 24개, repository guard. 실제 소켓 스모크에서 상태 200, 등록 201과 파일 저장, 자격증명 포함 URL 400, 토큰 없음 401, 다른 origin 403을 확인했습니다. 실제 Tauri 창에서 연결 카드 렌더링과 브리지로 만든 버튼이 목록에 나타나는 것도 확인했습니다.
+- 통과(실제 브라우저, Edge 154): 확장이 `chrome-extension://dfobjphjganlegjomdgmaaphbjcgpoea/popup.html`로 로드됐고, 토큰 저장 -> 연결 확인 -> 현재 화면 등록까지 성공해 레시피 파일에 기록된 뒤 원래 내용으로 되돌렸습니다. 고정 ID와 매니페스트 권한은 `scripts/tests/test_extension_contract.py`가 공개 키에서 ID를 다시 계산해 브리지 상수와 대조합니다.
+- 아직 아님: 도구 모음 아이콘 클릭으로 여는 실제 팝업·`activeTab` 부여 경로와 실제 업무 사이트 주소 등록은 사람이 직접 확인하지 않았습니다. 검증은 팝업 페이지를 탭으로 열어 수행했고 대상은 브리지 origin 페이지였습니다.
+
 ## 확장·실행 원칙
 
 Tauri <-> 제한된 로컬 브리지 <-> Chrome/Edge 확장 <-> 현재 탭을 기본 방향으로 둡니다. 임의 JavaScript 문자열 실행 없이 명시적인 recipe ID와 정해진 명령만 처리합니다. locator는 안정적인 속성, 접근성 role/name, label, 표 header/row identity를 우선합니다.
@@ -57,6 +73,6 @@ Tauri <-> 제한된 로컬 브리지 <-> Chrome/Edge 확장 <-> 현재 탭을 �
 
 ## 변경 책임과 배포
 
-P-01은 `apps/app`의 개인 화면·레시피 클라이언트·native adapter를 소유합니다. 확장·브리지 경로는 P-02 시작 전에 확정합니다. `packages/ui`는 C-01과 조율하고 학교 domain/DB/API는 P-05의 명시적 계약이 필요한 경우에만 변경합니다.
+P-01은 `apps/app`의 개인 화면·레시피 클라이언트·native adapter를 소유합니다. P-02에서 확장·브리지 경로를 `apps/extension`(확장)과 `apps/app/src-tauri/src/bridge.rs`(브리지)로 확정했습니다. `packages/ui`는 C-01과 조율하고 학교 domain/DB/API는 P-05의 명시적 계약이 필요한 경우에만 변경합니다.
 
 개인기능은 해당 범위의 native 동작·로컬 복구·권한을 검증합니다. 학교 서버 배포·학교 초대·R2/NATS 구축 때문에 순수 로컬 기능 개발을 보류하지 않습니다.

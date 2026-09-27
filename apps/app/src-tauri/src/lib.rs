@@ -8,7 +8,9 @@ use std::{
 use tauri::Manager;
 use url::Url;
 
-const AUTOMATION_RECIPES_FILE: &str = "automation-recipes.tsv";
+mod bridge;
+
+pub(crate) const AUTOMATION_RECIPES_FILE: &str = "automation-recipes.tsv";
 const AUTOMATION_RECIPES_QUARANTINE_FILE: &str = "automation-recipes.invalid.tsv";
 const MAX_RECIPE_NAME_LEN: usize = 80;
 const MAX_RECIPE_ID_LEN: usize = 128;
@@ -20,17 +22,17 @@ const MAX_QUARANTINE_BYTES: usize = 512 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-enum AutomationKind {
+pub(crate) enum AutomationKind {
     Shortcut,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-struct AutomationRecipe {
-    id: String,
-    name: String,
-    target_url: String,
-    kind: AutomationKind,
+pub(crate) struct AutomationRecipe {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) target_url: String,
+    pub(crate) kind: AutomationKind,
 }
 
 fn validate_plain_field(value: &str) -> Result<(), String> {
@@ -69,11 +71,11 @@ fn validate_target_url(value: &str) -> Result<(), String> {
 }
 
 /// 저장할 때는 해석한 주소를 그대로 직렬화해 표기를 통일합니다.
-fn normalize_target_url(value: &str) -> Result<String, String> {
+pub(crate) fn normalize_target_url(value: &str) -> Result<String, String> {
     Ok(parse_target_url(value)?.to_string())
 }
 
-fn validate_recipe(recipe: &AutomationRecipe) -> Result<(), String> {
+pub(crate) fn validate_recipe(recipe: &AutomationRecipe) -> Result<(), String> {
     let id = recipe.id.trim();
     let name = recipe.name.trim();
 
@@ -90,7 +92,7 @@ fn validate_recipe(recipe: &AutomationRecipe) -> Result<(), String> {
     Ok(())
 }
 
-fn automation_config_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn automation_config_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
     let directory = app_handle
         .path()
         .app_config_dir()
@@ -102,7 +104,7 @@ fn automation_config_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, Strin
     Ok(directory)
 }
 
-fn automation_recipes_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn automation_recipes_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(automation_config_dir(app_handle)?.join(AUTOMATION_RECIPES_FILE))
 }
 
@@ -229,7 +231,7 @@ fn load_recipes_for_update(path: &Path) -> Result<Vec<AutomationRecipe>, String>
     Ok(file.recipes)
 }
 
-fn upsert_automation_recipe(
+pub(crate) fn upsert_automation_recipe(
     path: &Path,
     recipe: AutomationRecipe,
 ) -> Result<Vec<AutomationRecipe>, String> {
@@ -277,7 +279,7 @@ fn write_temp_file(path: &Path, content: &str) -> std::io::Result<()> {
     file.sync_all()
 }
 
-fn write_file_atomically(path: &Path, content: &str) -> Result<(), String> {
+pub(crate) fn write_file_atomically(path: &Path, content: &str) -> Result<(), String> {
     let directory = path
         .parent()
         .ok_or_else(|| "자동화 설정 경로를 확인하지 못했습니다.".to_string())?;
@@ -430,11 +432,38 @@ fn app_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BridgeInfo {
+    port: u16,
+    token: String,
+    extension_id: String,
+}
+
+/// Pairing values the 자동화 화면 shows so the extension can be connected.
+#[tauri::command]
+fn automation_bridge_info(app_handle: tauri::AppHandle) -> Result<BridgeInfo, String> {
+    Ok(BridgeInfo {
+        port: bridge::BRIDGE_PORT,
+        token: bridge::ensure_token(&app_handle)?,
+        extension_id: bridge::ALLOWED_EXTENSION_ID.to_owned(),
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .setup(|app| {
+            // The bridge is a convenience for the browser extension; a failure
+            // must not stop the desktop app from starting.
+            if let Err(error) = bridge::spawn(app.handle()) {
+                eprintln!("로컬 브리지를 시작하지 못했습니다: {error}");
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             app_version,
+            automation_bridge_info,
             list_automation_recipes,
             save_automation_recipe,
             delete_automation_recipe,

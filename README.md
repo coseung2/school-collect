@@ -19,8 +19,8 @@ School Collect는 학교의 반복 행정업무를 수합·검증·자동화하�
 | Rust/Axum API | 실행 기반 CI 검증 완료 |
 | PostgreSQL 18 | migration + readiness CI 검증 완료 |
 | 인증/권한 | Supabase Auth 토큰 검증·membership RBAC 기본 흐름 통합 |
-| 학교업무 | 수합 기본 흐름 통합, 항목·대상·현황 확장 PR #24 리뷰 대기 |
-| 개인기능 | 로컬 바로가기 PR #25 리뷰 대기, 로그인 없는 개인 화면은 로컬 후속 구현 |
+| 학교업무 | 수합 기본 흐름과 항목·대상·현황·구성원 초대 통합 |
+| 개인기능 | 로컬 바로가기·로그인 없는 개인 화면 통합, 브라우저 확장·로컬 브리지 브랜치 구현 |
 | 보안 정리 | 추적 파일 정리 완료. Git history 정리는 별도 판단 |
 | Branch protection | main/develop 적용 완료 |
 
@@ -60,7 +60,8 @@ School Collect는 “일단 MVP로 만들고 나중에 운영 수준으로 고�
 
 ```text
 apps/
-└─ app/                     React/Vite + Tauri 2
+├─ app/                     React/Vite + Tauri 2
+└─ extension/               Chrome/Edge 확장 (로컬 자동화 브리지)
 
 services/
 ├─ api/                     Rust/Axum API
@@ -126,6 +127,7 @@ feat/* / fix/* / refactor/* / chore/* / docs/*
 - [전체 작업 계획](docs/V2_PLAN.md)
 - [학교업무 계획](docs/SCHOOL_WORK_PLAN.md)
 - [개인기능 계획](docs/PERSONAL_PLAN.md)
+- [업무 자동화 설계](docs/AUTOMATION_DESIGN.md)
 - [팀 작업 순서와 공통 기반](docs/TEAM_BACKLOG.md)
 - [목표 아키텍처](docs/ARCHITECTURE.md)
 - [아키텍처 결정](docs/ADR/0001-v2-platform.md)
@@ -162,8 +164,8 @@ School Collect is an **open-source work platform** for collecting, validating, a
 | Rust/Axum API | Executable foundation validated in CI |
 | PostgreSQL 18 | Migrations and readiness validated in CI |
 | Authentication/authorization | Supabase Auth token validation and membership RBAC integrated |
-| School workflows | Core Collect flow integrated; items/assignments/status expansion in open PR #24 |
-| Personal tools | Local shortcuts in open PR #25; login-free personal screens in a local follow-up branch |
+| School workflows | Core Collect flow plus items, assignments, status, and membership invitations integrated |
+| Personal tools | Local shortcuts and login-free personal screens integrated; browser extension and local bridge implemented on a branch |
 | Security cleanup | Tracked files cleaned; Git history remains a separate decision |
 | Branch protection | Enabled on main and develop |
 
@@ -203,7 +205,8 @@ School Collect does not assume that production concerns can be deferred until af
 
 ```text
 apps/
-└─ app/                     React/Vite + Tauri 2
+├─ app/                     React/Vite + Tauri 2
+└─ extension/               Chrome/Edge extension for the local automation bridge
 
 services/
 ├─ api/                     Rust/Axum API
@@ -261,6 +264,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete workflow.
 - [Execution plan](docs/V2_PLAN.md)
 - [School workflow plan](docs/SCHOOL_WORK_PLAN.md)
 - [Personal tools plan](docs/PERSONAL_PLAN.md)
+- [Work automation design](docs/AUTOMATION_DESIGN.md)
 - [Work order and shared foundations](docs/TEAM_BACKLOG.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Architecture decision](docs/ADR/0001-v2-platform.md)

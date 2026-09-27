@@ -1,6 +1,6 @@
 # 업무 자동화 설계
 
-상태: 첫 수직 슬라이스(P-01 안정화 포함) 구현. 로그인·학교 멤버십 없이 왼쪽 메뉴의 `업무 자동화` 화면을 쓸 수 있고, 브라우저 DOM 자동입력과 감시는 아직 구현하지 않습니다.
+상태: P-01 바로가기와 P-02 로컬 브리지·브라우저 확장을 브랜치에서 구현했습니다(PR 리뷰 대기). 로그인·학교 멤버십 없이 왼쪽 메뉴의 `업무 자동화` 화면을 쓸 수 있고, 브라우저 DOM 자동입력과 감시는 아직 구현하지 않습니다.
 
 ## 목표
 
@@ -73,27 +73,44 @@ URL 자체에 basic-auth credential이 포함된 경우 저장을 거부합니�
 
 ## 2단계: 현재 화면 등록용 브라우저 동반 확장
 
-"현재 화면을 기안으로 등록" 기능은 브라우저 확장이 담당합니다.
-
-권장 구조:
+"현재 화면을 기안으로 등록" 기능은 브라우저 확장이 담당합니다. `feat/personal-bridge-extension`에서 아래 구조로 구현했습니다.
 
 ```text
 School Collect (Tauri)
-  <-> 제한된 로컬 브리지
+  <-> 제한된 로컬 브리지 (127.0.0.1:43110)
   <-> Chrome/Edge Extension
-  <-> 현재 탭 DOM
+  <-> 현재 탭 (제목 + 주소만)
 ```
 
 확장은 브라우저 프로필의 쿠키 값을 School Collect에 복사하지 않습니다. 현재 탭에서 이미 성립한 로그인 세션을 그대로 사용합니다.
 
-브리지의 요구사항:
+### 브리지 계약
 
-- 허용된 extension origin만 연결
-- 매 실행마다 명시적인 recipe id 사용
-- 임의 JavaScript 문자열 실행 금지
-- 메시지는 정해진 command schema만 허용
-- cookie/token/password 필드 전달 금지
-- 로그에서 URL query와 DOM 텍스트를 기본 redaction
+- 주소: `127.0.0.1:43110`에만 bind합니다. 외부 인터페이스로 열지 않습니다.
+- 인증: `Authorization: Bearer <token>`. 토큰은 앱이 처음 실행될 때 만들어 `%APPDATA%\kr.schoolcollect.app\automation-bridge.token`(Unix 0600, Windows 사용자 프로필 ACL)에 저장하고 `업무 자동화` 화면에 보여 줍니다. 비교는 상수 시간입니다.
+- origin: 브라우저가 `Origin` 헤더를 보내면 고정 확장 ID `dfobjphjganlegjomdgmaaphbjcgpoea`와 정확히 일치해야 합니다. 웹 페이지가 토큰을 알아도 호출할 수 없습니다. `Origin`이 없는 로컬 도구(curl·스크립트)는 토큰만으로 호출할 수 있습니다.
+- 엔드포인트:
+  - `GET /v1/bridge/status`: 서비스 이름·버전·포트
+  - `POST /v1/bridge/shortcuts`: `{ "name": ..., "url": ... }`로 바로가기 레시피 생성
+- 거부: http/https 이외 스킴, 자격증명 포함 URL, 빈 이름·80자 초과 이름은 400입니다. 브리지에는 URL 열기, DOM 접근, 임의 JavaScript 실행 경로가 없습니다.
+- CORS: 확장 origin만 허용하고 `authorization`, `content-type` 헤더와 GET/POST만 통과시킵니다.
+
+### 확장
+
+- 위치: `apps/extension`. `chrome://extensions`(Edge는 `edge://extensions`)에서 "압축해제된 확장 프로그램을 로드"로 이 폴더를 선택합니다.
+- `manifest.json`의 `key`가 확장 ID를 고정하므로 어느 컴퓨터에서 설치해도 ID가 같고 브리지 허용 목록과 일치합니다. `scripts/tests/test_extension_contract.py`가 공개 키에서 ID를 다시 계산해 `bridge.rs`의 상수와 대조합니다.
+- 권한은 `activeTab`, `storage`와 `http://127.0.0.1:43110/*`뿐입니다. `cookies`, `<all_urls>`, 광범위 host 권한을 요청하지 않습니다.
+- 팝업에서 토큰을 `chrome.storage.local`에 저장하고, `현재 화면 등록`을 누르면 활성 탭의 제목(사용자가 비우면)과 주소를 브리지로 보냅니다. 이름은 80자로 자릅니다.
+- 앱 화면의 "브라우저 확장 연결" 카드가 포트·토큰·확장 ID를 보여 줍니다.
+
+### 검증 기록 (2026-09-27, Windows)
+
+- Rust: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo test --workspace --locked`(46개) 통과. 브리지 테스트는 토큰 비교, 토큰·origin 거부, preflight 응답, 레시피 저장, 잘못된 입력 거부, 실제 소켓 응답을 포함합니다.
+- 웹: `pnpm --filter @school-collect/app typecheck`·`build` 통과. foundation `python -m unittest discover -s scripts/tests -v`(24개)와 `python scripts/check_repository.py` 통과.
+- 실제 소켓 스모크(`curl`): 상태 200, 바로가기 생성 201과 `automation-recipes.tsv` 기록, 자격증명 포함 URL 400, 토큰 없음 401, 다른 origin 403. 스모크로 만든 레시피는 삭제했습니다.
+- 실제 Tauri 창: `업무 자동화` 화면에 연결 카드가 포트 43110·토큰·확장 ID로 렌더링되고, 브리지가 만든 버튼이 새로고침 후 "내 업무 버튼"에 나타나는 것을 확인했습니다.
+- 실제 브라우저(Edge 154): 임시 프로필로 `--load-extension` 실행 후 확장 페이지가 `chrome-extension://dfobjphjganlegjomdgmaaphbjcgpoea/popup.html`로 열렸습니다. 즉 실제 브라우저가 계산한 확장 ID가 브리지 상수와 일치합니다. 이어서 토큰 저장 -> `연결됨 · school-collect-automation-bridge 0.2.0` -> `현재 화면 등록` -> `'p02-browser-check' 버튼을 등록했습니다.`까지 확인하고, 레시피 파일에 항목이 기록된 것을 대조한 뒤 원래 내용(0바이트)으로 되돌렸습니다. 검증 스크립트는 `.local`(비추적)에 둡니다.
+- 남은 한계: 위 검증은 팝업 페이지를 탭으로 열어 수행했고 등록 대상은 브리지 origin(`127.0.0.1:43110`) 페이지였습니다. 도구 모음 아이콘 클릭으로 여는 실제 팝업과 `activeTab` 부여 경로, 실제 업무 사이트 주소 등록은 아직 사람이 직접 확인하지 않았습니다. 또한 현재 Chrome 153은 자동화용 `--load-extension`을 무시해서(확장이 로드되지 않음) 검증은 Edge로 수행했습니다.
 
 ## 3단계: 결정론적 자동입력 레시피
 
@@ -202,15 +219,15 @@ School Collect (Tauri)
 
 ## 단계별 구현 계획
 
-| 단계 | 결과물 | 서버 영향 |
-| --- | --- | --- |
-| A | 로컬 사용자 정의 바로가기 | 없음 |
-| B | 브라우저 확장 + 현재 화면 등록 | 없음 |
-| C | DOM 레시피 엔진 + dry-run/검증 | 없음 |
-| D | 학생 × 날짜 행렬 자동입력 | 없음 |
-| E | 출결 앱 데이터 -> 나이스 입력 어댑터 | 기존 School Collect API만 사용 |
-| F | 새 신청/결재 감시 + 로컬 알림 | 필요 시 최소 상태 API 검토 |
-| G | AI 레시피 생성 보조 | 선택 기능, 실행 판단은 규칙 기반 유지 |
+| 단계 | 결과물 | 서버 영향 | 상태 |
+| --- | --- | --- | --- |
+| A | 로컬 사용자 정의 바로가기 | 없음 | 완료(PR #25) |
+| B | 브라우저 확장 + 현재 화면 등록 | 없음 | 구현: 브랜치(PR 리뷰 대기) |
+| C | DOM 레시피 엔진 + dry-run/검증 | 없음 | 계획 |
+| D | 학생 × 날짜 행렬 자동입력 | 없음 | 계획 |
+| E | 출결 앱 데이터 -> 나이스 입력 어댑터 | 기존 School Collect API만 사용 | 계획 |
+| F | 새 신청/결재 감시 + 로컬 알림 | 필요 시 최소 상태 API 검토 | 계획 |
+| G | AI 레시피 생성 보조 | 선택 기능, 실행 판단은 규칙 기반 유지 | 선택 후속 |
 
 ## 보안 경계
 
@@ -223,9 +240,9 @@ School Collect (Tauri)
 
 ## 현재 미구현 범위
 
-이번 첫 슬라이스는 다음을 아직 하지 않습니다.
+이번 슬라이스는 다음을 아직 하지 않습니다.
 
-- 현재 탭 자동 캡처
+- 현재 탭의 DOM 요소·표 영역 캡처(제목·주소 등록만 구현)
 - DOM 클릭/입력
 - Tab/Enter 매크로 실행
 - 스포츠클럽/출결 화면별 adapter

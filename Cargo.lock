@@ -3342,10 +3342,16 @@ dependencies = [
 name = "school-collect-app"
 version = "0.2.0"
 dependencies = [
+ "axum",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
+ "tokio",
+ "tower",
+ "tower-http",
  "url",
+ "uuid",
 ]
 
 [[package]]

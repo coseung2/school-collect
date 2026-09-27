@@ -34,7 +34,7 @@ Server data remains authoritative
 
 클라이언트는 DB/R2/NATS 관리자 credential을 갖지 않습니다. Tauri의 Rust 코드도 신뢰 서버가 아닙니다.
 
-위 Cloudflare edge/R2/JetStream과 외부 브라우저 PKCE는 목표이며 연결 완료를 의미하지 않습니다. 현재 인증 방식은 ADR-0002의 Supabase 로그인과 API token 검증입니다. 개인기능의 목표 경로는 Tauri -> 로컬 레시피/제한된 브리지 -> 브라우저 확장 -> 현재 탭이며 확장·브리지는 후속 계획입니다.
+위 Cloudflare edge/R2/JetStream과 외부 브라우저 PKCE는 목표이며 연결 완료를 의미하지 않습니다. 현재 인증 방식은 ADR-0002의 Supabase 로그인과 API token 검증입니다. 개인기능의 경로는 Tauri -> 로컬 레시피/제한된 브리지(`127.0.0.1:43110`) -> 브라우저 확장(`apps/extension`) -> 현재 탭이며, 브리지·확장은 브랜치에 구현됐고 DOM 자동입력·감시는 후속 계획입니다.
 
 ## 저장소 구조
 
@@ -42,6 +42,7 @@ Server data remains authoritative
 
 ```text
 apps/app/                 React/Vite product + Tauri 2 shell
+apps/extension/           Chrome/Edge MV3 extension for the local automation bridge
 services/api/             Axum HTTP API
 services/worker/          asynchronous worker process
 services/migrator/        migration-only process

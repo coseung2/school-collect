@@ -15,10 +15,12 @@ import {
   createShortcutRecipe,
   deleteAutomationRecipe,
   describeAutomationTarget,
+  fetchAutomationBridgeInfo,
   listAutomationRecipes,
   openAutomationRecipe,
   saveAutomationRecipe,
   type AutomationRecipe,
+  type AutomationBridgeInfo,
 } from "../automation";
 export function AutomationPage() {
   const [recipes, setRecipes] = useState<AutomationRecipe[] | null>(null);
@@ -33,6 +35,8 @@ export function AutomationPage() {
   const [listNotice, setListNotice] = useState<string | null>(null);
   const [undoRecipe, setUndoRecipe] = useState<AutomationRecipe | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [bridge, setBridge] = useState<AutomationBridgeInfo | null>(null);
+  const [bridgeError, setBridgeError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -50,6 +54,25 @@ export function AutomationPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchAutomationBridgeInfo()
+      .then((value) => {
+        if (!cancelled) {
+          setBridge(value);
+          setBridgeError(null);
+        }
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled) {
+          setBridgeError(automationErrorMessage(caught));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function create(event: FormEvent) {
     event.preventDefault();
@@ -191,6 +214,45 @@ export function AutomationPage() {
         </form>
       </Card>
 
+      <Card>
+        <div>
+          <p className="app-card-eyebrow">브라우저 확장 연결</p>
+          <h2>현재 화면 등록 준비</h2>
+          <p className="app-card-description">
+            Chrome/Edge에 이 저장소의 apps/extension 폴더를 압축해제된 확장으로
+            설치한 뒤, 아래 토큰을 확장 팝업에 붙여넣으면 현재 탭의 주소와 제목을
+            이 목록에 바로 등록할 수 있습니다. 브리지는 이 컴퓨터(127.0.0.1)에서만
+            응답하고, 토큰이 없으면 요청을 거부합니다.
+          </p>
+        </div>
+        {bridgeError ? (
+          <p className="app-form__error" role="alert">
+            {bridgeError}
+          </p>
+        ) : null}
+        {bridge ? (
+          <>
+            <FormField htmlFor="bridge-port" label="포트">
+              <input id="bridge-port" readOnly value={bridge.port} />
+            </FormField>
+            <FormField
+              hint="확장 팝업의 '연결 토큰'에 붙여넣으세요. 다른 사람에게 공유하지 마세요."
+              htmlFor="bridge-token"
+              label="연결 토큰"
+            >
+              <input id="bridge-token" readOnly value={bridge.token} />
+            </FormField>
+            <FormField
+              hint="확장이 설치된 브라우저가 이 ID와 일치해야 연결됩니다."
+              htmlFor="bridge-extension-id"
+              label="확장 ID"
+            >
+              <input id="bridge-extension-id" readOnly value={bridge.extensionId} />
+            </FormField>
+          </>
+        ) : null}
+      </Card>
+
       <section className="app-section">
         <div className="app-section-heading">
           <div>
@@ -307,4 +369,3 @@ export function AutomationPage() {
     </div>
   );
 }
-
