@@ -9,7 +9,7 @@
 | 1 | 완료: S-01 PR #24 통합(`f573bfb`) | 완료: P-01 PR #25 통합(`11a0af0`)·실제 창 검증 | 완료: C-01 학교/개인 진입 경계 통합(설정·offline 세부는 남음) |
 | 2 | 완료: S-02 구성원 초대·합류(PR #28, `9416c6c`) | 완료: P-02 확장·현재 화면 등록(PR #30, `795dc26`) | C-02: 기존 auth/RBAC 부정 테스트·관측 보강 |
 | 3 | 완료: S-03 편집(PR #41), S-06 worker(PR #43), S-05 세션·초안(PR #45·#46) / 남음: S-04 첨부 | 완료: P-03 엔진(PR #32·#33), P-04 행렬(PR #35), P-06 감시(PR #37), P-07 추천(PR #51) | C-03 서버 운영, C-05 대상별 배포 검증 |
-| 4 | S-07: 결과 내보내기·화면(PR #48·#50) 통합, 역할 4종 단일 시나리오 검증 남음 | P-05 데이터 연결 | C-04 보안·협업 게이트를 해당 출시 전에 확인 |
+| 4 | 완료: S-07 결과 내보내기·화면·역할 4종 검증(PR #48·#50·#53) | P-05 데이터 연결 | C-04 보안·협업 게이트를 해당 출시 전에 확인 |
 
 선후 관계가 없는 기능은 병렬로 진행할 수 있습니다. 개인기능의 학교 데이터 연결(P-05)만 필요한 학교 API 계약을 선행 조건으로 가집니다. 출시일은 아직 확정하지 않았습니다.
 
@@ -17,11 +17,11 @@
 
 | ID | 작업 | 현재 / 남은 것 | 완료 조건 |
 | --- | --- | --- | --- |
-| C-01 | Design System·AppShell·영역 경계 | 기본 DS/AppShell 통합; 두 영역 진입·설정·상태 구분 후속 | 개인 화면은 로그인/학교/API 장애에 막히지 않음, 학교 화면은 membership 요구, 기기/학교 설정 구분, 키보드·narrow·offline·permission 검증 |
+| C-01 | Design System·AppShell·영역 경계 | 기본 DS/AppShell 통합; PR #54에서 설정·narrow 결함 수정. 남은 것은 Figma DS 확장(Library/Code Connect, 추가 컴포넌트) | 개인 화면은 로그인/학교/API 장애에 막히지 않음, 학교 화면은 membership 요구, 기기/학교 설정 구분, 키보드·narrow·offline·permission 검증 (2026-09-27 실제 창에서 확인) |
 | C-02 | 서버 인증·권한·오류·관측 / 완료(PR #39, `7285981`) | OIDC/JWKS·user upsert·membership RBAC·request ID 구현 + 키 회전/장애/캐시, 네 역할, 요청 ID·redaction 부정 테스트, 요청 ID span과 `/metrics` | 남은 것: RLS는 필요성 판단 후속(적용 완료로 표시하지 않음), 운영 수집기 연결 |
 | C-03 | 학교 서버 환경·데이터·복구 | 로컬 Docker/배포 구성 있음; 운영 연결 미완 | staging/prod 분리, HTTPS/CORS/CSP, runtime/migrator 최소 권한, Infisical 주입, backup/restore drill과 RPO/RTO |
 | C-04 | 저장소 보안·협업 | HEAD 자료 정리·보호 설정 과거 검증 기록 있음 | 나머지 credential 확인, 승인된 history 범위·복구·공개 사본 한계, 미검증 merge 차단, 협업자 추가 시 approval/code-owner 강화 |
-| C-05 | 앱 설치·서명·업데이트·플랫폼 | Windows 기반 build/smoke 기록 있음 | 변경 통합 SHA의 native 검증, 승인된 서명/업데이트·복구; Linux/macOS/mobile은 해당 대상을 제공하기 전 검증 |
+| C-05 | 앱 설치·서명·업데이트·플랫폼 | Windows build/smoke 기록 있고 PR #54에서 통합 SHA native 검증을 마쳤습니다. 남은 것은 서명·업데이트(소유자 결정) | 변경 통합 SHA의 native 검증, 승인된 서명/업데이트·복구; Linux/macOS/mobile은 해당 대상을 제공하기 전 검증 |
 
 C-03은 학교 서버에 의존하는 기능의 운영 게이트입니다. C-05의 Windows 검증과 모바일 검증은 구분합니다. Figma Library/Code Connect·추가 컴포넌트·interaction/accessibility는 C-01 후속입니다.
 
