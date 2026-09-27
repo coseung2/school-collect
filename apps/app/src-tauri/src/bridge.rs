@@ -22,7 +22,7 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use uuid::Uuid;
 
 use crate::{
-    AutomationField, AutomationKind, AutomationRecipe, automation_config_dir,
+    AutomationField, AutomationKind, AutomationRecipe, AutomationTable, automation_config_dir,
     automation_recipes_path, normalize_recipe, read_automation_recipes, upsert_automation_recipe,
     write_file_atomically,
 };
@@ -86,6 +86,24 @@ pub struct FillRecipeResponse {
     pub field_count: usize,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableRecipeRequest {
+    pub name: String,
+    pub url: String,
+    pub table: AutomationTable,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableRecipeResponse {
+    pub id: String,
+    pub name: String,
+    pub target_url: String,
+    pub identity_headers: usize,
+    pub date_labels: usize,
+}
+
 fn json_error(status: StatusCode, code: &str, message: &str) -> Response {
     (
         status,
@@ -120,6 +138,7 @@ pub fn router(state: BridgeState) -> Router {
         .route("/v1/bridge/status", get(status))
         .route("/v1/bridge/shortcuts", post(create_shortcut))
         .route("/v1/bridge/fill-recipes", post(create_fill_recipe))
+        .route("/v1/bridge/table-recipes", post(create_table_recipe))
         .route("/v1/bridge/recipes", get(list_recipes))
         .route_layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
@@ -144,6 +163,7 @@ async fn create_shortcut(
         name: body.name,
         target_url: body.url,
         fields: Vec::new(),
+        table: None,
     };
     let recipe = match normalize_recipe(recipe) {
         Ok(recipe) => recipe,
@@ -182,6 +202,7 @@ async fn create_fill_recipe(
         name: body.name,
         target_url: body.url,
         fields: body.fields,
+        table: None,
     };
     let recipe = match normalize_recipe(recipe) {
         Ok(recipe) => recipe,
@@ -201,6 +222,53 @@ async fn create_fill_recipe(
             .into_response(),
         Err(error) => {
             eprintln!("자동화 브리지가 자동입력 레시피를 저장하지 못했습니다: {error}");
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "storage_failed",
+                "the recipe could not be stored",
+            )
+        }
+    }
+}
+
+/// 표 입력 레시피는 표 위치와 행 식별·날짜 머리글만 저장합니다. 값은 실행할 때 확인합니다.
+async fn create_table_recipe(
+    State(state): State<BridgeState>,
+    Json(body): Json<TableRecipeRequest>,
+) -> Response {
+    let recipe = AutomationRecipe {
+        id: Uuid::new_v4().to_string(),
+        kind: AutomationKind::TableFill,
+        name: body.name,
+        target_url: body.url,
+        fields: Vec::new(),
+        table: Some(body.table),
+    };
+    let recipe = match normalize_recipe(recipe) {
+        Ok(recipe) => recipe,
+        Err(message) => return json_error(StatusCode::BAD_REQUEST, "invalid_recipe", &message),
+    };
+
+    match upsert_automation_recipe(&state.recipes_path, recipe.clone()) {
+        Ok(_) => {
+            let table = recipe
+                .table
+                .as_ref()
+                .expect("table recipes keep their table");
+            (
+                StatusCode::CREATED,
+                Json(TableRecipeResponse {
+                    id: recipe.id,
+                    name: recipe.name,
+                    target_url: recipe.target_url,
+                    identity_headers: table.identity_headers.len(),
+                    date_labels: table.date_labels.len(),
+                }),
+            )
+                .into_response()
+        }
+        Err(error) => {
+            eprintln!("자동화 브리지가 표 입력 레시피를 저장하지 못했습니다: {error}");
             json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "storage_failed",
@@ -669,6 +737,66 @@ mod tests {
             status_code(app, request("GET", "/v1/bridge/recipes", None, None)).await,
             StatusCode::UNAUTHORIZED
         );
+    }
+
+    #[tokio::test]
+    async fn table_recipes_endpoint_stores_headers() {
+        let directory = test_directory("table-create");
+        let app = router(state(&directory));
+        let payload = serde_json::json!({
+            "name": "출결 입력",
+            "url": "https://example.invalid/attendance",
+            "table": {
+                "locator": { "kind": "css", "value": "#attendance" },
+                "identityHeaders": ["학년", "반", "이름"],
+                "dateLabels": ["3-2", "3-3"]
+            }
+        });
+
+        let (status, body) = json_response(
+            app.clone(),
+            authorized_request("POST", "/v1/bridge/table-recipes")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "body: {body}");
+        assert_eq!(body["identityHeaders"], 3);
+        assert_eq!(body["dateLabels"], 2);
+
+        let (status, body) = json_response(
+            app.clone(),
+            authorized_request("GET", "/v1/bridge/recipes")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body[0]["kind"], "table_fill");
+        assert_eq!(body[0]["table"]["dateLabels"][1], "3-3");
+        assert!(body[0].get("fields").is_none());
+
+        // 표 위치가 잘못되면 저장하지 않습니다.
+        let invalid = serde_json::json!({
+            "name": "출결 입력",
+            "url": "https://example.invalid/attendance",
+            "table": {
+                "locator": { "kind": "css", "value": "div; body" },
+                "identityHeaders": ["이름"],
+                "dateLabels": ["3-2"]
+            }
+        });
+        let response = app
+            .oneshot(
+                authorized_request("POST", "/v1/bridge/table-recipes")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(invalid.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[test]

@@ -15,10 +15,17 @@ const recipeSelect = document.getElementById("recipe-select");
 const previewResultsEl = document.getElementById("preview-results");
 const valuesEl = document.getElementById("values");
 const fillResultsEl = document.getElementById("fill-results");
+const tablePickedEl = document.getElementById("table-picked");
+const tableNameInput = document.getElementById("table-name");
+const tableSelect = document.getElementById("table-select");
+const tableValuesEl = document.getElementById("table-values");
+const tableResultsEl = document.getElementById("table-results");
 
 let picked = null;
 let draftFields = [];
 let fillRecipes = [];
+let tableRecipes = [];
+let pickedTable = null;
 let valueInputs = [];
 
 function setStatus(message, tone) {
@@ -234,6 +241,7 @@ async function refreshFillRecipes() {
     return;
   }
   fillRecipes = (recipes ?? []).filter((recipe) => recipe.kind === "fill");
+  tableRecipes = (recipes ?? []).filter((recipe) => recipe.kind === "table_fill");
 
   const previous = recipeSelect.value;
   recipeSelect.replaceChildren();
@@ -252,6 +260,114 @@ async function refreshFillRecipes() {
     recipeSelect.value = previous;
   }
   renderValueInputs();
+
+  const previousTable = tableSelect.value;
+  tableSelect.replaceChildren();
+  for (const recipe of tableRecipes) {
+    const option = document.createElement("option");
+    option.value = recipe.id;
+    option.textContent = `${recipe.name} (${recipe.table?.identityHeaders?.length ?? 0}열 · 날짜 ${
+      recipe.table?.dateLabels?.length ?? 0
+    }개)`;
+    tableSelect.append(option);
+  }
+  if (tableRecipes.length === 0) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "저장된 표 레시피가 없습니다";
+    tableSelect.append(option);
+  } else if (tableRecipes.some((recipe) => recipe.id === previousTable)) {
+    tableSelect.value = previousTable;
+  }
+}
+
+function selectedTableRecipe() {
+  return tableRecipes.find((recipe) => recipe.id === tableSelect.value) ?? null;
+}
+
+/** 표 명령이 중단한 이유를 사용자가 읽을 수 있는 문장으로 바꿉니다. */
+function tableReasonText(reason) {
+  const texts = {
+    table_not_unique: "표를 하나로 특정하지 못했습니다",
+    table_missing: "클릭한 위치에서 표를 찾지 못했습니다",
+    table_too_small: "표에 데이터 행이 없습니다",
+    header_row_missing: "머리글 행을 찾지 못했습니다",
+    identity_columns_missing: "행 식별 열(학년·반·이름 등)을 찾지 못했습니다",
+    date_columns_missing: "날짜 열을 찾지 못했습니다",
+    rows_missing: "데이터 행을 찾지 못했습니다",
+    columns_changed: "저장한 머리글과 지금 표가 다릅니다",
+    duplicate_rows: "행 식별 값이 중복된 행이 있습니다",
+    unknown_rows: "미리보기 이후 행 식별 값이 바뀌었습니다",
+    cell_not_writable: "입력할 수 없는 칸이 있습니다",
+    nothing_to_fill: "입력할 값이 없습니다",
+    locator_not_unique: "입력 칸을 하나로 특정하지 못했습니다",
+    unsupported_control: "쓸 수 없는 컨트롤입니다",
+  };
+  return texts[reason] ?? reason ?? "알 수 없는 이유";
+}
+
+function renderTableResults(result) {
+  tableResultsEl.replaceChildren();
+  for (const field of result.results ?? []) {
+    const item = document.createElement("li");
+    item.dataset.tone = field.verified ? "ok" : "error";
+    item.textContent = field.verified
+      ? `${field.row} ${field.date}: "${field.readBack ?? ""}" 확인`
+      : `${field.row} ${field.date}: 검증 실패("${field.readBack ?? ""}")`;
+    tableResultsEl.append(item);
+  }
+  for (const issue of result.issues ?? []) {
+    const item = document.createElement("li");
+    item.dataset.tone = "error";
+    item.textContent = `${issue.row} ${issue.date}: ${tableReasonText(issue.reason)}`;
+    tableResultsEl.append(item);
+  }
+}
+
+/**
+ * 미리보기 결과를 탭으로 구분한 행렬로 보여 줍니다. 첫 줄은 머리글이고,
+ * 앞쪽 열은 행 식별 값, 나머지는 날짜 열 값입니다.
+ */
+function renderTableMatrix(preview) {
+  const lines = [[...preview.identityHeaders, ...preview.dateLabels].join("\t")];
+  for (const row of preview.rows) {
+    const values = row.values.map((value) => (value === null ? "" : value));
+    lines.push([...row.identities, ...values].join("\t"));
+  }
+  tableValuesEl.value = lines.join("\n");
+}
+
+/**
+ * 행렬 입력을 값 객체로 바꿉니다. 행 식별 값은 미리보기의 행과 정확히 같아야
+ * 하므로, 바뀐 행은 실행 단계에서 거부됩니다.
+ */
+function tableValuesFromMatrix(recipe) {
+  const identityCount = recipe.table?.identityHeaders?.length ?? 0;
+  const dateLabels = recipe.table?.dateLabels ?? [];
+  const lines = tableValuesEl.value.split(/\r?\n/).filter((line) => line.trim() !== "");
+  const values = {};
+
+  for (const line of lines.slice(1)) {
+    const cells = line.split("\t");
+    const identities = cells.slice(0, identityCount).map((value) => value.trim());
+    if (identities.every((value) => !value)) {
+      continue;
+    }
+    const key = identities.join("\u0000");
+    const rowValues = {};
+    dateLabels.forEach((label, index) => {
+      const raw = cells[identityCount + index];
+      if (typeof raw === "string" && raw.trim() !== "") {
+        rowValues[label] = raw.trim();
+      }
+    });
+    if (Object.keys(rowValues).length === 0) {
+      continue;
+    }
+    values[key] = rowValues;
+  }
+
+  return values;
 }
 
 document.getElementById("save").addEventListener("click", async () => {
@@ -450,6 +566,156 @@ document.getElementById("fill").addEventListener("click", async () => {
 });
 
 recipeSelect.addEventListener("change", renderValueInputs);
+
+document.getElementById("pick-table").addEventListener("click", async () => {
+  setStatus("표 안의 칸을 클릭하세요.", "");
+  try {
+    const result = await runPageCommand({ op: "pick-table" }, { allowFailure: true });
+    if (result.ok !== true) {
+      pickedTable = null;
+      tablePickedEl.textContent = "";
+      setStatus(`표를 등록하지 못했습니다: ${tableReasonText(result.reason)}.`, "error");
+      return;
+    }
+    pickedTable = result.spec;
+    tablePickedEl.textContent = `표: 행 식별 ${result.spec.identityHeaders.join(", ")} · 날짜 ${
+      result.spec.dateLabels.length
+    }개 · 데이터 행 ${result.rows.length}개${
+      result.missingEditors > 0 ? ` · 입력 칸 없음 ${result.missingEditors}개` : ""
+    }`;
+    tableNameInput.value = tableNameInput.value || "";
+    setStatus("레시피 이름을 넣고 저장하세요.", "ok");
+  } catch (error) {
+    pickedTable = null;
+    tablePickedEl.textContent = "";
+    setStatus(error.message, "error");
+  }
+});
+
+document.getElementById("save-table-recipe").addEventListener("click", async () => {
+  const name = tableNameInput.value.trim();
+  if (!pickedTable) {
+    setStatus("먼저 표를 등록하세요.", "error");
+    return;
+  }
+  if (!name) {
+    setStatus("레시피 이름을 입력하세요.", "error");
+    return;
+  }
+
+  try {
+    const tab = await activeTab();
+    if (!tab?.url || !/^https?:/i.test(tab.url)) {
+      setStatus("http/https 화면에서만 저장할 수 있습니다.", "error");
+      return;
+    }
+    const created = await bridgeFetch("/v1/bridge/table-recipes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, url: tab.url, table: pickedTable }),
+    });
+    pickedTable = null;
+    tablePickedEl.textContent = "";
+    tableNameInput.value = "";
+    await refreshFillRecipes();
+    tableSelect.value = created.id;
+    setStatus(
+      `'${created.name}' 표 레시피를 저장했습니다(식별 ${created.identityHeaders}열 · 날짜 ${created.dateLabels}개).`,
+      "ok",
+    );
+  } catch (error) {
+    setStatus(error.message, "error");
+  }
+});
+
+document.getElementById("table-preview").addEventListener("click", async () => {
+  const recipe = selectedTableRecipe();
+  if (!recipe) {
+    setStatus("미리 볼 표 레시피를 고르세요.", "error");
+    return;
+  }
+
+  try {
+    const tab = await activeTab();
+    if (!tab?.url || !/^https?:/i.test(tab.url)) {
+      setStatus("http/https 화면에서만 미리 볼 수 있습니다.", "error");
+      return;
+    }
+    if (new URL(recipe.targetUrl).origin !== new URL(tab.url).origin) {
+      setStatus(`이 레시피는 ${new URL(recipe.targetUrl).origin} 화면용입니다.`, "error");
+      return;
+    }
+
+    const preview = await runPageCommand(
+      { op: "preview-table", table: recipe.table },
+      { allowFailure: true },
+    );
+    if (preview.ok !== true) {
+      tableResultsEl.replaceChildren();
+      setStatus(`표 미리보기를 중단했습니다: ${tableReasonText(preview.reason)}.`, "error");
+      return;
+    }
+    renderTableMatrix(preview);
+    tableResultsEl.replaceChildren();
+    setStatus(
+      `표 미리보기: 데이터 행 ${preview.rows.length}개 · 날짜 ${
+        preview.dateLabels.length
+      }개${preview.missingEditors > 0 ? ` · 입력 칸 없음 ${preview.missingEditors}개` : ""}`,
+      preview.missingEditors > 0 ? "error" : "ok",
+    );
+  } catch (error) {
+    setStatus(error.message, "error");
+  }
+});
+
+document.getElementById("table-fill").addEventListener("click", async () => {
+  const recipe = selectedTableRecipe();
+  if (!recipe) {
+    setStatus("실행할 표 레시피를 고르세요.", "error");
+    return;
+  }
+
+  try {
+    const tab = await activeTab();
+    if (!tab?.url || !/^https?:/i.test(tab.url)) {
+      setStatus("http/https 화면에서만 실행할 수 있습니다.", "error");
+      return;
+    }
+    if (new URL(recipe.targetUrl).origin !== new URL(tab.url).origin) {
+      setStatus(`이 레시피는 ${new URL(recipe.targetUrl).origin} 화면용입니다.`, "error");
+      return;
+    }
+
+    const values = tableValuesFromMatrix(recipe);
+    if (Object.keys(values).length === 0) {
+      setStatus("입력할 값이 없습니다. 먼저 표 미리보기로 행렬을 불러오세요.", "error");
+      return;
+    }
+
+    const result = await runPageCommand(
+      { op: "fill-table", table: recipe.table, values },
+      { allowFailure: true },
+    );
+    renderTableResults(result);
+    if (result.ok !== true) {
+      setStatus(
+        `표 입력을 중단했습니다: ${tableReasonText(result.reason)}. 아무것도 입력하지 않았습니다.`,
+        "error",
+      );
+      return;
+    }
+
+    const failed = result.results.filter((field) => !field.verified).length;
+    setStatus(
+      failed === 0
+        ? `${result.results.length}개 칸을 입력했습니다. 내용을 확인한 뒤 사이트에서 직접 저장하세요.`
+        : `${failed}개 칸을 확인하지 못했습니다. 화면을 확인하세요.`,
+      failed === 0 ? "ok" : "error",
+    );
+  } catch (error) {
+    setStatus(error.message, "error");
+  }
+});
 
 loadToken().then(refreshFillRecipes);
 renderFields();

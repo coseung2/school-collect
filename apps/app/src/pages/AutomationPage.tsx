@@ -12,6 +12,7 @@ import {
 } from "@school-collect/ui";
 import {
   automationKindLabel,
+  automationRunsInExtension,
   automationErrorMessage,
   createShortcutRecipe,
   deleteAutomationRecipe,
@@ -340,7 +341,7 @@ export function AutomationPage() {
                     <div className="app-row-actions">
                       <Button
                         aria-label={
-                          recipe.kind === "fill"
+                          automationRunsInExtension(recipe.kind)
                             ? `${recipe.name} 화면 열기`
                             : `${recipe.name} 열기`
                         }
@@ -349,7 +350,7 @@ export function AutomationPage() {
                         size="small"
                         variant="secondary"
                       >
-                        {recipe.kind === "fill" ? "화면 열기" : "열기"}
+                        {automationRunsInExtension(recipe.kind) ? "화면 열기" : "열기"}
                       </Button>
                       <Button
                         aria-label={`${recipe.name} 삭제`}
