@@ -25,7 +25,6 @@ use url::Url;
 use uuid::Uuid;
 
 struct TestIdentity {
-    supabase_user_id: String,
     access_token: String,
 }
 
@@ -138,16 +137,172 @@ async fn delete_supabase_user(
         .await;
 }
 
-async fn cleanup(pool: &PgPool, tenant_ids: &[Uuid], user_ids: &[Uuid]) {
-    // Deleting the tenant cascades to memberships, collects, submissions and audit rows.
-    let _ = sqlx::query("DELETE FROM school_collect.tenants WHERE id = ANY($1)")
+/// Deletes the rows a test created. Deleting a tenant cascades to memberships,
+/// collects, submissions and audit rows.
+async fn remove_rows(pool: &PgPool, tenant_ids: &[Uuid], user_ids: &[Uuid]) -> Result<(), String> {
+    sqlx::query("DELETE FROM school_collect.tenants WHERE id = ANY($1)")
         .bind(tenant_ids)
         .execute(pool)
-        .await;
-    let _ = sqlx::query("DELETE FROM school_collect.users WHERE id = ANY($1)")
+        .await
+        .map_err(|error| format!("tenant cleanup failed: {error}"))?;
+    sqlx::query("DELETE FROM school_collect.users WHERE id = ANY($1)")
         .bind(user_ids)
         .execute(pool)
-        .await;
+        .await
+        .map_err(|error| format!("user cleanup failed: {error}"))?;
+    Ok(())
+}
+
+/// Counts the rows that should be gone, so a silent cleanup failure fails the test.
+async fn leftover_rows(
+    pool: &PgPool,
+    tenant_ids: &[Uuid],
+    user_ids: &[Uuid],
+) -> Result<i64, String> {
+    sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM school_collect.tenants WHERE id = ANY($1))
+              + (SELECT count(*) FROM school_collect.memberships WHERE tenant_id = ANY($1))
+              + (SELECT count(*) FROM school_collect.users WHERE id = ANY($2))",
+    )
+    .bind(tenant_ids)
+    .bind(user_ids)
+    .fetch_one(pool)
+    .await
+    .map_err(|error| format!("leftover check failed: {error}"))
+}
+
+#[derive(Default)]
+struct TestData {
+    identities: Vec<String>,
+    tenant_ids: Vec<Uuid>,
+    user_ids: Vec<Uuid>,
+}
+
+/// Test data that must not survive the run.
+///
+/// Every provider account and row the suite creates is registered here, so a
+/// panic still triggers the same teardown and the happy path can assert that
+/// nothing is left behind.
+struct TestCleanup {
+    database_url: String,
+    supabase_url: String,
+    service_role: String,
+    data: std::sync::Arc<std::sync::Mutex<TestData>>,
+    finished: std::sync::atomic::AtomicBool,
+}
+
+impl TestCleanup {
+    fn new(database_url: &str, supabase_url: &str, service_role: &str) -> Self {
+        Self {
+            database_url: database_url.to_owned(),
+            supabase_url: supabase_url.to_owned(),
+            service_role: service_role.to_owned(),
+            data: std::sync::Arc::new(std::sync::Mutex::new(TestData::default())),
+            finished: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    fn identity(&self, supabase_user_id: &str) {
+        self.data
+            .lock()
+            .expect("cleanup lock")
+            .identities
+            .push(supabase_user_id.to_owned());
+    }
+
+    fn tenant(&self, tenant_id: Uuid) {
+        self.data
+            .lock()
+            .expect("cleanup lock")
+            .tenant_ids
+            .push(tenant_id);
+    }
+
+    fn user(&self, user_id: Uuid) {
+        self.data
+            .lock()
+            .expect("cleanup lock")
+            .user_ids
+            .push(user_id);
+    }
+
+    fn user_ids(&self) -> Vec<Uuid> {
+        self.data.lock().expect("cleanup lock").user_ids.clone()
+    }
+
+    /// Deletes everything registered so far and fails when something remains.
+    async fn finish(&self) -> Result<(), String> {
+        self.finished
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let (identities, tenant_ids, user_ids) = {
+            let mut data = self.data.lock().expect("cleanup lock");
+            (
+                std::mem::take(&mut data.identities),
+                std::mem::take(&mut data.tenant_ids),
+                std::mem::take(&mut data.user_ids),
+            )
+        };
+
+        let client = reqwest::Client::builder().build().expect("http client");
+        for identity in identities {
+            delete_supabase_user(&client, &self.supabase_url, &self.service_role, &identity).await;
+        }
+
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&self.database_url)
+            .await
+            .map_err(|error| format!("cleanup connection failed: {error}"))?;
+        remove_rows(&pool, &tenant_ids, &user_ids).await?;
+        let leftover = leftover_rows(&pool, &tenant_ids, &user_ids).await?;
+        if leftover != 0 {
+            return Err(format!("{leftover} rows were left behind"));
+        }
+        Ok(())
+    }
+}
+
+impl Drop for TestCleanup {
+    /// A panicking test cannot await, so teardown runs on its own thread.
+    fn drop(&mut self) {
+        let (identities, tenant_ids, user_ids) = {
+            let mut data = self.data.lock().expect("cleanup lock");
+            (
+                std::mem::take(&mut data.identities),
+                std::mem::take(&mut data.tenant_ids),
+                std::mem::take(&mut data.user_ids),
+            )
+        };
+        if identities.is_empty() && tenant_ids.is_empty() && user_ids.is_empty() {
+            return;
+        }
+
+        let database_url = self.database_url.clone();
+        let supabase_url = self.supabase_url.clone();
+        let service_role = self.service_role.clone();
+        let _ = std::thread::spawn(move || {
+            let Ok(runtime) = tokio::runtime::Runtime::new() else {
+                return;
+            };
+            runtime.block_on(async move {
+                let client = reqwest::Client::builder().build().expect("http client");
+                for identity in identities {
+                    delete_supabase_user(&client, &supabase_url, &service_role, &identity).await;
+                }
+                let Ok(pool) = PgPoolOptions::new()
+                    .max_connections(1)
+                    .connect(&database_url)
+                    .await
+                else {
+                    return;
+                };
+                if let Err(error) = remove_rows(&pool, &tenant_ids, &user_ids).await {
+                    eprintln!("test teardown could not remove rows: {error}");
+                }
+            });
+        })
+        .join();
+    }
 }
 
 #[tokio::test]
@@ -185,8 +340,7 @@ async fn authenticated_collect_flow_end_to_end() {
     let run_id = Uuid::now_v7().simple().to_string();
 
     let mut identities: Vec<TestIdentity> = Vec::new();
-    let mut tenant_ids: Vec<Uuid> = Vec::new();
-    let mut local_user_ids: Vec<Uuid> = Vec::new();
+    let cleanup = TestCleanup::new(&database_url, &supabase_url, &service_role);
 
     // Sign in two unrelated schools so tenant isolation is a real assertion.
     for school in ["e2e-alpha", "e2e-beta"] {
@@ -195,10 +349,8 @@ async fn authenticated_collect_flow_end_to_end() {
         let supabase_user_id =
             create_supabase_user(&client, &supabase_url, &service_role, &email, &password).await;
         let access_token = sign_in(&client, &supabase_url, &anon_key, &email, &password).await;
-        identities.push(TestIdentity {
-            supabase_user_id,
-            access_token,
-        });
+        cleanup.identity(&supabase_user_id);
+        identities.push(TestIdentity { access_token });
     }
 
     // Fail with the provider's own reason before exercising the HTTP surface.
@@ -213,15 +365,7 @@ async fn authenticated_collect_flow_end_to_end() {
             .verify(&format!("Bearer {}", identity.access_token))
             .await
         {
-            for identity in &identities {
-                delete_supabase_user(
-                    &client,
-                    &supabase_url,
-                    &service_role,
-                    &identity.supabase_user_id,
-                )
-                .await;
-            }
+            // The guard removes both identities before the panic unwinds.
             panic!("the configured verifier rejected a freshly issued access token: {error}");
         }
     }
@@ -251,7 +395,7 @@ async fn authenticated_collect_flow_end_to_end() {
         }
         let alpha_user_id = Uuid::parse_str(session["user"]["id"].as_str().unwrap_or_default())
             .map_err(|_| "session did not return a user id".to_owned())?;
-        local_user_ids.push(alpha_user_id);
+        cleanup.user(alpha_user_id);
         if session["memberships"].as_array().map(Vec::is_empty) != Some(true) {
             return Err("a brand new identity must not already have memberships".to_owned());
         }
@@ -270,7 +414,7 @@ async fn authenticated_collect_flow_end_to_end() {
         }
         let alpha_tenant = tenant["tenantId"].as_str().unwrap_or_default().to_owned();
         let alpha_tenant_id = Uuid::parse_str(&alpha_tenant).map_err(|_| "tenant id".to_owned())?;
-        tenant_ids.push(alpha_tenant_id);
+        cleanup.tenant(alpha_tenant_id);
 
         let (status, beta_session) = call(
             &app,
@@ -286,7 +430,7 @@ async fn authenticated_collect_flow_end_to_end() {
         }
         let beta_user_id = Uuid::parse_str(beta_session["user"]["id"].as_str().unwrap_or_default())
             .map_err(|_| "beta user id".to_owned())?;
-        local_user_ids.push(beta_user_id);
+        cleanup.user(beta_user_id);
 
         // A second school cannot see the first school's data.
         let (status, _) = call(
@@ -614,16 +758,9 @@ async fn authenticated_collect_flow_end_to_end() {
     .await;
 
     // Always remove what the test created, including identity-provider records.
-    for identity in &identities {
-        delete_supabase_user(
-            &client,
-            &supabase_url,
-            &service_role,
-            &identity.supabase_user_id,
-        )
-        .await;
+    if let Err(message) = cleanup.finish().await {
+        panic!("collect flow cleanup failed: {message}");
     }
-    cleanup(&pool, &tenant_ids, &local_user_ids).await;
 
     if let Err(message) = result {
         panic!("collect flow end-to-end verification failed: {message}");
@@ -672,6 +809,7 @@ async fn result_export_end_to_end() {
     let coordinator_email = format!("export-coordinator-{run_id}@example.test");
     let contributor_email = format!("export-contributor-{run_id}@example.test");
     let password = format!("It3st-{run_id}!");
+    let cleanup = TestCleanup::new(&database_url, &supabase_url, &service_role);
 
     let coordinator_supabase = create_supabase_user(
         &client,
@@ -681,6 +819,7 @@ async fn result_export_end_to_end() {
         &password,
     )
     .await;
+    cleanup.identity(&coordinator_supabase);
     let contributor_supabase = create_supabase_user(
         &client,
         &supabase_url,
@@ -689,6 +828,7 @@ async fn result_export_end_to_end() {
         &password,
     )
     .await;
+    cleanup.identity(&contributor_supabase);
     let coordinator = sign_in(
         &client,
         &supabase_url,
@@ -719,8 +859,6 @@ async fn result_export_end_to_end() {
         ),
     );
 
-    let mut tenant_ids: Vec<Uuid> = Vec::new();
-    let mut local_user_ids: Vec<Uuid> = Vec::new();
     let result = async {
         let (status, tenant) = call(
             &app,
@@ -733,7 +871,8 @@ async fn result_export_end_to_end() {
         .await;
         assert_eq!(status, StatusCode::CREATED, "tenant create: {tenant}");
         let tenant_id = tenant["tenantId"].as_str().expect("tenant id").to_owned();
-        tenant_ids.push(Uuid::parse_str(&tenant_id).expect("tenant uuid"));
+        let tenant_uuid = Uuid::parse_str(&tenant_id).expect("tenant uuid");
+        cleanup.tenant(tenant_uuid);
 
         // The contributor joins through an invitation, exactly as a teacher would.
         let (status, invitation) = call(
@@ -868,13 +1007,13 @@ async fn result_export_end_to_end() {
             "SELECT count(*) FROM school_collect.audit_events
              WHERE tenant_id = $1 AND action = 'collect.exported'",
         )
-        .bind(tenant_ids[0])
+        .bind(tenant_uuid)
         .fetch_one(&pool)
         .await
         .expect("audit count");
         assert_eq!(recorded, 1, "one export is recorded");
 
-        local_user_ids = sqlx::query_scalar::<_, Uuid>(
+        let local_users = sqlx::query_scalar::<_, Uuid>(
             "SELECT id FROM school_collect.users WHERE subject = ANY($1)",
         )
         .bind(vec![
@@ -884,12 +1023,15 @@ async fn result_export_end_to_end() {
         .fetch_all(&pool)
         .await
         .expect("local users");
+        for user_id in local_users {
+            cleanup.user(user_id);
+        }
     }
     .await;
 
-    cleanup(&pool, &tenant_ids, &local_user_ids).await;
-    delete_supabase_user(&client, &supabase_url, &service_role, &coordinator_supabase).await;
-    delete_supabase_user(&client, &supabase_url, &service_role, &contributor_supabase).await;
+    if let Err(message) = cleanup.finish().await {
+        panic!("result export cleanup failed: {message}");
+    }
     result
 }
 
@@ -928,6 +1070,7 @@ async fn membership_invitation_end_to_end() {
 
     let client = reqwest::Client::builder().build().expect("http client");
     let run_id = Uuid::now_v7().simple().to_string();
+    let cleanup = TestCleanup::new(&database_url, &supabase_url, &service_role);
 
     // admin: issues invitations. teacher: the invited address. other: a third
     // account that must not be able to use someone else's code. expired: an
@@ -939,13 +1082,8 @@ async fn membership_invitation_end_to_end() {
         let supabase_user_id =
             create_supabase_user(&client, &supabase_url, &service_role, &email, &password).await;
         let access_token = sign_in(&client, &supabase_url, &anon_key, &email, &password).await;
-        identities.push((
-            email,
-            TestIdentity {
-                supabase_user_id,
-                access_token,
-            },
-        ));
+        cleanup.identity(&supabase_user_id);
+        identities.push((email, TestIdentity { access_token }));
     }
 
     let verifier = OidcVerifier::new(OidcConfig {
@@ -959,9 +1097,6 @@ async fn membership_invitation_end_to_end() {
         HeaderValue::from_static("http://127.0.0.1:1420"),
         AuthState::oidc(verifier),
     );
-
-    let mut tenant_ids: Vec<Uuid> = Vec::new();
-    let mut local_user_ids: Vec<Uuid> = Vec::new();
 
     let result: Result<(), String> = async {
         let admin = &identities[0].1;
@@ -987,7 +1122,7 @@ async fn membership_invitation_end_to_end() {
             }
             let user_id = Uuid::parse_str(session["user"]["id"].as_str().unwrap_or_default())
                 .map_err(|_| "session did not return a user id".to_owned())?;
-            local_user_ids.push(user_id);
+            cleanup.user(user_id);
         }
 
         let (status, tenant) = call(
@@ -1003,7 +1138,7 @@ async fn membership_invitation_end_to_end() {
             return Err(format!("tenant creation failed: {status} {tenant}"));
         }
         let tenant_id = tenant["tenantId"].as_str().unwrap_or_default().to_owned();
-        tenant_ids.push(Uuid::parse_str(&tenant_id).map_err(|_| "tenant id".to_owned())?);
+        cleanup.tenant(Uuid::parse_str(&tenant_id).map_err(|_| "tenant id".to_owned())?);
 
         // The manager invites the teacher; the code is returned exactly once.
         let (status, created) = call(
@@ -1360,16 +1495,9 @@ async fn membership_invitation_end_to_end() {
     .await;
 
     // Always remove what the test created, including identity-provider records.
-    for (_, identity) in &identities {
-        delete_supabase_user(
-            &client,
-            &supabase_url,
-            &service_role,
-            &identity.supabase_user_id,
-        )
-        .await;
+    if let Err(message) = cleanup.finish().await {
+        panic!("membership invitation cleanup failed: {message}");
     }
-    cleanup(&pool, &tenant_ids, &local_user_ids).await;
 
     if let Err(message) = result {
         panic!("membership invitation end-to-end verification failed: {message}");
@@ -1415,6 +1543,7 @@ async fn role_sweep_end_to_end() {
     let run_id = Uuid::now_v7().simple().to_string();
     let password = format!("It3st-{run_id}!");
     let roles = ["admin", "coordinator", "contributor", "viewer"];
+    let cleanup = TestCleanup::new(&database_url, &supabase_url, &service_role);
 
     // Each role gets its own identity so the sweep exercises four real tokens.
     let mut identities: Vec<TestIdentity> = Vec::new();
@@ -1424,10 +1553,8 @@ async fn role_sweep_end_to_end() {
         let supabase_user_id =
             create_supabase_user(&client, &supabase_url, &service_role, &email, &password).await;
         let access_token = sign_in(&client, &supabase_url, &anon_key, &email, &password).await;
-        identities.push(TestIdentity {
-            supabase_user_id,
-            access_token,
-        });
+        cleanup.identity(&supabase_user_id);
+        identities.push(TestIdentity { access_token });
         emails.push(email);
     }
 
@@ -1444,8 +1571,6 @@ async fn role_sweep_end_to_end() {
         ),
     );
 
-    let mut tenant_ids: Vec<Uuid> = Vec::new();
-    let mut local_user_ids: Vec<Uuid> = Vec::new();
     let result: Result<(), String> = async {
         let admin = &identities[0];
         let coordinator = &identities[1];
@@ -1468,7 +1593,7 @@ async fn role_sweep_end_to_end() {
             }
             let user_id = Uuid::parse_str(session["user"]["id"].as_str().unwrap_or_default())
                 .map_err(|_| "session did not return a user id".to_owned())?;
-            local_user_ids.push(user_id);
+            cleanup.user(user_id);
         }
 
         let (status, tenant) = call(
@@ -1484,7 +1609,7 @@ async fn role_sweep_end_to_end() {
             return Err(format!("tenant creation failed: {status} {tenant}"));
         }
         let tenant_id = tenant["tenantId"].as_str().unwrap_or_default().to_owned();
-        tenant_ids.push(Uuid::parse_str(&tenant_id).map_err(|_| "tenant id".to_owned())?);
+        cleanup.tenant(Uuid::parse_str(&tenant_id).map_err(|_| "tenant id".to_owned())?);
 
         // The creator is the admin; the other three join with the role they act
         // under, exactly as a school hands out invitations.
@@ -1784,7 +1909,7 @@ async fn role_sweep_end_to_end() {
             Some(&tenant_id),
             Some(json!({
                 "expectedVersion": version,
-                "assigneeUserIds": [local_user_ids[3].to_string()],
+                "assigneeUserIds": [cleanup.user_ids()[3].to_string()],
             })),
         )
         .await;
@@ -1892,31 +2017,11 @@ async fn role_sweep_end_to_end() {
     }
     .await;
 
-    // Always remove what the test created, including identity-provider records.
-    for identity in &identities {
-        delete_supabase_user(
-            &client,
-            &supabase_url,
-            &service_role,
-            &identity.supabase_user_id,
-        )
-        .await;
+    // Always remove what the test created, including identity-provider records,
+    // and fail when the sweep left something behind.
+    if let Err(message) = cleanup.finish().await {
+        panic!("role sweep cleanup failed: {message}");
     }
-    cleanup(&pool, &tenant_ids, &local_user_ids).await;
-
-    // The sweep must leave nothing behind, including on failure.
-    let leftover: i64 = sqlx::query_scalar(
-        "SELECT (SELECT count(*) FROM school_collect.tenants WHERE id = ANY($1))
-              + (SELECT count(*) FROM school_collect.memberships WHERE tenant_id = ANY($1))
-              + (SELECT count(*) FROM school_collect.users WHERE id = ANY($2))",
-    )
-    .bind(&tenant_ids)
-    .bind(&local_user_ids)
-    .fetch_one(&pool)
-    .await
-    .expect("leftover count");
-    eprintln!("role sweep leftover rows: {leftover}");
-    assert_eq!(leftover, 0, "the role sweep left rows behind");
 
     if let Err(message) = result {
         panic!("role sweep end-to-end verification failed: {message}");

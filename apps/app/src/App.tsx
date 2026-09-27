@@ -88,6 +88,7 @@ export default function App() {
   const [route, setRoute] = useState<AppRoute>(() => parseHash(window.location.hash));
   const [bootError, setBootError] = useState<string | null>(null);
   const [signInOpen, setSignInOpen] = useState(false);
+  const [retentionNotice, setRetentionNotice] = useState<string | null>(null);
 
   const signOut = useCallback(() => {
     const signingOutUser = session?.user.id;
@@ -96,12 +97,25 @@ export default function App() {
     setActiveTenantId(null);
     setBootError(null);
     setSignInOpen(false);
-    // 저장된 세션을 지워 다음 실행에서 토큰이 남지 않게 합니다.
-    void clearAuthSession();
-    // 공용 컴퓨터에 초안을 남기지 않습니다.
-    if (signingOutUser) {
-      void clearLocalDrafts(signingOutUser);
-    }
+    void (async () => {
+      // 초안 정리는 세션이 남아 있는 동안 해야 하므로 먼저 끝냅니다.
+      if (signingOutUser) {
+        try {
+          await clearLocalDrafts(signingOutUser);
+        } catch (error) {
+          setRetentionNotice(
+            `이 컴퓨터에 저장된 초안을 지우지 못했습니다: ${messageOf(error)}`,
+          );
+        }
+      }
+      // 저장된 세션을 지워 다음 실행에서 토큰이 남지 않게 합니다.
+      try {
+        await clearAuthSession();
+        setRetentionNotice(null);
+      } catch (error) {
+        setRetentionNotice(`저장된 세션을 지우지 못했습니다: ${messageOf(error)}`);
+      }
+    })();
     // 로그인 없이 쓸 수 있는 화면에 머무르고, 멤버십이 필요한 화면에서만 홈으로 돌아갑니다.
     if (routeNeedsMembership(parseHash(window.location.hash))) {
       navigate({ page: "overview" });
@@ -400,7 +414,17 @@ export default function App() {
           setSignInOpen(false);
           setToken(next.accessToken);
           // 세션은 OS 보안 저장소에만 저장합니다(비밀번호는 저장하지 않습니다).
-          void saveAuthSession(next);
+          void (async () => {
+            try {
+              await saveAuthSession(next);
+              setRetentionNotice(null);
+            } catch (error) {
+              // 이번 실행에서는 로그인 상태로 쓸 수 있지만, 다시 열면 로그인해야 합니다.
+              setRetentionNotice(
+                `세션을 저장하지 못했습니다: ${messageOf(error)} 이 창을 닫으면 다시 로그인해야 합니다.`,
+              );
+            }
+          })();
         }}
       />
     );
@@ -412,14 +436,23 @@ export default function App() {
     <AppShell
       activeNavigationId={navIdFor(route)}
       banner={
-        online ? null : (
-          <div className="app-offline-banner">
-            <OfflineState
-              className="app-offline-banner__state"
-              description="연결이 복구되면 다시 불러올 수 있습니다. 지금은 서버에 저장하거나 제출할 수 없습니다."
-              title="오프라인입니다"
-            />
-          </div>
+        online && !retentionNotice ? null : (
+          <>
+            {online ? null : (
+              <div className="app-offline-banner">
+                <OfflineState
+                  className="app-offline-banner__state"
+                  description="연결이 복구되면 다시 불러올 수 있습니다. 지금은 서버에 저장하거나 제출할 수 없습니다."
+                  title="오프라인입니다"
+                />
+              </div>
+            )}
+            {retentionNotice ? (
+              <p className="app-retention-notice" role="alert">
+                {retentionNotice}
+              </p>
+            ) : null}
+          </>
         )
       }
       description={meta.description}

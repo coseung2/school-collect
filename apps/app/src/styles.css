@@ -120,6 +120,17 @@
   color: var(--sc-color-warning);
 }
 
+/* 세션·초안 저장이나 정리에 실패했을 때 조용히 넘어가지 않고 알린다. */
+.app-retention-notice {
+  margin: 0;
+  border: 1px solid var(--sc-color-border-danger);
+  border-radius: var(--sc-radius-md);
+  background: var(--sc-color-danger-soft);
+  padding: var(--sc-space-3);
+  color: var(--sc-color-danger);
+  line-height: 1.5;
+}
+
 @media (max-width: 820px) {
   .app-overview-grid {
     grid-template-columns: 1fr;
