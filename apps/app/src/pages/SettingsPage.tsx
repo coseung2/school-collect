@@ -105,9 +105,9 @@ export function SettingsPage({
             </div>
           </dl>
           <p className="app-card-description">
-            접근 토큰은 이 창의 메모리에만 보관하며 디스크에 저장하지 않습니다.
+            세션은 이 컴퓨터의 OS 자격 증명 저장소에 보관되어 앱을 다시 열어도 로그인이
+            유지됩니다. 비밀번호는 저장하지 않으며 로그아웃하면 저장된 세션을 지웁니다.
           </p>
-          <p className="app-card-description">세션 토큰 길이 {token.length}자</p>
         </Card>
       ) : (
         <Card>

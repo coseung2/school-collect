@@ -677,6 +677,11 @@ textarea:focus-visible {
     padding: 0 var(--sc-space-3) var(--sc-space-3);
   }
 
+  /* 좁은 화면에서는 사이드바 좌우 여백이 --sc-space-3이므로 브랜드도 그만큼만 넘긴다. */
+  .sc-brand {
+    margin-inline: calc(-1 * var(--sc-space-3));
+  }
+
   .sc-sidebar__nav {
     display: flex;
     overflow-x: auto;
