@@ -143,6 +143,7 @@ pub fn router(state: AppState, cors_origin: HeaderValue, auth_state: AuthState) 
         .route("/v1/collects", get(list_collects).post(create_collect))
         .route("/v1/collects/{collect_id}", get(collect_detail))
         .route("/v1/collects/{collect_id}/status", get(collect_status))
+        .route("/v1/collects/{collect_id}/export", get(export_collect))
         .route("/v1/members", get(list_members))
         .route("/v1/assignments", get(list_assignments))
         .route("/v1/collects/{collect_id}/publish", post(publish_collect))
@@ -1215,6 +1216,166 @@ async fn collect_detail_response(
     .into_response()
 }
 
+/// One CSV field. Quotes, commas, and line breaks force quoting; a quote inside
+/// a value is doubled so a member's own text cannot break the columns.
+fn csv_field(value: &str) -> String {
+    if value.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_owned()
+    }
+}
+
+/// Result export of one collect.
+///
+/// Assigned members appear whether or not they submitted, so a missing answer
+/// is visible in the file instead of silently dropping the row.
+fn render_collect_csv(
+    items: &[school_collect_db::CollectItemRecord],
+    rows: &[school_collect_db::CollectStatusRowRecord],
+    submissions: &std::collections::HashMap<Uuid, serde_json::Value>,
+) -> String {
+    let mut header: Vec<String> = vec![
+        "이름".to_owned(),
+        "역할".to_owned(),
+        "배정 상태".to_owned(),
+        "제출 상태".to_owned(),
+        "제출 시각".to_owned(),
+    ];
+    header.extend(items.iter().map(|item| item.label.clone()));
+
+    let mut output = String::from("\u{feff}");
+    output.push_str(
+        &header
+            .iter()
+            .map(|value| csv_field(value))
+            .collect::<Vec<_>>()
+            .join(","),
+    );
+    output.push_str("\r\n");
+
+    for row in rows {
+        let mut fields: Vec<String> = vec![
+            csv_field(row.display_name.as_deref().unwrap_or("")),
+            csv_field(&row.role),
+            csv_field(row.assignment_status.as_deref().unwrap_or("")),
+            csv_field(row.submission_status.as_deref().unwrap_or("")),
+            csv_field(&row.submitted_at.map(timestamp).unwrap_or_default()),
+        ];
+        let payload = submissions.get(&row.user_id);
+        for item in items {
+            let value = payload
+                .and_then(|payload| payload.get(&item.item_key))
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            fields.push(csv_field(value));
+        }
+        output.push_str(&fields.join(","));
+        output.push_str("\r\n");
+    }
+
+    output
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/collects/{collect_id}/export",
+    params(("collect_id" = String, Path, description = "Collect identifier")),
+    responses((status = 200, description = "Collect results as CSV"))
+)]
+async fn export_collect(
+    State(state): State<Arc<AppState>>,
+    Extension(principal): Extension<VerifiedPrincipal>,
+    headers: HeaderMap,
+    Path(collect_id): Path<String>,
+) -> Response {
+    let user = match current_user(&state, &principal, &headers).await {
+        Ok(user) => user,
+        Err(response) => return *response,
+    };
+    let (tenant_id, _) = match authorize(&state, &headers, &user, Capability::Manage).await {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let Ok(collect_id) = Uuid::parse_str(&collect_id) else {
+        return failure(
+            &headers,
+            StatusCode::BAD_REQUEST,
+            "invalid_id",
+            "the collect identifier is not valid",
+        );
+    };
+    match school_collect_db::get_collect(&state.pool, tenant_id, collect_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return failure(
+                &headers,
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "the collect was not found in this school",
+            );
+        }
+        Err(_) => return storage_failure(&headers),
+    }
+
+    let items =
+        match school_collect_db::list_collect_items(&state.pool, tenant_id, collect_id).await {
+            Ok(items) => items,
+            Err(_) => return storage_failure(&headers),
+        };
+    let rows =
+        match school_collect_db::list_collect_status(&state.pool, tenant_id, collect_id).await {
+            Ok(rows) => rows,
+            Err(_) => return storage_failure(&headers),
+        };
+    let submissions =
+        match school_collect_db::list_collect_submissions(&state.pool, tenant_id, collect_id).await
+        {
+            Ok(submissions) => submissions,
+            Err(_) => return storage_failure(&headers),
+        };
+    let payloads = submissions
+        .into_iter()
+        .map(|submission| (submission.user_id, submission.payload))
+        .collect();
+
+    // Exporting results is an access to member work, so it is recorded.
+    if school_collect_db::record_audit_event(
+        &state.pool,
+        tenant_id,
+        Some(user.id),
+        "collect.exported",
+        "collect",
+        Some(collect_id),
+    )
+    .await
+    .is_err()
+    {
+        return storage_failure(&headers);
+    }
+
+    let body = render_collect_csv(&items, &rows, &payloads);
+    (
+        StatusCode::OK,
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                "text/csv; charset=utf-8".to_owned(),
+            ),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"collect-{collect_id}.csv\""),
+            ),
+            (
+                axum::http::HeaderName::from_static("x-request-id"),
+                request_id_of(&headers),
+            ),
+        ],
+        body,
+    )
+        .into_response()
+}
+
 #[utoipa::path(
     get,
     path = "/v1/collects/{collect_id}/status",
@@ -2143,6 +2304,78 @@ mod tests {
         assert!(text.contains("school_collect_http_requests_total"));
         assert!(text.contains("school_collect_auth_failures_total"));
         assert!(text.contains("school_collect_authorization_denials_total"));
+    }
+
+    #[test]
+    fn csv_fields_quote_only_when_needed() {
+        assert_eq!(csv_field("평범한 값"), "평범한 값");
+        assert_eq!(csv_field("쉼표, 포함"), "\"쉼표, 포함\"");
+        assert_eq!(csv_field("따옴표\" 포함"), "\"따옴표\"\" 포함\"");
+        assert_eq!(csv_field("줄\n바꿈"), "\"줄\n바꿈\"");
+        assert_eq!(csv_field(""), "");
+    }
+
+    #[test]
+    fn csv_export_keeps_missing_answers_visible() {
+        let items = vec![
+            school_collect_db::CollectItemRecord {
+                item_key: "title".to_owned(),
+                label: "제목".to_owned(),
+                required: true,
+                position: 0,
+            },
+            school_collect_db::CollectItemRecord {
+                item_key: "note".to_owned(),
+                label: "비고".to_owned(),
+                required: false,
+                position: 1,
+            },
+        ];
+        let rows = vec![
+            school_collect_db::CollectStatusRowRecord {
+                user_id: Uuid::now_v7(),
+                display_name: Some("제출자".to_owned()),
+                role: "contributor".to_owned(),
+                assignment_status: Some("submitted".to_owned()),
+                submission_status: Some("submitted".to_owned()),
+                submitted_at: Some(Utc::now()),
+            },
+            school_collect_db::CollectStatusRowRecord {
+                user_id: Uuid::now_v7(),
+                display_name: Some("미제출, 담당".to_owned()),
+                role: "contributor".to_owned(),
+                assignment_status: Some("assigned".to_owned()),
+                submission_status: None,
+                submitted_at: None,
+            },
+        ];
+        let mut submissions = std::collections::HashMap::new();
+        submissions.insert(
+            rows[0].user_id,
+            serde_json::json!({ "title": "값, 포함", "note": "메모" }),
+        );
+
+        let csv = render_collect_csv(&items, &rows, &submissions);
+        let lines: Vec<&str> = csv.lines().collect();
+
+        assert!(
+            csv.starts_with('\u{feff}'),
+            "Excel needs the BOM for Korean"
+        );
+        assert_eq!(
+            lines[0].trim_start_matches('\u{feff}'),
+            "이름,역할,배정 상태,제출 상태,제출 시각,제목,비고"
+        );
+        assert!(
+            lines[1].contains("\"값, 포함\""),
+            "commas stay inside one field"
+        );
+        assert!(!lines[1].contains("\"미제출, 담당\""));
+        assert!(lines[2].contains("\"미제출, 담당\""));
+        assert!(
+            lines[2].ends_with(",,"),
+            "an unsubmitted member keeps empty item columns"
+        );
     }
 
     #[test]

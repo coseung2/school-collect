@@ -1040,6 +1040,47 @@ pub async fn get_submission(
     Ok(record)
 }
 
+/// Submissions of one collect, keyed by member, for the result export.
+/// Records one audit event on its own, for actions that change nothing else.
+pub async fn record_audit_event(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    actor: Option<Uuid>,
+    action: &str,
+    resource_type: &str,
+    resource_id: Option<Uuid>,
+) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    insert_audit(
+        &mut tx,
+        tenant_id,
+        actor,
+        action,
+        resource_type,
+        resource_id,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+pub async fn list_collect_submissions(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    collect_id: Uuid,
+) -> anyhow::Result<Vec<SubmissionRecord>> {
+    let rows = sqlx::query_as::<_, SubmissionRecord>(
+        "SELECT id, collect_id, user_id, status, payload, version, submitted_at, updated_at
+         FROM school_collect.collect_submissions
+         WHERE tenant_id = $1 AND collect_id = $2",
+    )
+    .bind(tenant_id)
+    .bind(collect_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 pub async fn list_collect_items(
     pool: &PgPool,
     tenant_id: Uuid,

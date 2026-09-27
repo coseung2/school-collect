@@ -588,6 +588,265 @@ async fn authenticated_collect_flow_end_to_end() {
 /// issues a code, only the invited address can use it, and the new membership
 /// can be assigned and submit. It runs against the real provider and database,
 /// and skips silently when the integration environment is not configured.
+/// Result export: an authorized member gets every assigned row, an unauthorized
+/// member is refused, and a missing answer stays visible in the file.
+#[tokio::test]
+async fn result_export_end_to_end() {
+    let (Some(database_url), Some(supabase_url), Some(anon_key), Some(service_role)) = (
+        env_value("DATABASE_URL"),
+        env_value("SUPABASE_URL"),
+        env_value("SUPABASE_ANON_KEY"),
+        env_value("SUPABASE_SERVICE_ROLE_KEY"),
+    ) else {
+        eprintln!("result_export_e2e skipped: integration environment variables are not set");
+        return;
+    };
+
+    let issuer = Url::parse(&format!("{supabase_url}/auth/v1")).expect("issuer url");
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .after_connect(|connection, _meta| {
+            Box::pin(async move {
+                sqlx::query("SET search_path TO school_collect,public")
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&database_url)
+        .await
+        .expect("connect");
+    school_collect_db::MIGRATOR
+        .run(&pool)
+        .await
+        .expect("migrate");
+
+    let client = reqwest::Client::builder().build().expect("http client");
+    let run_id = Uuid::now_v7().simple().to_string();
+    let coordinator_email = format!("export-coordinator-{run_id}@example.test");
+    let contributor_email = format!("export-contributor-{run_id}@example.test");
+    let password = format!("It3st-{run_id}!");
+
+    let coordinator_supabase = create_supabase_user(
+        &client,
+        &supabase_url,
+        &service_role,
+        &coordinator_email,
+        &password,
+    )
+    .await;
+    let contributor_supabase = create_supabase_user(
+        &client,
+        &supabase_url,
+        &service_role,
+        &contributor_email,
+        &password,
+    )
+    .await;
+    let coordinator = sign_in(
+        &client,
+        &supabase_url,
+        &anon_key,
+        &coordinator_email,
+        &password,
+    )
+    .await;
+    let contributor = sign_in(
+        &client,
+        &supabase_url,
+        &anon_key,
+        &contributor_email,
+        &password,
+    )
+    .await;
+
+    let app = router(
+        AppState { pool: pool.clone() },
+        HeaderValue::from_static("http://127.0.0.1:1420"),
+        AuthState::oidc(
+            OidcVerifier::new(OidcConfig {
+                issuer_url: issuer.clone(),
+                audience: "authenticated".to_owned(),
+                jwks_url: None,
+            })
+            .expect("verifier"),
+        ),
+    );
+
+    let mut tenant_ids: Vec<Uuid> = Vec::new();
+    let mut local_user_ids: Vec<Uuid> = Vec::new();
+    let result = async {
+        let (status, tenant) = call(
+            &app,
+            "POST",
+            "/v1/tenants",
+            Some(&coordinator),
+            None,
+            Some(json!({ "name": format!("export-{run_id}") })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "tenant create: {tenant}");
+        let tenant_id = tenant["tenantId"].as_str().expect("tenant id").to_owned();
+        tenant_ids.push(Uuid::parse_str(&tenant_id).expect("tenant uuid"));
+
+        // The contributor joins through an invitation, exactly as a teacher would.
+        let (status, invitation) = call(
+            &app,
+            "POST",
+            "/v1/invitations",
+            Some(&coordinator),
+            Some(&tenant_id),
+            Some(json!({ "email": contributor_email })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "invitation: {invitation}");
+        let code = invitation["code"].as_str().expect("invite code").to_owned();
+        let (status, accepted) = call(
+            &app,
+            "POST",
+            "/v1/invitations/accept",
+            Some(&contributor),
+            None,
+            Some(json!({ "code": code })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "accept: {accepted}");
+
+        let (status, collect) = call(
+            &app,
+            "POST",
+            "/v1/collects",
+            Some(&coordinator),
+            Some(&tenant_id),
+            Some(json!({
+                "title": format!("export-{run_id}"),
+                "description": "결과 내보내기 검증",
+                "items": [{ "key": "note", "label": "내용", "required": true }],
+                "assigneeUserIds": [],
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "collect: {collect}");
+        let collect_id = collect["id"].as_str().expect("collect id").to_owned();
+
+        let (status, published) = call(
+            &app,
+            "POST",
+            &format!("/v1/collects/{collect_id}/publish"),
+            Some(&coordinator),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "publish: {published}");
+
+        // Only the contributor answers; the coordinator stays unsubmitted.
+        let (status, saved) = call(
+            &app,
+            "PUT",
+            &format!("/v1/collects/{collect_id}/submission"),
+            Some(&contributor),
+            Some(&tenant_id),
+            Some(json!({ "expectedVersion": 0, "payload": { "note": "값, 쉼표 포함" } })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "save: {saved}");
+        let (status, submitted) = call(
+            &app,
+            "POST",
+            &format!("/v1/collects/{collect_id}/submission/submit"),
+            Some(&contributor),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "submit: {submitted}");
+
+        // The coordinator exports: every assigned member appears.
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/collects/{collect_id}/export"))
+                    .header(header::AUTHORIZATION, format!("Bearer {coordinator}"))
+                    .header("x-tenant-id", &tenant_id)
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("router");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .starts_with("text/csv")
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), 1_000_000)
+            .await
+            .expect("csv body");
+        let csv = String::from_utf8(bytes.to_vec()).expect("utf8 csv");
+        let contributor_name = contributor_email.split('@').next().expect("name");
+        assert!(csv.contains("내용"), "header carries the item label");
+        assert!(
+            csv.contains(contributor_name),
+            "the contributor row is present"
+        );
+        assert!(
+            csv.contains("\"값, 쉼표 포함\""),
+            "values stay quoted: {csv}"
+        );
+        assert_eq!(
+            csv.lines().count(),
+            3,
+            "header plus both assigned members: {csv}"
+        );
+
+        // A contributor cannot export other people's answers.
+        let (status, refused) = call(
+            &app,
+            "GET",
+            &format!("/v1/collects/{collect_id}/export"),
+            Some(&contributor),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "refused: {refused}");
+
+        // The export is recorded for the audit trail.
+        let recorded = sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM school_collect.audit_events
+             WHERE tenant_id = $1 AND action = 'collect.exported'",
+        )
+        .bind(tenant_ids[0])
+        .fetch_one(&pool)
+        .await
+        .expect("audit count");
+        assert_eq!(recorded, 1, "one export is recorded");
+
+        local_user_ids = sqlx::query_scalar::<_, Uuid>(
+            "SELECT id FROM school_collect.users WHERE subject = ANY($1)",
+        )
+        .bind(vec![
+            coordinator_supabase.clone(),
+            contributor_supabase.clone(),
+        ])
+        .fetch_all(&pool)
+        .await
+        .expect("local users");
+    }
+    .await;
+
+    cleanup(&pool, &tenant_ids, &local_user_ids).await;
+    delete_supabase_user(&client, &supabase_url, &service_role, &coordinator_supabase).await;
+    delete_supabase_user(&client, &supabase_url, &service_role, &contributor_supabase).await;
+    result
+}
+
 #[tokio::test]
 async fn membership_invitation_end_to_end() {
     let (Some(database_url), Some(supabase_url), Some(anon_key), Some(service_role)) = (
