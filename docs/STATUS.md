@@ -6,20 +6,20 @@
 
 ## 이번에 확인한 범위
 
-- `git fetch origin` 후 `origin/develop` `26aa851`, `origin/main` `49f856a`를 확인했습니다.
-- GitHub 조회에서 PR #24/#25가 모두 `develop` 대상 OPEN이고 각 head의 CI 6개가 성공한 것을 확인했습니다.
-- 해당 브랜치 문서·route/native 실행 경계와 develop의 사용자/membership·API request ID·worker 코드를 대조했습니다.
-- 아래 과거 native/API/DB·브라우저 검증 및 외부 운영 설정 기록은 이번에 재실행·재조회하지 않았습니다. CI 성공도 production 배포나 실제 창 조작 검증을 대신하지 않습니다.
+- `git fetch origin` 후 PR #24(S-01, `f573bfb`)와 PR #25(P-01, `11a0af0`), 계획 문서 PR #26(`65058b3`)을 develop에 통합했습니다.
+- 두 PR 모두 병합 전 CI 6개(`repository-checks`, `rust-and-web`, `lockfiles-verified`, `postgres`, `server-image`, `tauri-windows-smoke`)가 성공했습니다.
+- 병합 후 실제 데스크톱 창에서 로그인 없는 개인 화면 열기, 레시피 등록·열기·삭제·실행 취소·재시작 보존을 확인했고, 학교 화면은 Permission 상태로 표시되는 것을 확인했습니다.
+- 학교 화면의 로그인 이후 흐름과 과거 native/API/DB·브라우저 검증, 외부 운영 설정은 이번에 재실행·재조회하지 않았습니다. CI 성공도 production 배포를 대신하지 않습니다.
 
 ## 학교업무 / 개인기능 상태
 
 | 영역 | 통합된 것 | 통합 전 구현 | 남은 우선 작업 |
 | --- | --- | --- | --- |
-| 학교업무 | PR #19 인증·학교 등록·수합 생성/배포/초안/제출/마감 | PR #24 `1dd656f`: 항목·대상·제출 현황·내 배정·구성원 화면 | S-01 통합 검증 -> S-02 교사 초대·합류 |
-| 개인기능 | develop에 개인 바로가기 미통합 | PR #25 `fc944b9`: 로컬 바로가기; 로컬 `c31b9d9`: 로그인 없는 개인 화면·recipe ID 실행 | P-01 안정화·native 검증 -> P-02 현재 화면 등록 |
-| 공통 기반 | PR #17 DS/AppShell, PR #20 개발자별 Docker 구성 | PR #24와 로컬 `c31b9d9`의 화면 접근 경계 | C-01 영역·설정·offline 구분, C-02~C-05 보안·운영·배포 |
+| 학교업무 | PR #19 기본 흐름 + PR #24 항목·대상·제출 현황·내 배정·구성원 화면 통합(`f573bfb`) | 없음 | S-02 구성원 초대·교사 합류 |
+| 개인기능 | PR #25로 로컬 바로가기·로그인 없는 개인 화면 통합(`11a0af0`), 실제 창 검증 완료 | 없음 | P-02 브라우저 확장·현재 화면 등록 |
+| 공통 기반 | PR #17 DS/AppShell, PR #20 Docker 스택, PR #24 병합에서 학교/개인 화면 경계 정리 | 없음 | C-01 설정·offline 세부, C-02~C-05 보안·운영·배포 |
 
-PR #24/#25는 열려 있으며 로컬 `feat/personal-automation`은 학교 화면 변경도 포함합니다. 이 구현들을 develop 완료 상태로 합산하지 않습니다.
+PR #24/#25는 모두 develop에 병합됐습니다(`f573bfb`, `11a0af0`). 병합 과정에서 학교 화면 구조는 PR #24 방식을 유지하고 개인기능은 `pages/AutomationPage.tsx`와 `#automation` 라우트로 분리했습니다.
 
 ## 단계 상태
 
