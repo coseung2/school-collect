@@ -2382,6 +2382,24 @@ async fn attachment_flow_end_to_end() {
             .unwrap_or_default()
             .to_owned();
 
+        // Nothing has been stored yet, so the content endpoint refuses instead
+        // of handing out partial or absent bytes.
+        let (status, _, body) = call_raw(
+            &app,
+            "GET",
+            &format!("/v1/attachments/{attachment_id}/content"),
+            Some(&author.access_token),
+            Some(&tenant_id),
+            None,
+            Vec::new(),
+        )
+        .await;
+        if status != StatusCode::CONFLICT || body == pdf {
+            return Err(format!(
+                "a slot without stored bytes served content: {status}"
+            ));
+        }
+
         // A body of another type than the slot declared is refused.
         let (status, _, _) = call_raw(
             &app,
@@ -2421,8 +2439,10 @@ async fn attachment_flow_end_to_end() {
             Vec::new(),
         )
         .await;
-        if status != StatusCode::NOT_FOUND {
-            return Err(format!("dropped bytes were still readable: {status}"));
+        if status != StatusCode::CONFLICT {
+            return Err(format!(
+                "bytes that were never stored were readable: {status}"
+            ));
         }
 
         let (status, _, _) = call_raw(

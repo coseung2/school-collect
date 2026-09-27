@@ -833,6 +833,25 @@ async fn download_attachment(
             "your role does not allow this attachment",
         );
     }
+    // Only completed bytes are served: a slot that is still waiting for its
+    // upload, or whose retention deadline passed before the sweep ran, must not
+    // hand out partial or expired content.
+    if record.status != "stored" {
+        return failure(
+            &headers,
+            StatusCode::CONFLICT,
+            "attachment_not_ready",
+            "아직 올리기가 끝나지 않은 첨부 파일입니다.",
+        );
+    }
+    if record.expires_at <= Utc::now() {
+        return failure(
+            &headers,
+            StatusCode::CONFLICT,
+            "attachment_expired",
+            "보존 기간이 지나 이 첨부 파일은 더 받을 수 없습니다.",
+        );
+    }
     let bytes = match storage.get(&record.object_key).await {
         Ok(Some(bytes)) => bytes,
         Ok(None) => {
@@ -931,42 +950,87 @@ async fn upload_attachment_content(
     // concurrent upload is refused here, so the stored bytes are always the
     // ones whose checksum the row records.
     let now = Utc::now();
-    match school_collect_db::claim_attachment_upload(&state.pool, tenant_id, record.id, now).await {
-        Ok(ClaimUploadOutcome::Claimed(_)) => {}
-        Ok(ClaimUploadOutcome::Busy) => {
-            return failure(
-                &headers,
-                StatusCode::CONFLICT,
-                "attachment_upload_in_progress",
-                "이 첨부 파일을 올리는 중입니다. 잠시 뒤 다시 시도해 주세요.",
-            );
-        }
-        Ok(ClaimUploadOutcome::AlreadyStored) => {
-            return failure(
-                &headers,
-                StatusCode::CONFLICT,
-                "attachment_already_stored",
-                "이미 올린 첨부 파일입니다. 바꾸려면 지우고 새로 올려 주세요.",
-            );
-        }
-        Ok(ClaimUploadOutcome::NotFound) => {
-            return failure(
-                &headers,
-                StatusCode::NOT_FOUND,
-                "attachment_not_found",
-                "이 첨부 파일을 찾지 못했습니다.",
-            );
-        }
-        Ok(ClaimUploadOutcome::Expired) => {
-            return failure(
-                &headers,
-                StatusCode::CONFLICT,
-                "attachment_expired",
-                "보존 기간이 지나 이 첨부 파일은 더 받을 수 없습니다.",
-            );
-        }
-        Err(_) => return storage_failure(&headers),
-    }
+    let record =
+        match school_collect_db::claim_attachment_upload(&state.pool, tenant_id, record.id, now)
+            .await
+        {
+            Ok(ClaimUploadOutcome::Claimed {
+                record,
+                superseded_object_key,
+            }) => {
+                // The attempt that just lost the slot may have left bytes at the key
+                // it owned. They belong to nobody now, so remove them here; if that
+                // fails, remember them so the retention sweep still removes them.
+                if let Some(superseded) = superseded_object_key
+                    && let Err(error) = storage.delete(&superseded).await
+                {
+                    tracing::warn!(
+                        attachment.id = %record.id,
+                        reason = %error,
+                        "superseded upload bytes were not removed; recording them for the sweep"
+                    );
+                    if let Err(error) = school_collect_db::record_attachment_orphan(
+                        &state.pool,
+                        tenant_id,
+                        &superseded,
+                    )
+                    .await
+                    {
+                        tracing::warn!(reason = %error, "leftover bytes could not be recorded");
+                    }
+                }
+                record
+            }
+            Ok(ClaimUploadOutcome::Busy) => {
+                return failure(
+                    &headers,
+                    StatusCode::CONFLICT,
+                    "attachment_upload_in_progress",
+                    "이 첨부 파일을 올리는 중입니다. 잠시 뒤 다시 시도해 주세요.",
+                );
+            }
+            Ok(ClaimUploadOutcome::AlreadyStored) => {
+                return failure(
+                    &headers,
+                    StatusCode::CONFLICT,
+                    "attachment_already_stored",
+                    "이미 올린 첨부 파일입니다. 바꾸려면 지우고 새로 올려 주세요.",
+                );
+            }
+            Ok(ClaimUploadOutcome::NotFound) => {
+                return failure(
+                    &headers,
+                    StatusCode::NOT_FOUND,
+                    "attachment_not_found",
+                    "이 첨부 파일을 찾지 못했습니다.",
+                );
+            }
+            Ok(ClaimUploadOutcome::Expired) => {
+                return failure(
+                    &headers,
+                    StatusCode::CONFLICT,
+                    "attachment_expired",
+                    "보존 기간이 지나 이 첨부 파일은 더 받을 수 없습니다.",
+                );
+            }
+            Ok(ClaimUploadOutcome::NotOpen) => {
+                return failure(
+                    &headers,
+                    StatusCode::CONFLICT,
+                    "attachment_not_open",
+                    "이미 제출했거나 마감된 수합에는 파일을 올릴 수 없습니다.",
+                );
+            }
+            Err(_) => return storage_failure(&headers),
+        };
+
+    // A claim always sets the attempt that owns the slot; without it we cannot
+    // say who may finish this upload, so refuse instead of writing bytes nobody
+    // can account for.
+    let Some(attempt_id) = record.upload_attempt_id else {
+        return storage_failure(&headers);
+    };
+    let attempt_key = record.object_key.clone();
 
     // From here on every failure removes the written bytes and hands the slot
     // back, so neither an orphan object nor a stuck claim is left behind.
@@ -979,13 +1043,21 @@ async fn upload_attachment_content(
                 tracing::warn!(
                     attachment.id = %attachment_id,
                     reason = %error,
-                    "failed upload left bytes behind; the retention sweep will remove them"
+                    "failed upload left bytes behind; recording them for the retention sweep"
                 );
+                if let Err(error) =
+                    school_collect_db::record_attachment_orphan(&pool, tenant_id, &key).await
+                {
+                    tracing::warn!(reason = %error, "leftover bytes could not be recorded");
+                }
             }
+            // Only the attempt that still owns the slot may hand it back; a
+            // superseded writer must not disturb the attempt that replaced it.
             let _ = school_collect_db::release_attachment_upload(
                 &pool,
                 tenant_id,
                 attachment_id,
+                attempt_id,
                 Utc::now(),
             )
             .await;
@@ -995,23 +1067,44 @@ async fn upload_attachment_content(
     let bytes = body.to_vec();
     let checksum = hex::encode(Sha256::digest(&bytes));
     if let Err(error) = storage
-        .put(&record.object_key, bytes.clone(), &record.content_type)
+        .put(&attempt_key, bytes.clone(), &record.content_type)
         .await
     {
-        abandon(record.object_key.clone()).await;
+        abandon(attempt_key.clone()).await;
         return attachment_storage_failure(&headers, error);
     }
 
-    match school_collect_db::complete_attachment(
+    let completed = school_collect_db::complete_attachment(
         &state.pool,
         tenant_id,
         record.id,
+        attempt_id,
         bytes.len() as i64,
         &checksum,
         Utc::now(),
     )
-    .await
-    {
+    .await;
+    // Only a stored outcome makes these bytes the attachment's content. On any
+    // other outcome they are not what the row describes, so they are removed
+    // (or recorded for the sweep) rather than left as an untracked object.
+    if !matches!(completed, Ok(CompleteAttachmentOutcome::Stored(_))) {
+        abandon(attempt_key.clone()).await;
+    }
+    match completed {
+        // Another attempt owns the slot now, so these bytes are not this
+        // attachment's content.
+        Ok(CompleteAttachmentOutcome::ClaimLost) => failure(
+            &headers,
+            StatusCode::CONFLICT,
+            "attachment_upload_superseded",
+            "이 첨부 파일은 다른 시도가 이어받았습니다. 목록을 새로 고친 뒤 다시 시도해 주세요.",
+        ),
+        Ok(CompleteAttachmentOutcome::NotOpen) => failure(
+            &headers,
+            StatusCode::CONFLICT,
+            "attachment_not_open",
+            "이미 제출했거나 마감된 수합에는 파일을 올릴 수 없습니다.",
+        ),
         Ok(CompleteAttachmentOutcome::Stored(stored)) => {
             (StatusCode::OK, Json(attachment_dto(&stored))).into_response()
         }
@@ -1024,40 +1117,25 @@ async fn upload_attachment_content(
             "attachment_already_stored",
             "이미 올린 첨부 파일입니다. 바꾸려면 지우고 새로 올려 주세요.",
         ),
-        Ok(CompleteAttachmentOutcome::NotFound) => {
-            // The slot was deleted meanwhile; its bytes must not linger.
-            let _ = storage.delete(&record.object_key).await;
-            failure(
-                &headers,
-                StatusCode::NOT_FOUND,
-                "attachment_not_found",
-                "이 첨부 파일을 찾지 못했습니다.",
-            )
-        }
-        Ok(CompleteAttachmentOutcome::Expired) => {
-            abandon(record.object_key.clone()).await;
-            failure(
-                &headers,
-                StatusCode::CONFLICT,
-                "attachment_expired",
-                "보존 기간이 지나 이 첨부 파일은 더 받을 수 없습니다.",
-            )
-        }
-        Ok(CompleteAttachmentOutcome::SizeMismatch { declared, received }) => {
-            // The bytes are not what the slot promised: drop them and let the
-            // owner retry with the right file.
-            abandon(record.object_key.clone()).await;
-            failure(
-                &headers,
-                StatusCode::BAD_REQUEST,
-                "attachment_size_mismatch",
-                format!("신고한 크기({declared})와 실제 크기({received})가 다릅니다."),
-            )
-        }
-        Err(_) => {
-            abandon(record.object_key.clone()).await;
-            storage_failure(&headers)
-        }
+        Ok(CompleteAttachmentOutcome::NotFound) => failure(
+            &headers,
+            StatusCode::NOT_FOUND,
+            "attachment_not_found",
+            "이 첨부 파일을 찾지 못했습니다.",
+        ),
+        Ok(CompleteAttachmentOutcome::Expired) => failure(
+            &headers,
+            StatusCode::CONFLICT,
+            "attachment_expired",
+            "보존 기간이 지나 이 첨부 파일은 더 받을 수 없습니다.",
+        ),
+        Ok(CompleteAttachmentOutcome::SizeMismatch { declared, received }) => failure(
+            &headers,
+            StatusCode::BAD_REQUEST,
+            "attachment_size_mismatch",
+            format!("신고한 크기({declared})와 실제 크기({received})가 다릅니다."),
+        ),
+        Err(_) => storage_failure(&headers),
     }
 }
 
@@ -2700,6 +2778,12 @@ async fn submit_submission(
             StatusCode::CONFLICT,
             "nothing_to_submit",
             "save a draft before sending it",
+        ),
+        Ok(SubmitOutcome::AttachmentIncomplete) => failure(
+            &headers,
+            StatusCode::CONFLICT,
+            "attachment_incomplete",
+            "올리기가 끝나지 않은 첨부 파일이 있습니다. 지우거나 다시 올린 뒤 제출해 주세요.",
         ),
         Ok(SubmitOutcome::CollectNotOpen { status }) => failure(
             &headers,

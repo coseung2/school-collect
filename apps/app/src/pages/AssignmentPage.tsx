@@ -57,6 +57,7 @@ export function AssignmentPage({
   const [pendingLocal, setPendingLocal] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [busyItemKeys, setBusyItemKeys] = useState<string[]>([]);
 
   // Attachments are optional to the page: if they cannot load (offline, or
   // storage not configured), the text answer still works.
@@ -69,6 +70,16 @@ export function AssignmentPage({
       setAttachmentError(messageOf(caught));
     }
   }, [collectId, tenantId, token]);
+
+  // An attachment being sent is page state, not just that row's: the submit
+  // button waits for it, so a file cannot be left half-written by handing the
+  // answer in too early.
+  const onAttachmentBusy = useCallback((key: string, busy: boolean) => {
+    setBusyItemKeys((current) => {
+      const others = current.filter((entry) => entry !== key);
+      return busy ? [...others, key] : others;
+    });
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -141,6 +152,10 @@ export function AssignmentPage({
   const closed = detail.status === "closed";
   const open = detail.status === "published";
   const editable = open && !submitted && canSubmit(role);
+  const attachmentBusy = busyItemKeys.length > 0;
+  const unfinishedAttachments = attachments.filter(
+    (entry) => entry.status === "pending" || entry.status === "uploading",
+  ).length;
   const expectedVersion = detail.submission?.version ?? 0;
   const collectIdForSave = detail.id;
 
@@ -314,6 +329,7 @@ export function AssignmentPage({
                   editable={editable}
                   itemKey={item.key}
                   itemLabel={item.label}
+                  onBusyChange={onAttachmentBusy}
                   onChanged={loadAttachments}
                   tenantId={tenantId}
                   token={token}
@@ -327,6 +343,12 @@ export function AssignmentPage({
             </p>
           ) : null}
           <div className="app-form__actions">
+            {unfinishedAttachments > 0 ? (
+              <p className="app-form__error" role="alert">
+                올리기가 끝나지 않은 첨부 파일이 {unfinishedAttachments}개 있습니다.
+                지우거나 다시 올린 뒤 제출할 수 있습니다.
+              </p>
+            ) : null}
             <Button
               disabled={!editable || busy}
               onClick={() => void onSave()}
@@ -335,7 +357,13 @@ export function AssignmentPage({
             >
               임시 저장
             </Button>
-            <Button disabled={!editable || busy} loading={busy} type="submit">
+            <Button
+              disabled={
+                !editable || busy || attachmentBusy || unfinishedAttachments > 0
+              }
+              loading={busy}
+              type="submit"
+            >
               제출
             </Button>
           </div>

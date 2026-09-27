@@ -1,6 +1,6 @@
 # 실행 상태
 
-기준일: 2026-09-27 (Asia/Seoul). 이 문서는 계획, 기능 브랜치 구현, develop 통합과 실제 검증을 구분합니다.
+기준일: 2026-09-28 (Asia/Seoul). 이 문서는 계획, 기능 브랜치 구현, develop 통합과 실제 검증을 구분합니다.
 
 작업 분류는 [V2_PLAN.md](V2_PLAN.md), 상세 계획은 [학교업무](SCHOOL_WORK_PLAN.md) / [개인기능](PERSONAL_PLAN.md), 공통 기반은 [TEAM_BACKLOG.md](TEAM_BACKLOG.md)를 따릅니다. `내 제출`과 offline 제출 초안은 학교업무이며 개인 바로가기·자동입력·감시는 개인기능입니다.
 
@@ -30,7 +30,7 @@
   - C-03 백업·복구 drill(PR #62, `74e1149`): CI `postgres` 작업이 dump → 빈 DB 복구 → schema version·migration 5개·`school_collect` 테이블 13개 행 수·canary 행을 대조합니다. 첫 실행에서 client가 입력을 가로채 테이블 1개만 검사하던 결함을 CI 로그로 찾아 고쳤습니다.
   - C-05 Windows 설치 파일(PR #63, `73067bd`): CI가 `School Collect_0.2.0_x64-setup.exe`(약 2.97MB)를 매번 만들고 서명 상태(`NotSigned`)를 기록합니다. updater는 켜지 않았습니다.
   - C-04 전체 이력 스캔(PR #64, `8829326`): 155개 커밋에서 HEAD 0건, 과거 revision의 rewrite 후보 3묶음을 [SECURITY_BASELINE.md](SECURITY_BASELINE.md)에 기록했습니다. 값은 출력하지 않습니다.
-  - S-05 PKCE·state 검증(PR #65, `d6c86a3`): 단위 테스트 7개(RFC 7636 공식 값 포함). 로그인 화면 연결은 redirect 허용 목록 결정 후입니다.
+  - S-05 PKCE·state 검증(PR #65, `d6c86a3`): 단위 테스트 7개(RFC 7636 공식 값 포함). 로그인 화면에는 4차 검토에서 연결했고(가짜 provider 경로 검증), 실제 provider 흐름은 redirect 허용 목록 등록 뒤에 검증합니다.
   - C-01 Select·Checkbox(PR #66, `cbddb20`): 실제 브라우저에서 접근성 이름·키보드 토글·40/36px 높이·640px 넘침 없음을 확인했고, 검증 계정·학교를 지웠습니다(잔여 0).
   - 이 시점 `cargo test --workspace --locked`는 125개입니다.
 - 학교 화면의 로그인 이후 흐름과 과거 native/API/DB·브라우저 검증, 외부 운영 설정은 이번에 재실행·재조회하지 않았습니다. CI 성공도 production 배포를 대신하지 않습니다.
@@ -39,7 +39,7 @@
 
 | 영역 | 통합된 것 | 통합 전 구현 | 남은 우선 작업 |
 | --- | --- | --- | --- |
-| 학교업무 | PR #19·#24(`f573bfb`) + S-02(`9416c6c`) + S-03(`70dcbfe`) + S-06(`e722bce`) + S-05 세션·초안(`93cebdc`)·브라우저 로그인 흐름(`9579a05`) + S-07 내보내기·역할 검증(`9860710`, `88b0a38`, `9b63abf`) + S-04 첨부 metadata·API·sweep·화면·R2 adapter(`e3a541c`, `2486f8d`, `aaa55c5`, `64aad02`, `04de924`) | 없음 | S-05 로그인 화면 연결(provider redirect 등록 필요), S-04 실제 R2 bucket 연결(bucket·credential 필요) |
+| 학교업무 | PR #19·#24(`f573bfb`) + S-02(`9416c6c`) + S-03(`70dcbfe`) + S-06(`e722bce`) + S-05 세션·초안(`93cebdc`)·브라우저 로그인 흐름(`9579a05`) + S-07 내보내기·역할 검증(`9860710`, `88b0a38`, `9b63abf`) + S-04 첨부 metadata·API·sweep·화면·R2 adapter(`e3a541c`, `2486f8d`, `aaa55c5`, `64aad02`, `04de924`) | 없음 | S-05 실제 provider redirect 허용 목록 등록(소유자), S-04 실제 R2 bucket·credential 연결(소유자), C-03 실제 runtime/migrator 역할·자격증명 생성과 연결(소유자), S-06 업무 변경을 소비하는 알림 worker |
 | 개인기능 | PR #25 개인 화면(`11a0af0`) + PR #30 브리지·확장(`795dc26`) + PR #32·#33 자동입력 엔진(`5318a96`) + PR #35 표 입력(`09b3f88`) + PR #37 감시(`e5415dc`) + PR #51 레시피 추천(`8704d95`) 통합 | 없음 | P-05 앱 데이터 연결(데이터 원천·권한 계약 대기) |
 | 공통 기반 | PR #17 DS/AppShell, PR #20 Docker 스택, PR #24 병합에서 학교/개인 화면 경계 정리, PR #54 설정·narrow 보완 | 없음 | C-01 Figma DS 확장, C-02~C-05 보안·운영·배포(소유자 결정·외부 자원 필요) |
 
@@ -81,16 +81,30 @@ PR #24/#25는 모두 develop에 병합됐습니다(`f573bfb`, `11a0af0`). 병합
 
 ### 3차 독립 검토 (2026-09-27, `c526ac3`)
 
-같은 검토자(gpt-6-astra, 매우높음)의 판정은 **REVISE_LOCAL**이었습니다. 2차 지적 F1·F2·F4~F8·F10~F12와 R2 mock·PKCE 흐름은 닫힘으로, F3·F9·첨부 UI·설치 smoke는 부분으로 판단했고, 남은 저장소 안 결함을 PR #75(`60f2bcb`, CI 7개 성공)에서 모두 고쳤습니다.
+같은 검토자(gpt-6-astra, 매우높음)의 판정은 **REVISE_LOCAL**이었습니다. 2차 지적 F1·F2·F4~F8·F10~F12와 R2 mock·PKCE 흐름은 닫힘으로, F3·F9·첨부 UI·설치 smoke는 부분으로 판단했고, 남은 저장소 안 결함을 PR #75(`60f2bcb`, CI 7개 성공)에서 고쳤지만, 4차 검토에서 그중 일부(업로드 시도 경계·완료 전 다운로드·제출 교차·목록 갱신)가 아직 부분이라고 확인됐습니다(아래 4차 절).
 
 - 동시 올리기: 슬롯을 한 번의 UPDATE로 차지한 요청만 bytes를 씁니다(migration `0007`). 실제 DB에서 8개 동시 차지 → 1개 성공·7개 거절을 확인했습니다.
-- 실패한 올리기: 어느 단계에서 실패해도 bytes를 지우고 슬롯을 돌려줍니다. 앱은 빈 슬롯을 지우거나, 남으면 목록에서 지울 수 있게 보여 줍니다.
+- 실패한 올리기: 실패 경로에서 bytes를 지우고 슬롯을 돌려줍니다. 앱은 빈 슬롯을 지우거나, 남으면 목록에서 지울 수 있게 보여 줍니다. (4차 검토: 이 문장이 당시 구현보다 넓었습니다. 시도 단위 정리는 아래 4차 절에서 다시 고쳤습니다.)
 - 관리자의 자기 제출 화면은 `scope=mine`으로 자기 파일만 받습니다.
 - 다운로드 저장은 `create_new`로 덮어쓰기 없이 한 번에 만듭니다(16개 병렬 저장 → 16개 파일).
 - E2E는 provider 계정을 만든 직후 정리 대상으로 등록합니다.
 - 설치 smoke는 제거 후 설치 폴더 전체가 사라졌는지 확인합니다(CI: `removed the install directory and uninstall entry`).
 - `R2_ENDPOINT`는 `scheme://host[:port]`만 받습니다.
-- 이 시점 `cargo test --workspace --locked` 144개, 실제 provider E2E 5개, 첨부 DB 테스트 7개, 백업 drill은 migration 7개·테이블 13개입니다.
+- 이 시점 `cargo test --workspace --locked` 144개, 실제 provider E2E 5개, 첨부 DB 테스트 7개, 백업 drill은 migration 7개·테이블 13개입니다. (4차 검토 뒤: workspace 156개, migration 8개·테이블 14개.)
+
+### 4차 독립 검토 (2026-09-28, `d578f98`)
+
+같은 검토자(gpt-6-astra, 매우높음)의 판정은 **REVISE_LOCAL**이었습니다. 3차 지적 8개 중 4개는 닫힘, 4개는 부분으로 보았고, 저장소 안 결함 6개(F1~F6)를 새로 지적했습니다. 모두 이번 PR에서 고치고 다시 검증했습니다.
+
+- F1 업로드 인수 뒤 이전 시도가 살아 있던 문제: 업로드 시도마다 식별자와 object key를 따로 둡니다(migration `0008`, `upload_attempt_id`, `object_key_for_attempt`). 완료·해제·정리는 자기 시도에만 작용하고, 5분 인수로 밀려난 시도는 완료(`ClaimLost`)도 해제도 못 합니다. 그 시도의 객체는 인수 시점에 지우고, 삭제가 실패하면 `attachment_orphans`에 기록해 sweep이 지웁니다.
+- F2 완료 전 다운로드: `/v1/attachments/{id}/content`는 `stored`이고 보존 기간 안일 때만 bytes를 주고, `pending`·`uploading`·만료는 409(`attachment_not_ready`, `attachment_expired`)로 거절합니다. E2E가 슬롯만 연 상태와 크기 불일치 실패 뒤의 다운로드 거절을 확인합니다.
+- F3 제출과 업로드의 교차: 제출 transaction은 미완료 슬롯이 있으면 `409 attachment_incomplete`로 거절하고, 슬롯 열기·인수·완료는 제출·마감 상태를 같은 transaction에서 다시 확인합니다(`NotOpen`). 앱은 업로드·삭제가 진행 중이거나 미완료 슬롯이 있으면 제출을 잠급니다. 두 테이블의 잠금 순서를 답변 행 → 슬롯으로 통일해 교착을 막습니다.
+- F4 실패한 업로드 뒤 목록 미갱신: 실패 경로에서도 목록을 다시 읽고, 미완료 행은 편집 불가 상태에서도 보여 줍니다.
+- F5 R2 서명 host 정규화: endpoint를 기동 때 한 번 정규화(소문자·기본 포트 제거)하고 서명과 전송이 같은 값을 씁니다. loopback S3 stand-in이 실제 요청의 서명을 재계산해 검증하고, 서명한 host와 전송 host가 다르면 403임을 확인하는 회귀 테스트를 넣었습니다.
+- F6 문서가 근거보다 넓던 문제: 이 절의 실패 정리 표현과 [SCHOOL_WORK_PLAN.md](SCHOOL_WORK_PLAN.md) S-06 완료 조건을 실제 범위로 고쳤습니다. 실행 worker는 relay와 만료 sweep이고, 업무 변경을 소비하는 알림 worker와 commit 후 ACK는 아직 구현하지 않았습니다.
+- 검토가 "저장소 안에서 선행 가능"으로 분류한 나머지도 처리했습니다: S-05 로그인 화면 연결(시스템 브라우저 PKCE, native `start_browser_login`·`cancel_browser_login`, 취소·만료·실패 안내, 가짜 provider 앱 경로 테스트), C-03 runtime/migrator 입력 분리(`MIGRATION_DATABASE_URL`)와 역할 검사(`scripts/runtime_role_check.sh`, CI `postgres`).
+- 실제 Tauri 창(WebView2 CDP) 확인: 슬롯만 연 상태의 다운로드 409, 미완료 행 표시와 지우기, 제출 잠금과 안내 문구, 지운 뒤 제출 가능, 실제 업로드 뒤 `받기` 행과 제출 가능, 640px 가로 넘침 없음.
+- 검증: `cargo test --workspace --locked` 156개, 실제 개발 DB `crates/db/tests/attachments.rs` 8개·worker sweep 1개·relay 6개, 실제 provider + PostgreSQL E2E 5개, foundation 34개, repository guard 0건, `@example.test` 계정과 검증 학교·행 잔여 0.
 
 ## 단계 상태
 
@@ -256,4 +270,4 @@ Stage 3 미검증 항목:
 - R2 실제 저장소 연결과 production 연결, 학교 환경 분리
 - production DB migration
 
-인증 provider는 [ADR-0002](ADR/0002-supabase-identity-and-database.md)의 Supabase Auth이며 ZITADEL 구축은 현행 대기 작업이 아닙니다. 클라이언트 세션은 OS 자격 증명 저장소에 저장되어 재시작 후에도 유지됩니다(S-05). 외부 브라우저 PKCE 로그인은 identity provider의 redirect 허용 목록 결정이 필요해 후속으로 남아 있습니다.
+인증 provider는 [ADR-0002](ADR/0002-supabase-identity-and-database.md)의 Supabase Auth이며 ZITADEL 구축은 현행 대기 작업이 아닙니다. 클라이언트 세션은 OS 자격 증명 저장소에 저장되어 재시작 후에도 유지됩니다(S-05). 외부 브라우저 PKCE 로그인은 로그인 화면에 연결되어 있습니다. 실제 provider로 마치는 흐름은 identity provider의 redirect 허용 목록 등록이 필요해 소유자 결정으로 남아 있습니다.

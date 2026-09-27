@@ -1,8 +1,10 @@
 import { useState, type FormEvent, type ReactNode } from "react";
 import { Button, Card, ErrorState, FormField } from "@school-collect/ui";
 import {
+  cancelBrowserLogin,
   createTenant,
   identityConfigured,
+  signInWithBrowser,
   signInWithPassword,
   signUpWithPassword,
   type AuthSession,
@@ -28,6 +30,7 @@ export function SignInView({
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
+  const [browserBusy, setBrowserBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -62,6 +65,28 @@ export function SignInView({
     } finally {
       setBusy(false);
     }
+  }
+
+  /**
+   * 학교 계정 로그인: 시스템 브라우저에서 결과를 기다립니다. 시도가 끝나거나
+   * 취소·만료되면 native가 이유를 코드와 문구로 돌려줍니다.
+   */
+  async function browserSignIn() {
+    setBrowserBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const session = await signInWithBrowser();
+      setBrowserBusy(false);
+      onSignedIn(session);
+    } catch (caught) {
+      setBrowserBusy(false);
+      setError(messageOf(caught));
+    }
+  }
+
+  async function cancelBrowserSignIn() {
+    await cancelBrowserLogin();
   }
 
   return (
@@ -109,11 +134,11 @@ export function SignInView({
             ) : null}
             {notice ? <p className="app-form__notice">{notice}</p> : null}
             <div className="app-form__actions">
-              <Button loading={busy} type="submit">
+              <Button disabled={browserBusy} loading={busy} type="submit">
                 로그인
               </Button>
               <Button
-                disabled={busy || !email || !password}
+                disabled={busy || browserBusy || !email || !password}
                 onClick={createAccount}
                 type="button"
                 variant="secondary"
@@ -121,6 +146,31 @@ export function SignInView({
                 계정 만들기
               </Button>
             </div>
+            <div className="app-form__actions">
+              {browserBusy ? (
+                <Button
+                  onClick={cancelBrowserSignIn}
+                  type="button"
+                  variant="secondary"
+                >
+                  취소
+                </Button>
+              ) : (
+                <Button
+                  disabled={busy}
+                  onClick={browserSignIn}
+                  type="button"
+                  variant="secondary"
+                >
+                  학교 계정으로 로그인
+                </Button>
+              )}
+            </div>
+            <p className="app-card-description" role="status">
+              {browserBusy
+                ? "브라우저에서 로그인을 마쳐 주세요. 결과가 이 창으로 돌아옵니다."
+                : "학교 계정으로 로그인하면 기본 브라우저가 열립니다."}
+            </p>
           </form>
         )}
         {onBack ? (

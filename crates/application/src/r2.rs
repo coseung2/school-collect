@@ -102,6 +102,11 @@ impl R2Storage {
     pub fn new(config: R2Config) -> Result<Self, StorageError> {
         let endpoint = config.endpoint.trim_end_matches('/');
         validate_endpoint(endpoint)?;
+        // Normalize once, here: `reqwest` lower-cases the host and elides a
+        // default port when it builds the request line and `Host` header, so
+        // signing the raw authority would cover a different host than the one
+        // that reaches the wire.
+        let endpoint = normalize_endpoint(endpoint);
         if config.bucket.trim().is_empty()
             || config.access_key_id.trim().is_empty()
             || config.secret_access_key.trim().is_empty()
@@ -115,10 +120,7 @@ impl R2Storage {
             .build()
             .map_err(|error| StorageError::Unavailable(error.to_string()))?;
         Ok(Self {
-            config: R2Config {
-                endpoint: endpoint.to_owned(),
-                ..config
-            },
+            config: R2Config { endpoint, ..config },
             http,
         })
     }
@@ -341,6 +343,31 @@ fn validate_endpoint(endpoint: &str) -> Result<(), StorageError> {
     }
 }
 
+/// Lower-cases the scheme and host and drops a port that is the scheme's
+/// default. The result is the single authority used both for signing and for
+/// the request URL, so a signature can never cover a different host than the
+/// one `reqwest` puts on the wire.
+fn normalize_endpoint(endpoint: &str) -> String {
+    let Some((scheme, authority)) = endpoint.split_once("://") else {
+        return endpoint.to_owned();
+    };
+    let scheme = scheme.to_ascii_lowercase();
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((host, port)) => (host, Some(port)),
+        None => (authority, None),
+    };
+    let host = host.to_ascii_lowercase();
+    let default_port = match scheme.as_str() {
+        "https" => Some("443"),
+        "http" => Some("80"),
+        _ => None,
+    };
+    match port {
+        Some(port) if Some(port) != default_port => format!("{scheme}://{host}:{port}"),
+        _ => format!("{scheme}://{host}"),
+    }
+}
+
 fn amz_date(now: DateTime<Utc>) -> String {
     now.format("%Y%m%dT%H%M%SZ").to_string()
 }
@@ -444,6 +471,35 @@ fn authorization_header(input: &SigningInput<'_>, config: &R2Config, now: DateTi
     format!(
         "AWS4-HMAC-SHA256 Credential={}/{scope}, SignedHeaders={signed_headers}, Signature={signature}",
         config.access_key_id
+    )
+}
+
+/// Rebuilds the SigV4 `Authorization` header for one header-signed request
+/// from the values the request actually carries.
+///
+/// This is the same routine [`R2Storage`] uses to sign, exposed so a loopback
+/// test server can recompute the expected signature and reject a request whose
+/// signed host, path or headers do not match what it received. Production code
+/// signs through the private `authorization_header`.
+#[doc(hidden)]
+pub fn authorization_header_for_test(
+    config: &R2Config,
+    method: &str,
+    path: &str,
+    headers: &[(String, String)],
+    payload_hash: &str,
+    now: DateTime<Utc>,
+) -> String {
+    authorization_header(
+        &SigningInput {
+            method,
+            path,
+            query: &[],
+            headers,
+            payload_hash,
+        },
+        config,
+        now,
     )
 }
 
@@ -596,6 +652,62 @@ mod tests {
         ] {
             assert!(validate_endpoint(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn endpoint_normalization_lowercases_hosts_and_drops_default_ports() {
+        assert_eq!(
+            normalize_endpoint("HTTPS://Bucket.Example.com"),
+            "https://bucket.example.com"
+        );
+        assert_eq!(
+            normalize_endpoint("https://Bucket.Example.com:443"),
+            "https://bucket.example.com"
+        );
+        assert_eq!(
+            normalize_endpoint("https://Bucket.Example.com:8443"),
+            "https://bucket.example.com:8443"
+        );
+        assert_eq!(
+            normalize_endpoint("http://127.0.0.1:9000"),
+            "http://127.0.0.1:9000"
+        );
+        assert_eq!(
+            normalize_endpoint("http://127.0.0.1:80"),
+            "http://127.0.0.1"
+        );
+    }
+
+    #[test]
+    fn storage_signs_and_requests_the_same_normalized_endpoint() {
+        let mut config = aws_example_config(R2_REGION);
+        config.endpoint = "https://Bucket.Example.com:443".into();
+        let storage = R2Storage::new(config).unwrap();
+        assert_eq!(storage.config.endpoint, "https://bucket.example.com");
+        assert_eq!(storage.host(), "bucket.example.com");
+
+        // The URL handed to clients is built from `config.endpoint` while the
+        // signature is computed over `host()`; both must be the normalized
+        // value, so this equals a URL signed directly for the normalized host.
+        let now = aws_example_time();
+        let url = storage
+            .presigned_url("GET", "test.txt", Duration::from_secs(60), now)
+            .unwrap();
+        let normalized = R2Config {
+            endpoint: "https://bucket.example.com".into(),
+            ..aws_example_config(R2_REGION)
+        };
+        assert_eq!(
+            url,
+            presign(
+                &normalized,
+                "bucket.example.com",
+                "GET",
+                "/examplebucket/test.txt",
+                60,
+                now
+            )
+        );
     }
 
     #[test]

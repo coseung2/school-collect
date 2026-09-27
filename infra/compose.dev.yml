@@ -49,7 +49,9 @@ services:
     entrypoint: ["/usr/local/bin/school-collect-migrator"]
     environment:
       APP_ENV: development
-      DATABASE_URL: postgres://school_collect:${POSTGRES_PASSWORD:-school_collect_local_only}@postgres:5432/school_collect
+      # The schema owner is its own input here too, so a local run exercises the
+      # same separation the deployment uses (one role, the same URL twice).
+      MIGRATION_DATABASE_URL: postgres://school_collect:${POSTGRES_PASSWORD:-school_collect_local_only}@postgres:5432/school_collect
       RUST_LOG: ${RUST_LOG:-info}
     depends_on:
       postgres:

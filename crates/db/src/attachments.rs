@@ -5,12 +5,12 @@
 //! Every query is tenant scoped, so a caller from another school finds nothing
 //! to read and nothing to change.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use school_collect_domain::attachments::{
-    MAX_ATTACHMENTS_PER_ITEM, MAX_ATTACHMENTS_PER_SUBMISSION,
+    MAX_ATTACHMENTS_PER_ITEM, MAX_ATTACHMENTS_PER_SUBMISSION, object_key_for_attempt,
 };
 
 /// One attachment row.
@@ -30,10 +30,13 @@ pub struct AttachmentRecord {
     pub expires_at: DateTime<Utc>,
     pub stored_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+    /// The upload attempt that owns the slot, or `None` before the first one.
+    pub upload_attempt_id: Option<Uuid>,
 }
 
 const ATTACHMENT_COLUMNS: &str = "id, tenant_id, collect_id, user_id, item_key, file_name,
-     content_type, byte_size, checksum_sha256, object_key, status, expires_at, stored_at, created_at";
+     content_type, byte_size, checksum_sha256, object_key, status, expires_at, stored_at, created_at,
+     upload_attempt_id";
 
 /// What the caller asks to store. The id and the object key are decided by the
 /// server, never by the client.
@@ -66,92 +69,201 @@ pub enum CompleteAttachmentOutcome {
     Stored(Box<AttachmentRecord>),
     NotFound,
     AlreadyStored(Box<AttachmentRecord>),
+    /// Another attempt took the slot over after the claim timeout. The bytes
+    /// this writer produced belong to nobody and must not be recorded.
+    ClaimLost,
     Expired,
-    SizeMismatch { declared: i64, received: i64 },
+    /// The collect closed, or the answer was handed in, while the bytes were
+    /// arriving.
+    NotOpen,
+    SizeMismatch {
+        declared: i64,
+        received: i64,
+    },
 }
 
 /// Result of trying to become the one writer of a slot.
 #[derive(Debug)]
 pub enum ClaimUploadOutcome {
-    /// This request owns the slot until it completes or releases it.
-    Claimed(Box<AttachmentRecord>),
+    /// This request owns the slot until it completes or releases it. The record
+    /// carries this attempt's identifier and object key.
+    Claimed {
+        record: Box<AttachmentRecord>,
+        /// The object the attempt that just lost the slot may have written, if
+        /// any. Its bytes belong to nobody now, so the caller removes them (or
+        /// records them for the sweep) instead of leaving them untracked.
+        superseded_object_key: Option<String>,
+    },
     /// Another request is uploading right now.
     Busy,
     /// The bytes are already stored.
     AlreadyStored,
     NotFound,
     Expired,
+    /// The collect closed, or the answer was handed in, while the slot waited.
+    NotOpen,
 }
 
 /// How long a claim blocks other uploads before it counts as abandoned.
 pub const UPLOAD_CLAIM_TIMEOUT_SECONDS: i64 = 300;
 
+/// Whether this collect and this member's answer still accept new bytes.
+///
+/// A slot is opened while the answer is open, but the bytes can arrive later;
+/// a closed collect or a handed-in answer must refuse them then, in the same
+/// transaction that would otherwise accept them.
+async fn attachment_accepts_content(
+    tx: &mut sqlx::PgConnection,
+    tenant_id: Uuid,
+    collect_id: Uuid,
+    user_id: Uuid,
+) -> anyhow::Result<bool> {
+    let collect = sqlx::query_scalar::<_, String>(
+        "SELECT status FROM school_collect.collects WHERE tenant_id = $1 AND id = $2",
+    )
+    .bind(tenant_id)
+    .bind(collect_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if collect.as_deref() != Some("published") {
+        return Ok(false);
+    }
+    let submission = sqlx::query_scalar::<_, String>(
+        "SELECT status FROM school_collect.collect_submissions
+         WHERE tenant_id = $1 AND collect_id = $2 AND user_id = $3",
+    )
+    .bind(tenant_id)
+    .bind(collect_id)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    Ok(submission.as_deref() != Some("submitted"))
+}
+
 /// Makes this request the only writer of a pending slot.
 ///
-/// One UPDATE moves `pending` (or a claim older than the timeout) to
-/// `uploading`, so of two concurrent uploads exactly one gets the slot and the
-/// other is refused before it touches storage.
+/// One transaction locks the row, refuses a slot that is busy, stored, gone, or
+/// no longer open, then moves it to `uploading` under a fresh attempt id and a
+/// fresh object key. Two concurrent uploads therefore never share an object,
+/// and an upload that was taken over after the timeout cannot write where the
+/// newer attempt reads.
 pub async fn claim_attachment_upload(
     pool: &PgPool,
     tenant_id: Uuid,
     attachment_id: Uuid,
     now: DateTime<Utc>,
 ) -> anyhow::Result<ClaimUploadOutcome> {
+    let mut tx = pool.begin().await?;
+
+    let current = sqlx::query_as::<
+        _,
+        (
+            String,
+            DateTime<Utc>,
+            String,
+            Option<Uuid>,
+            Option<DateTime<Utc>>,
+            Uuid,
+            Uuid,
+        ),
+    >(
+        "SELECT status, expires_at, object_key, upload_attempt_id, upload_claimed_at,
+                collect_id, user_id
+         FROM school_collect.collect_attachments
+         WHERE tenant_id = $1 AND id = $2
+         FOR UPDATE",
+    )
+    .bind(tenant_id)
+    .bind(attachment_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some((status, expires_at, object_key, previous_attempt, claimed_at, collect_id, user_id)) =
+        current
+    else {
+        tx.rollback().await?;
+        return Ok(ClaimUploadOutcome::NotFound);
+    };
+    if status == "deleted" {
+        tx.rollback().await?;
+        return Ok(ClaimUploadOutcome::NotFound);
+    }
+    if status == "stored" {
+        tx.rollback().await?;
+        return Ok(ClaimUploadOutcome::AlreadyStored);
+    }
+    if expires_at <= now {
+        tx.rollback().await?;
+        return Ok(ClaimUploadOutcome::Expired);
+    }
+    let abandoned = now - Duration::seconds(UPLOAD_CLAIM_TIMEOUT_SECONDS);
+    if status == "uploading" && claimed_at.is_some_and(|at| at > abandoned) {
+        tx.rollback().await?;
+        return Ok(ClaimUploadOutcome::Busy);
+    }
+    if !attachment_accepts_content(&mut tx, tenant_id, collect_id, user_id).await? {
+        tx.rollback().await?;
+        return Ok(ClaimUploadOutcome::NotOpen);
+    }
+
+    let attempt_id = Uuid::now_v7();
+    let attempt_key = object_key_for_attempt(
+        &tenant_id.to_string(),
+        &attachment_id.to_string(),
+        &attempt_id.to_string(),
+    );
     let claimed = sqlx::query_as::<_, AttachmentRecord>(&format!(
         "UPDATE school_collect.collect_attachments
-         SET status = 'uploading', upload_claimed_at = $3, updated_at = $3
-         WHERE tenant_id = $1 AND id = $2 AND expires_at > $3
-           AND (status = 'pending'
-                OR (status = 'uploading'
-                    AND upload_claimed_at < $3 - make_interval(secs => $4)))
+         SET status = 'uploading', upload_claimed_at = $3, upload_attempt_id = $4,
+             object_key = $5, updated_at = $3
+         WHERE tenant_id = $1 AND id = $2
          RETURNING {ATTACHMENT_COLUMNS}"
     ))
     .bind(tenant_id)
     .bind(attachment_id)
     .bind(now)
-    .bind(UPLOAD_CLAIM_TIMEOUT_SECONDS as f64)
-    .fetch_optional(pool)
+    .bind(attempt_id)
+    .bind(&attempt_key)
+    .fetch_one(&mut *tx)
     .await?;
-    if let Some(record) = claimed {
-        return Ok(ClaimUploadOutcome::Claimed(Box::new(record)));
-    }
+    tx.commit().await?;
 
-    // Nothing was claimed: report why, from the current row.
-    let current = sqlx::query_as::<_, (String, DateTime<Utc>)>(
-        "SELECT status, expires_at FROM school_collect.collect_attachments
-         WHERE tenant_id = $1 AND id = $2",
-    )
-    .bind(tenant_id)
-    .bind(attachment_id)
-    .fetch_optional(pool)
-    .await?;
-    Ok(match current {
-        None => ClaimUploadOutcome::NotFound,
-        Some((status, _)) if status == "deleted" => ClaimUploadOutcome::NotFound,
-        Some((status, _)) if status == "stored" => ClaimUploadOutcome::AlreadyStored,
-        Some((_, expires_at)) if expires_at <= now => ClaimUploadOutcome::Expired,
-        Some(_) => ClaimUploadOutcome::Busy,
+    // A slot that never had an attempt has no object worth removing; every
+    // other previous key may hold bytes from the attempt that lost the slot.
+    let superseded_object_key = previous_attempt
+        .filter(|_| object_key != attempt_key)
+        .map(|_| object_key);
+    Ok(ClaimUploadOutcome::Claimed {
+        record: Box::new(claimed),
+        superseded_object_key,
     })
 }
 
 /// Gives a claimed slot back after a failed upload, so the owner can retry.
+///
+/// Only the attempt that still owns the slot may release it: a writer whose
+/// claim was taken over must not hand the slot back to `pending` while a newer
+/// attempt is writing. Returns whether this attempt was still the owner.
 pub async fn release_attachment_upload(
     pool: &PgPool,
     tenant_id: Uuid,
     attachment_id: Uuid,
+    attempt_id: Uuid,
     now: DateTime<Utc>,
-) -> anyhow::Result<()> {
-    sqlx::query(
+) -> anyhow::Result<bool> {
+    let released = sqlx::query(
         "UPDATE school_collect.collect_attachments
-         SET status = 'pending', upload_claimed_at = NULL, updated_at = $3
-         WHERE tenant_id = $1 AND id = $2 AND status = 'uploading'",
+         SET status = 'pending', upload_claimed_at = NULL, updated_at = $4
+         WHERE tenant_id = $1 AND id = $2 AND status = 'uploading' AND upload_attempt_id = $3",
     )
     .bind(tenant_id)
     .bind(attachment_id)
+    .bind(attempt_id)
     .bind(now)
     .execute(pool)
-    .await?;
-    Ok(())
+    .await?
+    .rows_affected();
+    Ok(released > 0)
 }
 
 #[derive(Debug)]
@@ -204,10 +316,27 @@ pub async fn create_attachment(
         return Ok(CreateAttachmentOutcome::ItemMissing);
     }
 
-    // Only a target of the collect owes an answer, and an answer that was handed
-    // in keeps its files. Locking the assignment row serializes every slot
-    // opened for this member, so two concurrent requests cannot both pass the
-    // count checks below and exceed the per-item or per-submission limit.
+    // An answer that was handed in keeps its files, so a slot must not open
+    // after a submit. The answer row is locked first, then the assignment row:
+    // that is the same order `save_draft` uses, so the two cannot deadlock.
+    let submission_status = sqlx::query_scalar::<_, String>(
+        "SELECT status FROM school_collect.collect_submissions
+         WHERE collect_id = $1 AND user_id = $2
+         FOR UPDATE",
+    )
+    .bind(collect_id)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if submission_status.as_deref() == Some("submitted") {
+        tx.rollback().await?;
+        return Ok(CreateAttachmentOutcome::AlreadySubmitted);
+    }
+
+    // Only a target of the collect owes an answer. Locking the assignment row
+    // serializes every slot opened for this member, so two concurrent requests
+    // cannot both pass the count checks below and exceed the per-item or
+    // per-submission limit.
     let assigned = sqlx::query_scalar::<_, i32>(
         "SELECT 1 FROM school_collect.collect_assignments
          WHERE collect_id = $1 AND user_id = $2
@@ -220,19 +349,6 @@ pub async fn create_attachment(
     if assigned.is_none() {
         tx.rollback().await?;
         return Ok(CreateAttachmentOutcome::NotAssigned);
-    }
-
-    let submission_status = sqlx::query_scalar::<_, String>(
-        "SELECT status FROM school_collect.collect_submissions
-         WHERE collect_id = $1 AND user_id = $2",
-    )
-    .bind(collect_id)
-    .bind(user_id)
-    .fetch_optional(&mut *tx)
-    .await?;
-    if submission_status.as_deref() == Some("submitted") {
-        tx.rollback().await?;
-        return Ok(CreateAttachmentOutcome::AlreadySubmitted);
     }
 
     let item_count = sqlx::query_scalar::<_, i64>(
@@ -292,10 +408,14 @@ pub async fn create_attachment(
 }
 
 /// Marks an upload as stored once the bytes are in private storage.
+///
+/// The attempt identifier is required, so a writer whose claim was taken over
+/// cannot complete over the bytes of the attempt that replaced it.
 pub async fn complete_attachment(
     pool: &PgPool,
     tenant_id: Uuid,
     attachment_id: Uuid,
+    attempt_id: Uuid,
     byte_size: i64,
     checksum_sha256: &str,
     now: DateTime<Utc>,
@@ -328,12 +448,20 @@ pub async fn complete_attachment(
         tx.rollback().await?;
         return Ok(CompleteAttachmentOutcome::Expired);
     }
+    if current.upload_attempt_id != Some(attempt_id) {
+        tx.rollback().await?;
+        return Ok(CompleteAttachmentOutcome::ClaimLost);
+    }
     if current.byte_size != byte_size {
         tx.rollback().await?;
         return Ok(CompleteAttachmentOutcome::SizeMismatch {
             declared: current.byte_size,
             received: byte_size,
         });
+    }
+    if !attachment_accepts_content(&mut tx, tenant_id, current.collect_id, current.user_id).await? {
+        tx.rollback().await?;
+        return Ok(CompleteAttachmentOutcome::NotOpen);
     }
 
     let stored = sqlx::query_as::<_, AttachmentRecord>(&format!(
@@ -433,10 +561,12 @@ pub async fn delete_attachment(
 ) -> anyhow::Result<DeleteAttachmentOutcome> {
     let mut tx = pool.begin().await?;
 
+    // The answer row is locked before the attachment row: that is the order
+    // every writer of these two tables uses, so a delete cannot deadlock with a
+    // submit or an upload.
     let target = sqlx::query_as::<_, (Uuid, Uuid)>(
         "SELECT collect_id, user_id FROM school_collect.collect_attachments
-         WHERE tenant_id = $1 AND id = $2 AND status <> 'deleted'
-         FOR UPDATE",
+         WHERE tenant_id = $1 AND id = $2 AND status <> 'deleted'",
     )
     .bind(tenant_id)
     .bind(attachment_id)
@@ -530,6 +660,64 @@ pub async fn expired_attachments(
 pub async fn purge_attachment(pool: &PgPool, attachment_id: Uuid) -> anyhow::Result<bool> {
     let removed = sqlx::query("DELETE FROM school_collect.collect_attachments WHERE id = $1")
         .bind(attachment_id)
+        .execute(pool)
+        .await?
+        .rows_affected();
+    Ok(removed > 0)
+}
+
+/// One object that no attachment row points at any more.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct OrphanAttachment {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub object_key: String,
+}
+
+/// Remembers bytes whose owner gave them up, so the sweep removes them.
+///
+/// Cleanup normally deletes the object immediately; this records it for the
+/// sweep when that delete fails, or when a takeover leaves the previous
+/// attempt's object behind. One row per key, so repeated failures cannot pile
+/// up duplicate work.
+pub async fn record_attachment_orphan(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    object_key: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO school_collect.attachment_orphans (id, tenant_id, object_key)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (object_key) DO NOTHING",
+    )
+    .bind(Uuid::now_v7())
+    .bind(tenant_id)
+    .bind(object_key)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Objects the sweep still has to remove.
+pub async fn orphaned_attachments(
+    pool: &PgPool,
+    limit: i64,
+) -> anyhow::Result<Vec<OrphanAttachment>> {
+    let records = sqlx::query_as::<_, OrphanAttachment>(
+        "SELECT id, tenant_id, object_key FROM school_collect.attachment_orphans
+         ORDER BY created_at
+         LIMIT $1",
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(records)
+}
+
+/// Forgets one orphan whose bytes are gone.
+pub async fn purge_attachment_orphan(pool: &PgPool, orphan_id: Uuid) -> anyhow::Result<bool> {
+    let removed = sqlx::query("DELETE FROM school_collect.attachment_orphans WHERE id = $1")
+        .bind(orphan_id)
         .execute(pool)
         .await?
         .rows_affected();
