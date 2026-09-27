@@ -13,10 +13,13 @@ const fieldsEl = document.getElementById("fields");
 const recipeNameInput = document.getElementById("recipe-name");
 const recipeSelect = document.getElementById("recipe-select");
 const previewResultsEl = document.getElementById("preview-results");
+const valuesEl = document.getElementById("values");
+const fillResultsEl = document.getElementById("fill-results");
 
 let picked = null;
 let draftFields = [];
 let fillRecipes = [];
+let valueInputs = [];
 
 function setStatus(message, tone) {
   statusEl.textContent = message;
@@ -60,7 +63,7 @@ async function activeTab() {
   return tab ?? null;
 }
 
-async function runPageCommand(command) {
+async function runPageCommand(command, { allowFailure = false } = {}) {
   const tab = await activeTab();
   if (!tab?.id || !/^https?:/i.test(tab.url ?? "")) {
     throw new Error("http/https 화면에서만 사용할 수 있습니다.");
@@ -78,8 +81,13 @@ async function runPageCommand(command) {
     );
   }
   const result = injection?.[0]?.result;
-  if (!result || result.ok !== true) {
-    throw new Error(result?.reason === "cancelled" ? "선택을 취소했습니다." : "화면 명령이 실패했습니다.");
+  if (!result) {
+    throw new Error("화면 명령이 실패했습니다.");
+  }
+  if (result.ok !== true && !allowFailure) {
+    throw new Error(
+      result.reason === "cancelled" ? "선택을 취소했습니다." : "화면 명령이 실패했습니다.",
+    );
   }
   return result;
 }
@@ -167,6 +175,57 @@ function renderPreview(result) {
   }
 }
 
+/**
+ * 선택한 레시피의 필드마다 값을 입력할 칸을 만듭니다. 값은 저장하지 않고
+ * 실행할 때만 페이지로 보냅니다.
+ */
+function renderValueInputs() {
+  valuesEl.replaceChildren();
+  valueInputs = [];
+
+  const recipe = fillRecipes.find((item) => item.id === recipeSelect.value);
+  if (!recipe) {
+    return;
+  }
+
+  for (const field of recipe.fields ?? []) {
+    const row = document.createElement("label");
+    row.className = "value-row";
+
+    const caption = document.createElement("span");
+    caption.textContent = field.label;
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.autocomplete = "off";
+    input.placeholder = "넣을 값";
+
+    row.append(caption, input);
+    valuesEl.append(row);
+    valueInputs.push(input);
+  }
+}
+
+function renderFillResults(result, failureReason) {
+  fillResultsEl.replaceChildren();
+  for (const field of result.results ?? []) {
+    const item = document.createElement("li");
+    if (failureReason === "locator_not_unique" || failureReason === "unsupported_control") {
+      item.dataset.tone = "error";
+      item.textContent =
+        field.matchCount === 1
+          ? `${field.label}: 입력할 수 없는 칸입니다`
+          : `${field.label}: ${field.matchCount}개 일치`;
+    } else {
+      item.dataset.tone = field.verified ? "ok" : "error";
+      item.textContent = field.verified
+        ? `${field.label}: "${field.previousValue ?? ""}" -> "${field.readBack ?? ""}" 확인`
+        : `${field.label}: 검증 실패("${field.readBack ?? ""}")`;
+    }
+    fillResultsEl.append(item);
+  }
+}
+
 async function refreshFillRecipes() {
   let recipes;
   try {
@@ -192,6 +251,7 @@ async function refreshFillRecipes() {
   } else if (fillRecipes.some((recipe) => recipe.id === previous)) {
     recipeSelect.value = previous;
   }
+  renderValueInputs();
 }
 
 document.getElementById("save").addEventListener("click", async () => {
@@ -341,6 +401,55 @@ document.getElementById("preview").addEventListener("click", async () => {
     setStatus(error.message, "error");
   }
 });
+
+document.getElementById("fill").addEventListener("click", async () => {
+  const recipe = fillRecipes.find((item) => item.id === recipeSelect.value);
+  if (!recipe) {
+    setStatus("실행할 자동입력 레시피를 고르세요.", "error");
+    return;
+  }
+
+  try {
+    const tab = await activeTab();
+    if (!tab?.url || !/^https?:/i.test(tab.url)) {
+      setStatus("http/https 화면에서만 실행할 수 있습니다.", "error");
+      return;
+    }
+    const recipeUrl = new URL(recipe.targetUrl);
+    const tabUrl = new URL(tab.url);
+    if (recipeUrl.origin !== tabUrl.origin) {
+      setStatus(`이 레시피는 ${recipeUrl.origin} 화면용입니다.`, "error");
+      return;
+    }
+
+    const fields = recipe.fields ?? [];
+    const values = fields.map((_, index) => valueInputs[index]?.value ?? "");
+    const result = await runPageCommand({ op: "fill", fields, values }, { allowFailure: true });
+    renderFillResults(result, result.ok === true ? null : result.reason);
+
+    if (result.ok !== true) {
+      setStatus(
+        result.reason === "unsupported_control"
+          ? "입력할 수 없는 칸이 있어 아무것도 입력하지 않았습니다."
+          : "없거나 여러 개 일치하는 필드가 있어 아무것도 입력하지 않았습니다.",
+        "error",
+      );
+      return;
+    }
+
+    const failed = result.results.filter((field) => !field.verified).length;
+    setStatus(
+      failed === 0
+        ? `${result.results.length}개 필드를 입력했습니다. 내용을 확인한 뒤 사이트에서 직접 저장하세요.`
+        : `${failed}개 필드를 확인하지 못했습니다. 화면을 확인하세요.`,
+      failed === 0 ? "ok" : "error",
+    );
+  } catch (error) {
+    setStatus(error.message, "error");
+  }
+});
+
+recipeSelect.addEventListener("change", renderValueInputs);
 
 loadToken().then(refreshFillRecipes);
 renderFields();

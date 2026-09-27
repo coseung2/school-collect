@@ -151,3 +151,14 @@ button.link {
   color: #1f5fbf;
   font-size: 12px;
 }
+
+.value-row {
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
+  font-weight: 400;
+}
+
+.value-row span {
+  font-weight: 600;
+}
