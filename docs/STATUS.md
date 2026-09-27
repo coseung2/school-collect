@@ -31,7 +31,7 @@ PR #24/#25는 열려 있으며 로컬 `feat/personal-automation`은 학교 화�
 | 4. Figma | 시안 승인 | Design System/Product 핵심 UI 승인, Stage 5 기본 token/component mapping | interaction/accessibility detail, Library/Code Connect 후속 |
 | 5. Code DS/AppShell | 완료 (PR #17, `9697363`) | `packages/ui` token/component와 실제 Tauri AppShell, 상태·키보드·wide/narrow 검증 | Figma Library/Code Connect 후속 |
 | 6. Auth/Data/Ops | 구현 중 | Supabase Auth 실로그인 + ES256/JWKS 검증, user/membership provisioning, tenant RBAC, Collect 상태 전이와 version 충돌까지 실제 프로젝트·실제 DB에서 E2E 통과 | R2/NATS/SQLite/backup, 환경 분리, 세션 영속화 |
-| 7. Collect | 구현 중 | PR #19 기본 흐름 통합, 항목·대상·현황 확장은 PR #24 리뷰 대기 | 구성원 초대, 항목/대상 편집, 첨부, offline, 결과 export 및 전체 통합 E2E |
+| 7. Collect | 구현 중 | PR #19 기본 흐름과 PR #24 항목·대상·제출 현황·내 배정·구성원 화면을 통합 | 구성원 초대(S-02), 항목/대상 편집, 첨부, offline, 결과 export 및 전체 통합 E2E |
 
 ## 확인된 원격 상태
 
@@ -135,21 +135,24 @@ Stage 3 미검증 항목:
 - 접근 토큰은 창 메모리에만 보관하고 디스크에 저장하지 않습니다.
 - 검증: 로컬 API(`APP_AUTH_MODE=oidc`)와 dev 서버를 띄운 상태에서 실제 브라우저로 전체 흐름을 확인했습니다. 검증용 계정과 데이터는 삭제했습니다.
 
-## 통합 전 기능의 검증 기록
+## 제품 틀과 통합 기록
 
-### 학교업무 확장: S-01
+### 학교업무 제품 틀 (S-01)
 
-- PR #24(`feat/collect-mvp-frame`, `1dd656f`)는 항목·대상 저장, 제출 현황, 내 배정, 구성원 화면을 추가합니다.
-- 브랜치 문서에는 실제 Supabase/PostgreSQL E2E와 로컬 UI에서 수합 생성 -> 배포 -> 초안 -> 제출 -> 현황 확인을 수행했다고 기록돼 있습니다. 이번에는 이 실행을 재검증하지 않았습니다.
-- 교사 초대 경로·첨부·export·offline 초안은 아직 없습니다. develop 통합과 통합 SHA 검증 뒤 S-02를 진행합니다.
+역할·객체·화면·API 표면은 [MVP_SCOPE.md](MVP_SCOPE.md)에 고정했습니다. PR #24(`feat/collect-mvp-frame`)로 develop에 통합했습니다.
 
-### 개인 바로가기: P-01
+- 화면: 홈, 자료수합(+상세), 내 제출(+제출 작성), 구성원, 설정. 해시 라우팅과 권한별 메뉴 노출을 포함합니다.
+- 서버: 수합 생성 시 항목(`collect_items`)과 대상(`collect_assignments`)을 한 transaction으로 기록하고, 배포가 상태를 `published`로 바꾸며, 제출 현황(`/v1/collects/{id}/status`)과 내 배정(`/v1/assignments`), 구성원(`/v1/members`)을 제공합니다.
+- 검증: `services/api/tests/collect_flow_e2e.rs`가 실제 Supabase 로그인과 실제 PostgreSQL에서 항목 저장, 기본 대상 생성, 제출 현황 수치, 내 배정 목록, 잘못된 항목 key 거부를 함께 확인합니다. 로컬 Docker 스택에서는 브라우저로 홈 → 수합 생성(항목 2개) → 배포 → 제출 작성(임시 저장 버전 1, 제출) → 관리자 현황 `1/1`, 미제출 없음까지 확인했습니다.
+- 남은 위험: 구성원 초대 경로가 아직 없어서 관리자가 교사를 자기 학교에 추가할 수 없습니다. 교사 화면은 membership이 있는 사용자에게만 열리므로, 초대 기능(S-02)이 다음 슬라이스입니다.
 
-- PR #25(`feat/work-automation-shortcuts`, `fc944b9`)는 이름/URL 기반 로컬 바로가기와 파일 복구 구현입니다.
-- 로컬 `feat/personal-automation` `c31b9d9`에는 로그인 없는 `#automation` 화면과 `open_automation_recipe(recipeId)` 경계가 있습니다. native가 저장된 URL을 다시 읽어 실행합니다.
-- 로컬 브랜치 문서에는 native 단위 테스트 15개, fmt/clippy, typecheck/build, foundation 21개 통과 기록이 있습니다. 이번 재실행 결과는 아닙니다. 실제 Tauri 창 등록·열기 smoke는 해당 기록에서도 미실행입니다.
-- 현재 TSV 레시피는 OS 사용자 단위이며 학교 계정과 무관합니다. 브라우저 확장·DOM 입력·행렬 입력·감시는 미구현입니다.
-- URL 정규화·opener 실행·파일 권한/용량 제한 등 남은 보강은 [PERSONAL_PLAN.md](PERSONAL_PLAN.md)의 P-01을 따릅니다.
+### 개인 바로가기 (P-01)
+
+- PR #25(`feat/work-automation-shortcuts`)로 develop에 통합했습니다(`11a0af0`).
+- 로그인·학교 membership 없이 `업무 자동화` 화면을 열고, 렌더러는 `open_automation_recipe(recipeId)`만 호출합니다. 열 주소는 native가 저장된 레시피에서 다시 읽어 검증합니다.
+- `url` crate 검증, 브라우저 열기 분리 실행, 레시피 100개·격리 512 KiB 상한, Unix 0600 권한, 삭제 확인·실행 취소·`aria-label`을 포함합니다.
+- 실제 데스크톱 창에서 로그인 없이 화면 열기 → 등록(92바이트 기록) → 열기 → 삭제(0바이트) → 실행 취소(92바이트 복원) → 앱 재시작 후 보존까지 확인했고, 검증용 레시피는 삭제했습니다. 상세는 [AUTOMATION_DESIGN.md](AUTOMATION_DESIGN.md)에 있습니다.
+- 남은 범위: 브라우저 확장·현재 화면 등록(P-02), DOM 입력(P-03 이상). 레시피는 아직 OS 사용자 단위입니다.
 
 ## 배포 기반
 

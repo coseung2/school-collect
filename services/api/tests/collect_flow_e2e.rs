@@ -308,7 +308,14 @@ async fn authenticated_collect_flow_end_to_end() {
             "/v1/collects",
             Some(&alpha.access_token),
             Some(&alpha_tenant),
-            Some(json!({ "title": "E2E 수합", "description": "e2e" })),
+            Some(json!({
+                "title": "E2E 수합",
+                "description": "e2e",
+                "items": [
+                    { "key": "plan", "label": "계획서", "required": true },
+                    { "key": "budget", "label": "예산안", "required": false }
+                ]
+            })),
         )
         .await;
         if status != StatusCode::CREATED {
@@ -317,6 +324,49 @@ async fn authenticated_collect_flow_end_to_end() {
         let collect_id = draft["id"].as_str().unwrap_or_default().to_owned();
         if draft["status"] != "draft" {
             return Err("a new collect must start as draft".to_owned());
+        }
+
+        // The draft carries the item definitions the submissions must answer,
+        // and the default target list covers the school's members.
+        let (status, detail) = call(
+            &app,
+            "GET",
+            &format!("/v1/collects/{collect_id}"),
+            Some(&alpha.access_token),
+            Some(&alpha_tenant),
+            None,
+        )
+        .await;
+        if status != StatusCode::OK {
+            return Err(format!("collect detail failed: {status} {detail}"));
+        }
+        if detail["items"].as_array().map(Vec::len) != Some(2) {
+            return Err(format!("collect items were not stored: {detail}"));
+        }
+        if detail["items"][0]["key"] != "plan" || detail["items"][0]["required"] != true {
+            return Err(format!("item definition came back wrong: {detail}"));
+        }
+        if detail["progress"]["assigned"].as_i64().unwrap_or_default() < 1 {
+            return Err(format!("the target list was not created: {detail}"));
+        }
+
+        // Item keys become submission payload keys, so they are validated.
+        let (status, invalid) = call(
+            &app,
+            "POST",
+            "/v1/collects",
+            Some(&alpha.access_token),
+            Some(&alpha_tenant),
+            Some(json!({
+                "title": "invalid items",
+                "items": [{ "key": "Not Valid", "label": "x" }]
+            })),
+        )
+        .await;
+        if status != StatusCode::BAD_REQUEST || invalid["code"] != "invalid_item_key" {
+            return Err(format!(
+                "an invalid item key was accepted: {status} {invalid}"
+            ));
         }
 
         // Drafts cannot be edited before publication.
@@ -346,6 +396,48 @@ async fn authenticated_collect_flow_end_to_end() {
         .await;
         if status != StatusCode::OK || published["status"] != "published" {
             return Err(format!("publish failed: {status} {published}"));
+        }
+
+        // The manager view answers "who still owes this collect".
+        let (status, progress) = call(
+            &app,
+            "GET",
+            &format!("/v1/collects/{collect_id}/status"),
+            Some(&alpha.access_token),
+            Some(&alpha_tenant),
+            None,
+        )
+        .await;
+        if status != StatusCode::OK
+            || progress["assigned"].as_i64().unwrap_or_default() < 1
+            || progress["submitted"].as_i64().unwrap_or_default() != 0
+        {
+            return Err(format!(
+                "status after publish was wrong: {status} {progress}"
+            ));
+        }
+        if progress["rows"][0]["assignmentStatus"] != "assigned" {
+            return Err(format!("assignment state was wrong: {progress}"));
+        }
+
+        let (status, assignments) = call(
+            &app,
+            "GET",
+            "/v1/assignments",
+            Some(&alpha.access_token),
+            Some(&alpha_tenant),
+            None,
+        )
+        .await;
+        if status != StatusCode::OK
+            || assignments["assignments"].as_array().map(Vec::len) != Some(1)
+        {
+            return Err(format!("my assignments were wrong: {status} {assignments}"));
+        }
+        if assignments["assignments"][0]["collectId"] != collect_id.as_str() {
+            return Err(format!(
+                "assignment did not reference the collect: {assignments}"
+            ));
         }
 
         let (status, saved) = call(
@@ -389,6 +481,24 @@ async fn authenticated_collect_flow_end_to_end() {
         .await;
         if status != StatusCode::OK || submitted["status"] != "submitted" {
             return Err(format!("submit failed: {status} {submitted}"));
+        }
+
+        let (status, progress) = call(
+            &app,
+            "GET",
+            &format!("/v1/collects/{collect_id}/status"),
+            Some(&alpha.access_token),
+            Some(&alpha_tenant),
+            None,
+        )
+        .await;
+        if status != StatusCode::OK || progress["submitted"].as_i64().unwrap_or_default() != 1 {
+            return Err(format!(
+                "the submitted count did not move: {status} {progress}"
+            ));
+        }
+        if progress["rows"][0]["submissionStatus"] != "submitted" {
+            return Err(format!("submission state was wrong: {progress}"));
         }
 
         let (status, _) = call(

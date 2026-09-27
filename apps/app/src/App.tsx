@@ -1,111 +1,89 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   AppShell,
   Button,
-  Card,
-  EmptyState,
   ErrorState,
-  FormField,
-  ListRow,
-  ListSurface,
   LoadingState,
+  OfflineState,
   PermissionState,
-  Status,
   type NavigationItem,
-  type StatusTone,
 } from "@school-collect/ui";
+import { ApiError, fetchSession, type SessionInfo } from "./api";
+import { canManage, messageOf, useOnline } from "./helpers";
+import { AssignmentPage } from "./pages/AssignmentPage";
+import { AssignmentsPage } from "./pages/AssignmentsPage";
+import { CreateSchoolCard, SignInView } from "./pages/AuthViews";
+import { AutomationPage } from "./pages/AutomationPage";
+import { CollectDetailPage } from "./pages/CollectDetailPage";
+import { CollectsPage } from "./pages/CollectsPage";
+import { MembersPage } from "./pages/MembersPage";
+import { OverviewPage } from "./pages/OverviewPage";
+import { SettingsPage } from "./pages/SettingsPage";
 import {
-  ApiError,
-  closeCollect,
-  createCollect,
-  createTenant,
-  fetchCollect,
-  fetchSession,
-  identityConfigured,
-  listCollects,
-  publishCollect,
-  saveDraft,
-  sendSubmission,
-  signInWithPassword,
-  signUpWithPassword,
-  type Collect,
-  type CollectDetail,
-  type Membership,
-  type SessionInfo,
-} from "./api";
-import {
-  automationErrorMessage,
-  createShortcutRecipe,
-  deleteAutomationRecipe,
-  describeAutomationTarget,
-  listAutomationRecipes,
-  openAutomationRecipe,
-  saveAutomationRecipe,
-  type AutomationRecipe,
-} from "./automation";
+  navIdFor,
+  navigate,
+  parseHash,
+  routeNeedsMembership,
+  type AppRoute,
+} from "./routing";
 
-type RouteId = "overview" | "collects" | "automation" | "settings";
-
-/**
- * 로그인과 학교 membership 없이 쓸 수 있는 개인기능 화면입니다.
- * 학교 화면은 서버 세션을 요구하고, 이 화면들은 로그인 전에도 동작합니다.
- */
-const personalRoutes: RouteId[] = ["automation"];
-
-function routeNeedsSchoolSession(route: RouteId): boolean {
-  return !personalRoutes.includes(route);
-}
-
-const navigation: NavigationItem[] = [
-  { id: "overview", icon: "activity", label: "홈", group: "업무" },
-  { id: "collects", icon: "briefcase", label: "자료수합", group: "업무" },
-  { id: "automation", icon: "sliders", label: "업무 자동화", group: "도구" },
-  { id: "settings", icon: "settings", label: "설정", group: "도구" },
-];
-
-const statusTone: Record<string, StatusTone> = {
-  draft: "neutral",
-  published: "info",
-  closed: "success",
-  submitted: "success",
-  assigned: "neutral",
-  started: "info",
-};
-
-const statusLabel: Record<string, string> = {
-  draft: "작성 중",
-  published: "진행 중",
-  closed: "마감",
-  submitted: "제출 완료",
-};
-
-function toneOf(value: string | null): StatusTone {
-  if (!value) {
-    return "neutral";
+type NavPage = Extract<
+  AppRoute,
+  {
+    page:
+      | "overview"
+      | "collects"
+      | "assignments"
+      | "members"
+      | "automation"
+      | "settings";
   }
-  return statusTone[value] ?? "neutral";
-}
+>["page"];
 
-function labelOf(value: string | null): string {
-  if (!value) {
-    return "-";
-  }
-  return statusLabel[value] ?? value;
-}
-
-function canManage(role: string): boolean {
-  return role === "admin" || role === "coordinator";
-}
-
-function messageOf(error: unknown): string {
-  return error instanceof ApiError ? error.message : "알 수 없는 오류가 발생했습니다.";
-}
+const routeMeta: Record<
+  AppRoute["page"],
+  { title: string; description: string }
+> = {
+  overview: {
+    title: "홈",
+    description: "제출할 수합과 진행 중인 수합, 마감 임박을 한눈에 봅니다.",
+  },
+  collects: {
+    title: "자료수합",
+    description: "수합을 만들고 상태를 걸러 본 뒤 상세에서 배포하거나 마감합니다.",
+  },
+  collect: {
+    title: "수합 상세",
+    description: "항목과 제출 현황을 보고, 상태에 맞는 배포·마감을 합니다.",
+  },
+  assignments: {
+    title: "내 제출",
+    description: "배정된 수합과 내 제출 상태를 확인합니다.",
+  },
+  assignment: {
+    title: "제출 작성",
+    description: "항목을 작성하고 임시 저장한 뒤 제출합니다.",
+  },
+  members: {
+    title: "구성원",
+    description: "이 학교의 구성원과 역할을 봅니다.",
+  },
+  automation: {
+    title: "업무 자동화",
+    description: "자주 쓰는 업무 화면을 사용자 정의 버튼으로 등록합니다.",
+  },
+  settings: {
+    title: "설정",
+    description: "연결 상태와 계정을 확인합니다.",
+  },
+};
 
 export default function App() {
+  const online = useOnline();
   const [token, setToken] = useState<string | null>(null);
   const [session, setSession] = useState<SessionInfo | null>(null);
   const [activeTenantId, setActiveTenantId] = useState<string | null>(null);
-  const [activeRoute, setActiveRoute] = useState<RouteId>("overview");
+  const [route, setRoute] = useState<AppRoute>(() => parseHash(window.location.hash));
   const [bootError, setBootError] = useState<string | null>(null);
   const [signInOpen, setSignInOpen] = useState(false);
 
@@ -114,10 +92,22 @@ export default function App() {
     setSession(null);
     setActiveTenantId(null);
     setBootError(null);
-    // 로그인 없이 쓸 수 있는 화면에 머무르고, 학교 화면에서만 홈으로 돌아갑니다.
-    setActiveRoute((current) =>
-      routeNeedsSchoolSession(current) ? "overview" : current,
-    );
+    setSignInOpen(false);
+    // 로그인 없이 쓸 수 있는 화면에 머무르고, 멤버십이 필요한 화면에서만 홈으로 돌아갑니다.
+    if (routeNeedsMembership(parseHash(window.location.hash))) {
+      navigate({ page: "overview" });
+    }
+  }, []);
+
+  useEffect(() => {
+    function onHashChange() {
+      setRoute(parseHash(window.location.hash));
+    }
+    if (!window.location.hash) {
+      window.location.hash = "#overview";
+    }
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
   useEffect(() => {
@@ -144,18 +134,191 @@ export default function App() {
     };
   }, [session, signOut, token]);
 
-  const activeTenant =
-    session?.memberships.find((item) => item.tenantId === activeTenantId) ?? null;
+  const activeTenant = useMemo(
+    () =>
+      session?.memberships.find((item) => item.tenantId === activeTenantId) ??
+      null,
+    [activeTenantId, session],
+  );
 
-  const routeMeta: Record<RouteId, { title: string; description: string }> = {
-    overview: { title: "홈", description: "우리 학교의 수합 업무를 한눈에 봅니다." },
-    collects: { title: "자료수합", description: "수합을 만들고, 작성하고, 마감합니다." },
-    automation: {
-      title: "업무 자동화",
-      description: "자주 쓰는 업무 화면을 사용자 정의 버튼으로 등록합니다.",
-    },
-    settings: { title: "설정", description: "연결 상태와 계정을 확인합니다." },
-  };
+  const navigation = useMemo<NavigationItem[]>(() => {
+    const manage = canManage(activeTenant?.role ?? "");
+    // 로그인 전에는 전체 메뉴를 보여주고, 로그인 후에는 역할에 맞게 좁힙니다.
+    const showManageItems = activeTenant === null || manage;
+    const items: NavigationItem[] = [
+      { id: "overview", icon: "activity", label: "홈", group: "업무" },
+    ];
+    // Contributor navigation hides collect/member IA. Server authorization
+    // remains the source of truth if a hash route is opened directly.
+    if (showManageItems) {
+      items.push({
+        id: "collects",
+        icon: "briefcase",
+        label: "자료수합",
+        group: "업무",
+      });
+    }
+    items.push({
+      id: "assignments",
+      icon: "inbox",
+      label: "내 제출",
+      group: "업무",
+    });
+    if (showManageItems) {
+      items.push({
+        id: "members",
+        icon: "school",
+        label: "구성원",
+        group: "업무",
+      });
+    }
+    items.push({
+      id: "automation",
+      icon: "sliders",
+      label: "업무 자동화",
+      group: "도구",
+    });
+    items.push({
+      id: "settings",
+      icon: "settings",
+      label: "설정",
+      group: "도구",
+    });
+    return items;
+  }, [activeTenant]);
+
+  function openSignIn() {
+    setSignInOpen(true);
+  }
+
+  function localContent(): ReactNode {
+    switch (route.page) {
+      case "automation":
+        return <AutomationPage />;
+      case "settings":
+        return (
+          <SettingsPage
+            onSignIn={openSignIn}
+            session={session}
+            tenant={activeTenant}
+            token={token}
+          />
+        );
+      default:
+        // 로컬 라우트를 추가하면 routing.ts의 membershipRoutes와 이 분기를 함께 갱신합니다.
+        return null;
+    }
+  }
+
+  function routeContent(): ReactNode {
+    if (!routeNeedsMembership(route)) {
+      return localContent();
+    }
+
+    if (!token) {
+      return (
+        <div className="app-page">
+          <PermissionState
+            action={<Button onClick={openSignIn}>로그인</Button>}
+            description="이 화면은 학교 구성원으로 로그인한 뒤에 쓸 수 있습니다. 로그인 없이 쓸 수 있는 화면은 왼쪽 메뉴에 있습니다."
+            title="로그인이 필요합니다"
+          />
+        </div>
+      );
+    }
+
+    if (bootError) {
+      return (
+        <div className="app-page">
+          <ErrorState
+            action={
+              <Button
+                onClick={() => {
+                  signOut();
+                  openSignIn();
+                }}
+                variant="secondary"
+              >
+                다시 로그인
+              </Button>
+            }
+            description={bootError}
+            title="로그인 정보를 확인하지 못했습니다"
+          />
+        </div>
+      );
+    }
+
+    if (!session) {
+      return (
+        <div className="app-page">
+          <LoadingState description="계정 정보를 불러오고 있습니다." title="확인 중" />
+        </div>
+      );
+    }
+
+    if (!activeTenant) {
+      return (
+        <div className="app-page app-page--narrow">
+          <CreateSchoolCard
+            onCreated={(membership) => {
+              setSession({
+                ...session,
+                memberships: [...session.memberships, membership],
+              });
+              setActiveTenantId(membership.tenantId);
+            }}
+            token={token}
+          />
+        </div>
+      );
+    }
+
+    return (
+      <>
+        {route.page === "overview" ? (
+          <OverviewPage
+            role={activeTenant.role}
+            tenantId={activeTenant.tenantId}
+            token={token}
+          />
+        ) : null}
+        {route.page === "collects" ? (
+          <CollectsPage
+            role={activeTenant.role}
+            tenantId={activeTenant.tenantId}
+            token={token}
+          />
+        ) : null}
+        {route.page === "collect" ? (
+          <CollectDetailPage
+            collectId={route.id}
+            role={activeTenant.role}
+            tenantId={activeTenant.tenantId}
+            token={token}
+          />
+        ) : null}
+        {route.page === "assignments" ? (
+          <AssignmentsPage tenantId={activeTenant.tenantId} token={token} />
+        ) : null}
+        {route.page === "assignment" ? (
+          <AssignmentPage
+            collectId={route.id}
+            role={activeTenant.role}
+            tenantId={activeTenant.tenantId}
+            token={token}
+          />
+        ) : null}
+        {route.page === "members" ? (
+          <MembersPage
+            role={activeTenant.role}
+            tenantId={activeTenant.tenantId}
+            token={token}
+          />
+        ) : null}
+      </>
+    );
+  }
 
   if (signInOpen) {
     return (
@@ -169,76 +332,26 @@ export default function App() {
     );
   }
 
-  // 학교 계정은 있지만 아직 학교가 없는 사용자에게는 셸 대신 등록 화면을 보여줍니다.
-  if (token && session && !activeTenant) {
-    return (
-      <CreateSchoolView
-        onCreated={(membership) => {
-          setSession({
-            ...session,
-            memberships: [...session.memberships, membership],
-          });
-          setActiveTenantId(membership.tenantId);
-        }}
-        token={token}
-      />
-    );
-  }
-
-  function schoolContent(token: string): React.ReactNode {
-    if (bootError) {
-      return (
-        <ErrorState
-          action={
-            <Button onClick={signOut} variant="secondary">
-              다시 로그인
-            </Button>
-          }
-          description={bootError}
-          title="로그인 정보를 확인하지 못했습니다"
-        />
-      );
-    }
-    if (!session || !activeTenant) {
-      return <LoadingState description="계정 정보를 불러오고 있습니다." title="확인 중" />;
-    }
-    return activeRoute === "settings" ? (
-      <SettingsView session={session} tenant={activeTenant} token={token} />
-    ) : (
-      <CollectsView
-        role={activeTenant.role}
-        tenantId={activeTenant.tenantId}
-        token={token}
-        variant={activeRoute === "overview" ? "overview" : "full"}
-      />
-    );
-  }
-
-  function content(): React.ReactNode {
-    if (!routeNeedsSchoolSession(activeRoute)) {
-      return <AutomationView />;
-    }
-    if (!token) {
-      return (
-        <PermissionState
-          action={<Button onClick={() => setSignInOpen(true)}>로그인</Button>}
-          description="이 화면은 학교 구성원으로 로그인한 뒤에 쓸 수 있습니다. 로그인 없이 쓸 수 있는 화면은 왼쪽 메뉴에 있습니다."
-          title="로그인이 필요합니다"
-        />
-      );
-    }
-    return schoolContent(token);
-  }
-
-  const meta = routeMeta[activeRoute];
+  const meta = routeMeta[route.page];
 
   return (
     <AppShell
-      activeNavigationId={activeRoute}
+      activeNavigationId={navIdFor(route)}
+      banner={
+        online ? null : (
+          <div className="app-offline-banner">
+            <OfflineState
+              className="app-offline-banner__state"
+              description="연결이 복구되면 다시 불러올 수 있습니다. 지금은 서버에 저장하거나 제출할 수 없습니다."
+              title="오프라인입니다"
+            />
+          </div>
+        )
+      }
       description={meta.description}
       eyebrow={activeTenant?.tenantName}
       navigation={navigation}
-      onNavigationChange={(id) => setActiveRoute(id as RouteId)}
+      onNavigationChange={(id) => navigate({ page: id as NavPage })}
       sidebarFooter={
         <div className="app-sidebar-footer">
           <p className="app-sidebar-footer__name">
@@ -253,7 +366,7 @@ export default function App() {
               로그아웃
             </Button>
           ) : (
-            <Button onClick={() => setSignInOpen(true)} size="small" variant="secondary">
+            <Button onClick={openSignIn} size="small" variant="secondary">
               로그인
             </Button>
           )}
@@ -261,918 +374,7 @@ export default function App() {
       }
       title={meta.title}
     >
-      {content()}
+      {routeContent()}
     </AppShell>
-  );
-}
-
-function Standalone({ children }: { children: React.ReactNode }) {
-  return (
-    <main className="app-standalone">
-      <div className="app-standalone__panel">{children}</div>
-    </main>
-  );
-}
-
-function SignInView({
-  onBack,
-  onSignedIn,
-}: {
-  onBack?: () => void;
-  onSignedIn: (token: string) => void;
-}) {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-
-  async function submit(event: React.FormEvent) {
-    event.preventDefault();
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
-      const accessToken = await signInWithPassword(email.trim(), password);
-      onSignedIn(accessToken);
-    } catch (caught) {
-      setError(messageOf(caught));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function createAccount() {
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
-      const needsConfirmation = await signUpWithPassword(email.trim(), password);
-      setNotice(
-        needsConfirmation
-          ? "가입 요청을 보냈습니다. 메일함에서 주소를 확인한 뒤 로그인하세요."
-          : "계정이 만들어졌습니다. 이제 로그인할 수 있습니다.",
-      );
-    } catch (caught) {
-      setError(messageOf(caught));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <Standalone>
-      <Card className="app-signin">
-        {onBack ? (
-          <div className="app-detail-head">
-            <Button onClick={onBack} size="small" variant="quiet">
-              ← 돌아가기
-            </Button>
-          </div>
-        ) : null}
-        <div>
-          <p className="app-card-eyebrow">SCHOOL COLLECT</p>
-          <h1>로그인</h1>
-          <p className="app-card-description">
-            학교 계정으로 로그인하면 우리 학교의 수합 업무를 볼 수 있습니다.
-            로그인 없이 쓰는 업무 자동화는 왼쪽 메뉴에서 열 수 있습니다.
-          </p>
-        </div>
-        {!identityConfigured ? (
-          <ErrorState
-            description="빌드에 VITE_SUPABASE_URL 과 VITE_SUPABASE_ANON_KEY 가 없습니다."
-            title="로그인 설정이 없습니다"
-          />
-        ) : (
-          <form className="app-form" onSubmit={submit}>
-            <FormField htmlFor="email" label="이메일" required>
-              <input
-                autoComplete="username"
-                id="email"
-                onChange={(event) => setEmail(event.target.value)}
-                required
-                type="email"
-                value={email}
-              />
-            </FormField>
-            <FormField htmlFor="password" label="비밀번호" required>
-              <input
-                autoComplete="current-password"
-                id="password"
-                minLength={6}
-                onChange={(event) => setPassword(event.target.value)}
-                required
-                type="password"
-                value={password}
-              />
-            </FormField>
-            {error ? (
-              <p className="app-form__error" role="alert">
-                {error}
-              </p>
-            ) : null}
-            {notice ? <p className="app-form__notice">{notice}</p> : null}
-            <div className="app-form__actions">
-              <Button loading={busy} type="submit">
-                로그인
-              </Button>
-              <Button
-                disabled={busy || !email || !password}
-                onClick={createAccount}
-                type="button"
-                variant="secondary"
-              >
-                계정 만들기
-              </Button>
-            </div>
-          </form>
-        )}
-      </Card>
-    </Standalone>
-  );
-}
-
-function CreateSchoolView({
-  token,
-  onCreated,
-}: {
-  token: string;
-  onCreated: (membership: Membership) => void;
-}) {
-  const [name, setName] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function submit(event: React.FormEvent) {
-    event.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      onCreated(await createTenant(token, name.trim()));
-    } catch (caught) {
-      setError(messageOf(caught));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <Standalone>
-      <Card className="app-signin">
-        <div>
-          <p className="app-card-eyebrow">처음 설정</p>
-          <h1>학교 등록</h1>
-          <p className="app-card-description">
-            아직 소속된 학교가 없습니다. 학교를 만들면 관리자 권한으로 시작합니다.
-          </p>
-        </div>
-        <form className="app-form" onSubmit={submit}>
-          <FormField htmlFor="school-name" label="학교 이름" required>
-            <input
-              id="school-name"
-              onChange={(event) => setName(event.target.value)}
-              required
-              value={name}
-            />
-          </FormField>
-          {error ? (
-            <p className="app-form__error" role="alert">
-              {error}
-            </p>
-          ) : null}
-          <div className="app-form__actions">
-            <Button loading={busy} type="submit">
-              학교 만들기
-            </Button>
-          </div>
-        </form>
-      </Card>
-    </Standalone>
-  );
-}
-
-function CollectsView({
-  token,
-  tenantId,
-  role,
-  variant,
-}: {
-  token: string;
-  tenantId: string;
-  role: string;
-  variant: "overview" | "full";
-}) {
-  const [collects, setCollects] = useState<Collect[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [openId, setOpenId] = useState<string | null>(null);
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  const load = useCallback(async () => {
-    try {
-      const value = await listCollects(token, tenantId);
-      setCollects(value.collects);
-      setError(null);
-    } catch (caught) {
-      setError(messageOf(caught));
-    }
-  }, [tenantId, token]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  async function run(action: () => Promise<unknown>) {
-    setBusy(true);
-    try {
-      await action();
-      await load();
-      setError(null);
-    } catch (caught) {
-      setError(messageOf(caught));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  if (openId) {
-    return (
-      <CollectDetailView
-        collectId={openId}
-        onBack={() => setOpenId(null)}
-        role={role}
-        tenantId={tenantId}
-        token={token}
-      />
-    );
-  }
-
-  const visible = collects ?? [];
-
-  return (
-    <div className="app-page">
-      {error ? <ErrorState description={error} title="요청을 처리하지 못했습니다" /> : null}
-
-      {canManage(role) && variant === "full" ? (
-        <Card className="app-create">
-          <h2>새 수합 만들기</h2>
-          <form
-            className="app-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void run(async () => {
-                await createCollect(token, tenantId, title.trim(), description.trim());
-                setTitle("");
-                setDescription("");
-              });
-            }}
-          >
-            <FormField htmlFor="collect-title" label="제목" required>
-              <input
-                id="collect-title"
-                onChange={(event) => setTitle(event.target.value)}
-                required
-                value={title}
-              />
-            </FormField>
-            <FormField htmlFor="collect-description" label="설명">
-              <textarea
-                id="collect-description"
-                onChange={(event) => setDescription(event.target.value)}
-                rows={3}
-                value={description}
-              />
-            </FormField>
-            <div className="app-form__actions">
-              <Button loading={busy} type="submit">
-                초안 만들기
-              </Button>
-            </div>
-          </form>
-        </Card>
-      ) : null}
-
-      <section className="app-section">
-        <div className="app-section-heading">
-          <h2>{variant === "overview" ? "진행 중인 수합" : "수합 목록"}</h2>
-          <Button onClick={() => void load()} size="small" variant="quiet">
-            새로고침
-          </Button>
-        </div>
-        {collects === null ? (
-          <LoadingState description="수합 목록을 불러오고 있습니다." title="불러오는 중" />
-        ) : visible.length === 0 ? (
-          <EmptyState
-            description={
-              canManage(role)
-                ? "위에서 첫 수합을 만들면 여기에 표시됩니다."
-                : "담당자가 수합을 배포하면 여기에 표시됩니다."
-            }
-            title="아직 수합이 없습니다"
-          />
-        ) : (
-          <ListSurface>
-            {visible.map((collect) => (
-              <ListRow
-                action={
-                  <div className="app-row-actions">
-                    <Button
-                      onClick={() => setOpenId(collect.id)}
-                      size="small"
-                      variant="secondary"
-                    >
-                      열기
-                    </Button>
-                    {canManage(role) && collect.status === "draft" ? (
-                      <Button
-                        disabled={busy}
-                        onClick={() =>
-                          void run(() => publishCollect(token, tenantId, collect.id))
-                        }
-                        size="small"
-                      >
-                        배포
-                      </Button>
-                    ) : null}
-                    {canManage(role) && collect.status === "published" ? (
-                      <Button
-                        disabled={busy}
-                        onClick={() =>
-                          void run(() => closeCollect(token, tenantId, collect.id))
-                        }
-                        size="small"
-                        variant="quiet"
-                      >
-                        마감
-                      </Button>
-                    ) : null}
-                  </div>
-                }
-                description={
-                  collect.dueAt
-                    ? `마감 ${new Date(collect.dueAt).toLocaleDateString("ko-KR")}`
-                    : undefined
-                }
-                meta={
-                  collect.submissionStatus ? (
-                    <Status tone={toneOf(collect.submissionStatus)}>
-                      내 제출 {labelOf(collect.submissionStatus)}
-                    </Status>
-                  ) : undefined
-                }
-                status={
-                  <Status tone={toneOf(collect.status)}>
-                    {labelOf(collect.status)}
-                  </Status>
-                }
-                title={collect.title}
-              />
-            ))}
-          </ListSurface>
-        )}
-      </section>
-    </div>
-  );
-}
-
-function CollectDetailView({
-  token,
-  tenantId,
-  role,
-  collectId,
-  onBack,
-}: {
-  token: string;
-  tenantId: string;
-  role: string;
-  collectId: string;
-  onBack: () => void;
-}) {
-  const [detail, setDetail] = useState<CollectDetail | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [note, setNote] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [saved, setSaved] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    try {
-      const value = await fetchCollect(token, tenantId, collectId);
-      setDetail(value);
-      setNote(typeof value.submission?.payload?.note === "string" ? value.submission.payload.note : "");
-      setError(null);
-    } catch (caught) {
-      setError(messageOf(caught));
-    }
-  }, [collectId, tenantId, token]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  if (error && !detail) {
-    return (
-      <div className="app-page">
-        <ErrorState
-          action={
-            <Button onClick={onBack} variant="secondary">
-              목록으로
-            </Button>
-          }
-          description={error}
-          title="수합을 열지 못했습니다"
-        />
-      </div>
-    );
-  }
-
-  if (!detail) {
-    return (
-      <div className="app-page">
-        <LoadingState description="수합을 불러오고 있습니다." title="불러오는 중" />
-      </div>
-    );
-  }
-
-  const submission = detail.submission;
-  const editable = detail.status === "published" && submission?.status !== "submitted";
-
-  async function persist(next: () => Promise<unknown>, message: string) {
-    setBusy(true);
-    setSaved(null);
-    try {
-      await next();
-      await load();
-      setError(null);
-      setSaved(message);
-    } catch (caught) {
-      setError(messageOf(caught));
-      if (caught instanceof ApiError && caught.code === "version_conflict") {
-        await load();
-      }
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="app-page">
-      <div className="app-detail-head">
-        <Button onClick={onBack} size="small" variant="quiet">
-          ← 목록
-        </Button>
-        <Status tone={toneOf(detail.status)}>{labelOf(detail.status)}</Status>
-      </div>
-
-      <Card>
-        <h2>{detail.title}</h2>
-        {detail.description ? (
-          <p className="app-card-description">{detail.description}</p>
-        ) : null}
-        <dl className="app-meta">
-          <div>
-            <dt>수합 버전</dt>
-            <dd>{detail.version}</dd>
-          </div>
-          <div>
-            <dt>내 제출</dt>
-            <dd>{labelOf(submission?.status ?? null)}</dd>
-          </div>
-        </dl>
-        {canManage(role) && detail.status === "published" ? (
-          <Button
-            disabled={busy}
-            onClick={() =>
-              void persist(
-                () => closeCollect(token, tenantId, detail.id),
-                "수합을 마감했습니다.",
-              )
-            }
-            variant="secondary"
-          >
-            마감하기
-          </Button>
-        ) : null}
-      </Card>
-
-      <Card>
-        <h2>내 제출 내용</h2>
-        {error ? <ErrorState description={error} title="저장하지 못했습니다" /> : null}
-        {saved ? <p className="app-form__notice">{saved}</p> : null}
-        {!editable ? (
-          <p className="app-card-description">
-            {submission?.status === "submitted"
-              ? "제출이 완료되어 더 이상 수정할 수 없습니다."
-              : "수합이 진행 중일 때만 작성할 수 있습니다."}
-          </p>
-        ) : null}
-        <FormField
-          hint="서버가 버전을 확인하므로 다른 기기에서 동시에 저장하면 충돌로 알려줍니다."
-          htmlFor="submission-note"
-          label="내용"
-        >
-          <textarea
-            disabled={!editable}
-            id="submission-note"
-            onChange={(event) => setNote(event.target.value)}
-            rows={6}
-            value={note}
-          />
-        </FormField>
-        <div className="app-form__actions">
-          <Button
-            disabled={!editable || busy}
-            onClick={() =>
-              void persist(
-                () =>
-                  saveDraft(token, tenantId, detail.id, submission?.version ?? 0, {
-                    note,
-                  }),
-                "초안을 저장했습니다.",
-              )
-            }
-          >
-            초안 저장
-          </Button>
-          <Button
-            disabled={!editable || busy || !submission}
-            onClick={() =>
-              void persist(
-                () => sendSubmission(token, tenantId, detail.id),
-                "제출했습니다.",
-              )
-            }
-            variant="secondary"
-          >
-            제출
-          </Button>
-        </div>
-      </Card>
-    </div>
-  );
-}
-
-function AutomationView() {
-  const [recipes, setRecipes] = useState<AutomationRecipe[] | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [name, setName] = useState("");
-  const [targetUrl, setTargetUrl] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [listError, setListError] = useState<string | null>(null);
-  const [listNotice, setListNotice] = useState<string | null>(null);
-  const [undoRecipe, setUndoRecipe] = useState<AutomationRecipe | null>(null);
-  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      setRecipes(await listAutomationRecipes());
-      setLoadError(null);
-    } catch (caught) {
-      setRecipes(null);
-      setLoadError(automationErrorMessage(caught));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  async function create(event: React.FormEvent) {
-    event.preventDefault();
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
-      const next = await saveAutomationRecipe(createShortcutRecipe(name, targetUrl));
-      setRecipes(next);
-      setLoadError(null);
-      setName("");
-      setTargetUrl("");
-      setNotice("업무 버튼을 등록했습니다.");
-      setPendingDeleteId(null);
-      setUndoRecipe(null);
-      setListNotice(null);
-    } catch (caught) {
-      setError(automationErrorMessage(caught));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  /**
-   * 삭제는 두 번 눌러 확인합니다. 확인 전에는 파일을 건드리지 않고,
-   * 삭제한 뒤에는 같은 id로 되돌릴 수 있게 레시피를 보관합니다.
-   */
-  async function remove(recipe: AutomationRecipe) {
-    if (pendingDeleteId !== recipe.id) {
-      setPendingDeleteId(recipe.id);
-      setListError(null);
-      setListNotice(null);
-      return;
-    }
-
-    setBusy(true);
-    setListError(null);
-    setListNotice(null);
-    try {
-      setRecipes(await deleteAutomationRecipe(recipe.id));
-      setLoadError(null);
-      setUndoRecipe(recipe);
-      setListNotice("업무 버튼을 삭제했습니다.");
-      setPendingDeleteId(null);
-    } catch (caught) {
-      setListError(automationErrorMessage(caught));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function restore(recipe: AutomationRecipe) {
-    setBusy(true);
-    setListError(null);
-    setListNotice(null);
-    try {
-      setRecipes(await saveAutomationRecipe(recipe));
-      setLoadError(null);
-      setUndoRecipe(null);
-      setListNotice("업무 버튼을 되돌렸습니다.");
-    } catch (caught) {
-      setListError(automationErrorMessage(caught));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function open(recipe: AutomationRecipe) {
-    setBusy(true);
-    setListError(null);
-    setListNotice(null);
-    setUndoRecipe(null);
-    try {
-      await openAutomationRecipe(recipe.id);
-      setListNotice("브라우저 열기를 요청했습니다.");
-    } catch (caught) {
-      setListError(automationErrorMessage(caught));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="app-page">
-      <Card className="app-create">
-        <div>
-          <p className="app-card-eyebrow">로컬 업무 버튼</p>
-          <h2>바로가기 등록</h2>
-          <p className="app-card-description">
-            업무포털에 이미 로그인한 기본 브라우저에서 등록한 화면을 엽니다. 쿠키,
-            인증서, 비밀번호는 School Collect에 저장하지 않습니다.
-          </p>
-          <p className="app-card-description">
-            버튼은 School Collect 계정이 아니라 이 컴퓨터의 사용자 설정에 저장됩니다.
-            같은 OS 계정을 함께 쓰면 다른 사람에게도 보일 수 있으므로 공용 PC에서는
-            등록하지 마세요.
-          </p>
-        </div>
-
-        <form className="app-form" onSubmit={create}>
-          <FormField htmlFor="automation-name" label="버튼 이름" required>
-            <input
-              id="automation-name"
-              maxLength={80}
-              onChange={(event) => setName(event.target.value)}
-              placeholder="예: 기안"
-              required
-              value={name}
-            />
-          </FormField>
-          <FormField
-            hint="http/https 주소만 저장합니다. 로그인 토큰이 포함된 URL은 등록하지 마세요."
-            htmlFor="automation-target"
-            label="대상 URL"
-            required
-          >
-            <input
-              id="automation-target"
-              onChange={(event) => setTargetUrl(event.target.value)}
-              placeholder="https://..."
-              required
-              type="url"
-              value={targetUrl}
-            />
-          </FormField>
-
-          {error ? (
-            <p className="app-form__error" role="alert">
-              {error}
-            </p>
-          ) : null}
-          {notice ? <p className="app-form__notice">{notice}</p> : null}
-
-          <div className="app-form__actions">
-            <Button disabled={!name.trim() || !targetUrl.trim()} loading={busy} type="submit">
-              버튼 추가
-            </Button>
-          </div>
-        </form>
-      </Card>
-
-      <section className="app-section">
-        <div className="app-section-heading">
-          <div>
-            <h2>내 업무 버튼</h2>
-            <p className="app-card-description">
-              다음 단계에서 현재 화면 등록, 표 자동입력, 신규 신청 감시를 같은 레시피에
-              연결합니다.
-            </p>
-          </div>
-          <Button disabled={loading} onClick={() => void load()} size="small" variant="quiet">
-            새로고침
-          </Button>
-        </div>
-
-        {listError ? (
-          <p className="app-form__error" role="alert">
-            {listError}
-          </p>
-        ) : null}
-        {listNotice ? (
-          <p className="app-form__notice">
-            {listNotice}
-            {undoRecipe ? (
-              <>
-                {" "}
-                <Button
-                  aria-label={`${undoRecipe.name} 삭제 되돌리기`}
-                  disabled={busy}
-                  onClick={() => void restore(undoRecipe)}
-                  size="small"
-                  variant="quiet"
-                >
-                  실행 취소
-                </Button>
-              </>
-            ) : null}
-          </p>
-        ) : null}
-
-        {loading ? (
-          <LoadingState description="로컬 자동화 설정을 불러오고 있습니다." title="불러오는 중" />
-        ) : loadError ? (
-          <ErrorState
-            action={
-              <Button onClick={() => void load()} variant="secondary">
-                다시 시도
-              </Button>
-            }
-            description={loadError}
-            title="업무 버튼을 불러오지 못했습니다"
-          />
-        ) : !recipes || recipes.length === 0 ? (
-          <EmptyState
-            description="위에서 기안, 품의, 출결처럼 자주 쓰는 화면을 첫 버튼으로 등록하세요."
-            title="등록한 업무 버튼이 없습니다"
-          />
-        ) : (
-          <ListSurface>
-            {recipes.map((recipe) => (
-              <ListRow
-                action={
-                  pendingDeleteId === recipe.id ? (
-                    <div className="app-row-actions">
-                      <Button
-                        aria-label={`${recipe.name} 삭제 확인`}
-                        disabled={busy}
-                        onClick={() => void remove(recipe)}
-                        size="small"
-                      >
-                        삭제 확인
-                      </Button>
-                      <Button
-                        aria-label={`${recipe.name} 삭제 취소`}
-                        disabled={busy}
-                        onClick={() => setPendingDeleteId(null)}
-                        size="small"
-                        variant="quiet"
-                      >
-                        취소
-                      </Button>
-                    </div>
-                  ) : (
-                    <div className="app-row-actions">
-                      <Button
-                        aria-label={`${recipe.name} 열기`}
-                        disabled={busy}
-                        onClick={() => void open(recipe)}
-                        size="small"
-                        variant="secondary"
-                      >
-                        열기
-                      </Button>
-                      <Button
-                        aria-label={`${recipe.name} 삭제`}
-                        disabled={busy}
-                        onClick={() => void remove(recipe)}
-                        size="small"
-                        variant="quiet"
-                      >
-                        삭제
-                      </Button>
-                    </div>
-                  )
-                }
-                description={describeAutomationTarget(recipe.targetUrl)}
-                key={recipe.id}
-                status={<Status tone="info">바로가기</Status>}
-                title={recipe.name}
-              />
-            ))}
-          </ListSurface>
-        )}
-      </section>
-    </div>
-  );
-}
-
-function SettingsView({
-  token,
-  tenant,
-  session,
-}: {
-  token: string;
-  tenant: Membership;
-  session: SessionInfo;
-}) {
-  const [health, setHealth] = useState<{ status: string; service: string } | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  async function check() {
-    setError(null);
-    try {
-      const response = await fetch(
-        `${(import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:3000").replace(/\/$/, "")}/ready`,
-      );
-      const body = (await response.json()) as { status: string; service: string };
-      setHealth(body);
-    } catch {
-      setHealth(null);
-      setError("API에 연결하지 못했습니다.");
-    }
-  }
-
-  return (
-    <div className="app-page">
-      <Card className="app-connection-card">
-        <div className="app-card-heading">
-          <div>
-            <p className="app-card-eyebrow">연결</p>
-            <h2>서버 상태</h2>
-          </div>
-          <Status tone={health ? "success" : error ? "danger" : "neutral"}>
-            {health ? "정상" : error ? "확인 필요" : "확인 전"}
-          </Status>
-        </div>
-        <p className="app-card-description">
-          로그인 토큰이 유효한지 확인하고, 서버가 준비 상태인지 점검합니다.
-        </p>
-        {error ? <p className="app-form__error">{error}</p> : null}
-        {health ? (
-          <p className="app-card-description">
-            {health.service}: {health.status}
-          </p>
-        ) : null}
-        <Button onClick={() => void check()} variant="secondary">
-          연결 확인
-        </Button>
-      </Card>
-
-      <Card>
-        <h2>계정</h2>
-        <dl className="app-meta">
-          <div>
-            <dt>사용자</dt>
-            <dd>{session.user.displayName ?? session.user.subject}</dd>
-          </div>
-          <div>
-            <dt>학교</dt>
-            <dd>{tenant.tenantName}</dd>
-          </div>
-          <div>
-            <dt>권한</dt>
-            <dd>{tenant.role}</dd>
-          </div>
-        </dl>
-        <p className="app-card-description">
-          접근 토큰은 이 창의 메모리에만 보관하며 디스크에 저장하지 않습니다.
-        </p>
-        <p className="app-card-description">세션 토큰 길이 {token.length}자</p>
-      </Card>
-    </div>
   );
 }

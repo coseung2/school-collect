@@ -11,12 +11,14 @@ use axum::{
 use chrono::{DateTime, Utc};
 use school_collect_auth::{AuthMode, OidcVerifier, VerifiedPrincipal};
 use school_collect_contracts::{
-    ApiError, CollectDetailResponse, CollectDto, CollectListResponse, CreateCollectRequest,
-    CreateTenantRequest, MembershipDto, PrincipalResponse, SaveSubmissionRequest, ServiceStatus,
-    SessionResponse, SubmissionDto, TenantListResponse, UserDto, VersionConflictResponse,
+    ApiError, AssignmentDto, AssignmentListResponse, CollectDetailResponse, CollectDto,
+    CollectItemDto, CollectListResponse, CollectProgressDto, CollectStatusResponse,
+    CollectStatusRowDto, CreateCollectRequest, CreateTenantRequest, MemberDto, MemberListResponse,
+    MembershipDto, PrincipalResponse, SaveSubmissionRequest, ServiceStatus, SessionResponse,
+    SubmissionDto, TenantListResponse, UserDto, VersionConflictResponse,
 };
 use school_collect_db::{
-    CollectRecord, SaveDraftOutcome, SubmitOutcome, TransitionOutcome, UserRecord,
+    CollectRecord, NewCollectItem, SaveDraftOutcome, SubmitOutcome, TransitionOutcome, UserRecord,
 };
 use school_collect_domain::MembershipRole;
 use sqlx::PgPool;
@@ -72,6 +74,9 @@ impl AuthState {
         list_collects,
         create_collect,
         collect_detail,
+        collect_status,
+        list_members,
+        list_assignments,
         publish_collect,
         close_collect,
         save_submission,
@@ -91,6 +96,14 @@ impl AuthState {
         CreateCollectRequest,
         SubmissionDto,
         CollectDetailResponse,
+        CollectItemDto,
+        CollectProgressDto,
+        CollectStatusResponse,
+        CollectStatusRowDto,
+        MemberDto,
+        MemberListResponse,
+        AssignmentDto,
+        AssignmentListResponse,
         SaveSubmissionRequest,
         VersionConflictResponse
     ))
@@ -104,6 +117,9 @@ pub fn router(state: AppState, cors_origin: HeaderValue, auth_state: AuthState) 
         .route("/v1/tenants", get(list_tenants).post(create_tenant))
         .route("/v1/collects", get(list_collects).post(create_collect))
         .route("/v1/collects/{collect_id}", get(collect_detail))
+        .route("/v1/collects/{collect_id}/status", get(collect_status))
+        .route("/v1/members", get(list_members))
+        .route("/v1/assignments", get(list_assignments))
         .route("/v1/collects/{collect_id}/publish", post(publish_collect))
         .route("/v1/collects/{collect_id}/close", post(close_collect))
         .route("/v1/collects/{collect_id}/submission", put(save_submission))
@@ -353,6 +369,19 @@ fn storage_failure(headers: &HeaderMap) -> Response {
 
 fn timestamp(value: DateTime<Utc>) -> String {
     value.to_rfc3339()
+}
+
+/// Item keys are part of the submission payload contract, so they are checked
+/// here instead of being reported as a database error.
+fn is_valid_item_key(value: &str) -> bool {
+    let mut chars = value.chars();
+    match chars.next() {
+        Some(first) if first.is_ascii_lowercase() => {}
+        _ => return false,
+    }
+    chars.all(|character| {
+        character.is_ascii_lowercase() || character.is_ascii_digit() || character == '_'
+    })
 }
 
 fn collect_dto(record: &CollectRecord) -> CollectDto {
@@ -607,6 +636,65 @@ async fn create_collect(
         },
     };
 
+    if body.items.len() > 50 {
+        return failure(
+            &headers,
+            StatusCode::BAD_REQUEST,
+            "too_many_items",
+            "a collect can define at most 50 items",
+        );
+    }
+    let mut items: Vec<NewCollectItem> = Vec::with_capacity(body.items.len());
+    for item in &body.items {
+        let key = item.key.trim();
+        if !is_valid_item_key(key) {
+            return failure(
+                &headers,
+                StatusCode::BAD_REQUEST,
+                "invalid_item_key",
+                "item keys must match ^[a-z][a-z0-9_]*$",
+            );
+        }
+        let label = item.label.trim();
+        if label.is_empty() || label.chars().count() > 120 {
+            return failure(
+                &headers,
+                StatusCode::BAD_REQUEST,
+                "invalid_item_label",
+                "item labels must be between 1 and 120 characters",
+            );
+        }
+        if items.iter().any(|existing| existing.key == key) {
+            return failure(
+                &headers,
+                StatusCode::BAD_REQUEST,
+                "duplicate_item_key",
+                "item keys must be unique within a collect",
+            );
+        }
+        items.push(NewCollectItem {
+            key: key.to_owned(),
+            label: label.to_owned(),
+            required: item.required,
+        });
+    }
+
+    let mut assignees: Vec<Uuid> = Vec::with_capacity(body.assignee_user_ids.len());
+    for raw in &body.assignee_user_ids {
+        match Uuid::parse_str(raw) {
+            Ok(id) => assignees.push(id),
+            Err(_) => {
+                return failure(
+                    &headers,
+                    StatusCode::BAD_REQUEST,
+                    "invalid_assignee",
+                    "assigneeUserIds must contain user identifiers",
+                );
+            }
+        }
+    }
+    let assignee_ids = (!body.assignee_user_ids.is_empty()).then_some(assignees.as_slice());
+
     let user = match current_user(&state, &principal, &headers).await {
         Ok(user) => user,
         Err(response) => return *response,
@@ -620,9 +708,13 @@ async fn create_collect(
         &state.pool,
         tenant_id,
         user.id,
-        title,
-        body.description.trim(),
-        due_at,
+        &school_collect_db::NewCollect {
+            title,
+            description: body.description.trim(),
+            due_at,
+            items: &items,
+            assignee_ids,
+        },
     )
     .await
     {
@@ -691,6 +783,26 @@ async fn collect_detail(
         Err(_) => return storage_failure(&headers),
     };
 
+    let items =
+        match school_collect_db::list_collect_items(&state.pool, tenant_id, collect_id).await {
+            Ok(rows) => rows
+                .into_iter()
+                .map(|row| CollectItemDto {
+                    key: row.item_key,
+                    label: row.label,
+                    required: row.required,
+                    position: row.position,
+                })
+                .collect(),
+            Err(_) => return storage_failure(&headers),
+        };
+
+    let progress =
+        match school_collect_db::collect_progress(&state.pool, tenant_id, collect_id).await {
+            Ok(value) => value,
+            Err(_) => return storage_failure(&headers),
+        };
+
     Json(CollectDetailResponse {
         id: record.id.to_string(),
         title: record.title,
@@ -700,8 +812,155 @@ async fn collect_detail(
         version: record.version,
         updated_at: timestamp(record.updated_at),
         submission,
+        items,
+        progress: CollectProgressDto {
+            assigned: progress.assigned,
+            submitted: progress.submitted,
+        },
     })
     .into_response()
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/collects/{collect_id}/status",
+    params(("collect_id" = String, Path, description = "Collect identifier")),
+    responses((status = 200, description = "Submission status per assigned member", body = CollectStatusResponse))
+)]
+async fn collect_status(
+    State(state): State<Arc<AppState>>,
+    Extension(principal): Extension<VerifiedPrincipal>,
+    headers: HeaderMap,
+    Path(collect_id): Path<String>,
+) -> Response {
+    let user = match current_user(&state, &principal, &headers).await {
+        Ok(user) => user,
+        Err(response) => return *response,
+    };
+    let (tenant_id, _) = match authorize(&state, &headers, &user, Capability::Manage).await {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let Ok(collect_id) = Uuid::parse_str(&collect_id) else {
+        return failure(
+            &headers,
+            StatusCode::BAD_REQUEST,
+            "invalid_id",
+            "the collect identifier is not valid",
+        );
+    };
+    match school_collect_db::get_collect(&state.pool, tenant_id, collect_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return failure(
+                &headers,
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "the collect was not found in this school",
+            );
+        }
+        Err(_) => return storage_failure(&headers),
+    };
+
+    let rows =
+        match school_collect_db::list_collect_status(&state.pool, tenant_id, collect_id).await {
+            Ok(rows) => rows,
+            Err(_) => return storage_failure(&headers),
+        };
+    let progress =
+        match school_collect_db::collect_progress(&state.pool, tenant_id, collect_id).await {
+            Ok(value) => value,
+            Err(_) => return storage_failure(&headers),
+        };
+
+    Json(CollectStatusResponse {
+        assigned: progress.assigned,
+        submitted: progress.submitted,
+        rows: rows
+            .into_iter()
+            .map(|row| CollectStatusRowDto {
+                user_id: row.user_id.to_string(),
+                display_name: row.display_name,
+                role: row.role,
+                assignment_status: row.assignment_status,
+                submission_status: row.submission_status,
+                submitted_at: row.submitted_at.map(timestamp),
+            })
+            .collect(),
+    })
+    .into_response()
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/members",
+    responses((status = 200, description = "Members of the active school", body = MemberListResponse))
+)]
+async fn list_members(
+    State(state): State<Arc<AppState>>,
+    Extension(principal): Extension<VerifiedPrincipal>,
+    headers: HeaderMap,
+) -> Response {
+    let user = match current_user(&state, &principal, &headers).await {
+        Ok(user) => user,
+        Err(response) => return *response,
+    };
+    let (tenant_id, _) = match authorize(&state, &headers, &user, Capability::Manage).await {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    match school_collect_db::list_members(&state.pool, tenant_id).await {
+        Ok(rows) => Json(MemberListResponse {
+            members: rows
+                .into_iter()
+                .map(|row| MemberDto {
+                    user_id: row.user_id.to_string(),
+                    display_name: row.display_name,
+                    role: row.role,
+                })
+                .collect(),
+        })
+        .into_response(),
+        Err(_) => storage_failure(&headers),
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/assignments",
+    responses((status = 200, description = "Collects this caller must submit", body = AssignmentListResponse))
+)]
+async fn list_assignments(
+    State(state): State<Arc<AppState>>,
+    Extension(principal): Extension<VerifiedPrincipal>,
+    headers: HeaderMap,
+) -> Response {
+    let user = match current_user(&state, &principal, &headers).await {
+        Ok(user) => user,
+        Err(response) => return *response,
+    };
+    let (tenant_id, _) = match authorize(&state, &headers, &user, Capability::View).await {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    match school_collect_db::list_assignments(&state.pool, tenant_id, user.id).await {
+        Ok(rows) => Json(AssignmentListResponse {
+            assignments: rows
+                .into_iter()
+                .map(|row| AssignmentDto {
+                    collect_id: row.collect_id.to_string(),
+                    title: row.title,
+                    status: row.status,
+                    due_at: row.due_at.map(timestamp),
+                    assignment_status: row.assignment_status,
+                    submission_status: row.submission_status,
+                    submission_version: row.submission_version,
+                })
+                .collect(),
+        })
+        .into_response(),
+        Err(_) => storage_failure(&headers),
+    }
 }
 
 async fn transition(

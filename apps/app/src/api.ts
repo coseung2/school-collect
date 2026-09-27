@@ -54,6 +54,57 @@ export type CollectDetail = {
   version: number;
   updatedAt: string;
   submission: Submission | null;
+  items: CollectItem[];
+  progress: CollectProgress;
+};
+
+export type CollectItem = {
+  key: string;
+  label: string;
+  required: boolean;
+  position: number;
+};
+
+export type CollectItemInput = {
+  key: string;
+  label: string;
+  required: boolean;
+};
+
+export type CollectProgress = {
+  assigned: number;
+  submitted: number;
+};
+
+export type Member = {
+  userId: string;
+  displayName: string | null;
+  role: string;
+};
+
+export type Assignment = {
+  collectId: string;
+  title: string;
+  status: string;
+  dueAt: string | null;
+  assignmentStatus: string;
+  submissionStatus: string | null;
+  submissionVersion: number | null;
+};
+
+export type CollectStatusRow = {
+  userId: string;
+  displayName: string | null;
+  role: string;
+  assignmentStatus: string | null;
+  submissionStatus: string | null;
+  submittedAt: string | null;
+};
+
+export type CollectStatus = {
+  assigned: number;
+  submitted: number;
+  rows: CollectStatusRow[];
 };
 
 export class ApiError extends Error {
@@ -182,16 +233,36 @@ export const createCollect = (
   tenantId: string,
   title: string,
   description: string,
+  items: CollectItemInput[] = [],
+  assigneeUserIds: string[] = [],
+  dueAt: string | null = null,
 ) =>
   request<Collect>("/v1/collects", {
     method: "POST",
     token,
     tenantId,
-    body: { title, description },
+    body: { title, description, items, assigneeUserIds, dueAt },
   });
 
 export const fetchCollect = (token: string, tenantId: string, id: string) =>
   request<CollectDetail>(`/v1/collects/${id}`, { token, tenantId });
+
+export const fetchCollectStatus = (
+  token: string,
+  tenantId: string,
+  id: string,
+) => request<CollectStatus>(`/v1/collects/${id}/status`, { token, tenantId });
+
+export const listMembers = (token: string, tenantId: string) =>
+  request<{ members: Member[] }>("/v1/members", { token, tenantId });
+
+/// Collects this caller has to submit. Managers see every collect in the
+/// tenant through `listCollects`; a contributor starts from here.
+export const listAssignments = (token: string, tenantId: string) =>
+  request<{ assignments: Assignment[] }>("/v1/assignments", {
+    token,
+    tenantId,
+  });
 
 export const publishCollect = (token: string, tenantId: string, id: string) =>
   request<Collect>(`/v1/collects/${id}/publish`, {
