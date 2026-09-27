@@ -19,12 +19,12 @@
 | S-01 | 항목·대상·제출 현황과 화면 확장 / 완료(PR #24, `f573bfb`) | C-01 공통 진입 계약 | develop 통합과 CI 6개 통과 확인. 다음은 S-02 |
 | S-02 | 구성원 초대·합류 / 완료(PR #28, `9416c6c`) | S-01 | 초대된 계정이 해당 학교 contributor로 합류해 수합 제출; 다른 학교·계정에는 권한이 생기지 않음. 다음은 S-03 |
 | S-03 | 항목·대상 편집과 권한 규칙 / 완료(PR #41, `70dcbfe`) | S-01, 구성원 변경 시 S-02 | 배포 전후 변경·역할 변경·미배정 제출 정책 확정, 서버 검증·충돌 처리·변경 기록과 UI 검증 |
-| S-04 | 파일 첨부 / 계획 | S-01, C-03 승인된 저장소 설정 | 권한 확인 후 private R2 업로드/다운로드, 크기·유형·만료·보존 정책, 실패/재시도·학교 간 접근 차단 |
+| S-04 | 파일 첨부 / 완료 1~3차(PR #58 `e3a541c`, PR #59 `2486f8d`, PR #60 `aaa55c5`) | S-01, C-03 승인된 저장소 설정 | 완료: metadata·보존 규칙, 업로드·다운로드 API와 저장소 port(학교 간 접근 차단), 만료 정리 worker / 남음(소유자 자원): private R2 adapter·presigned capability, 제출 작성·검토 화면 |
 | S-05 | 세션 유지·offline 초안 / 진행 중(PR #45, PR #46) | S-01, C-01/C-02 | 완료: OS 보안 저장소 세션(재시작 복구·갱신·로그아웃 정리)과 사용자/학교별 SQLite 초안(재시작 복구·재전송·충돌·로그아웃 정리) / 남음: 외부 브라우저 PKCE |
 | S-06 | 알림·재처리용 outbox/worker / 완료(PR #43, `e722bce`) | S-01 | 업무 변경+outbox 단일 transaction, relay/JetStream/idempotent 처리, commit 후 ACK, retry/dead-letter·중복 전달 복구 |
 | S-07 | 결과 내보내기·전체 흐름 검증 / 완료(PR #48, PR #50, PR #53) | S-02~S-06, 출시 시 C-02~C-05 | 완료: CSV 결과의 권한·누락 검증, 화면 내보내기 버튼, 마감 후·다른 학교 내보내기 경계, 역할 4종 단일 시나리오를 통합 SHA에서 검증 |
 
-공통 ID는 [TEAM_BACKLOG.md](TEAM_BACKLOG.md)를 따릅니다. 첨부·offline·worker는 S-01 계약이 고정되면 독립 범위로 진행할 수 있습니다. 실제 운영 자원 연결은 계정·환경이 확정된 뒤 진행합니다.
+공통 ID는 [TEAM_BACKLOG.md](TEAM_BACKLOG.md)를 따릅니다. 첨부·offline·worker는 S-01 계약이 고정된 뒤 독립 범위로 진행해 첨부는 metadata·API·정리 sweep까지 통합했습니다. 실제 운영 저장소(R2 계정·bucket) 연결과 제출 작성·검토 화면은 계정·환경이 확정된 뒤 진행합니다.
 
 ## 구성원 초대 (S-02)
 
@@ -100,6 +100,17 @@ PR #53(`feat/role-sweep-e2e`)으로 한 학교·한 시나리오에서 네 역�
 - 테스트는 정리 후 남은 행이 0인지 스스로 확인합니다.
 
 검증 (2026-09-27, Windows): `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo test --workspace --locked`(101개). 실제 provider + 실제 PostgreSQL에서 통합 SHA `9b63abf` 기준으로 `collect_flow_e2e` 4개(전체 흐름·초대·내보내기·역할 4종)를 함께 통과시켰고, 남은 행 0과 provider 사용자 목록에 `@example.test` 계정이 없음을 확인했습니다.
+
+## 파일 첨부 (S-04 1~3차)
+
+PR #58(`e3a541c`)·PR #59(`2486f8d`)·PR #60(`aaa55c5`)으로 첨부 metadata 계약, 업로드·다운로드 API와 저장소 port, 만료 정리 worker를 develop에 통합했습니다. private R2 adapter와 제출 작성·검토 화면은 소유자 자원이 확정된 뒤 4차로 진행합니다.
+
+- 계약·정책(domain): 파일 1개 최대 10 MiB, 항목당 5개, 제출당 20개입니다. 허용 형식은 HWP/HWPX·Office·PDF·PNG/JPEG·text·zip이고 보존은 180일입니다. 파일 이름은 표시용으로만 쓰고 경로 문자·과도한 길이를 거부합니다.
+- metadata(DB): `school_collect.collect_attachments`가 (tenant, collect, 담당자, item key) 단위로 이름·형식·선언 크기·checksum·object key·상태(`pending`/`stored`/`deleted`)·만료 시각을 보관합니다. object key는 서버가 `tenants/{tenant}/attachments/{attachment_id}`로 만들고, 목록·조회·삭제·만료 수집 모두 tenant로 한정합니다.
+- API·저장소 port: `POST /v1/collects/{id}/attachments`(슬롯 열기) → `PUT /v1/attachments/{id}/content`(bytes 업로드, 선언 크기·형식·checksum 검증) → `GET /v1/attachments/{id}`·`/content`, `GET /v1/collects/{id}/attachments`, `DELETE /v1/attachments/{id}`. 읽기는 소유자 또는 관리자, 삭제는 관리자 또는 제출 전 소유자입니다. bytes는 `crates/application`의 `ObjectStorage` port 뒤에 있고 개발은 `APP_ATTACHMENT_DIR`의 디렉터리 adapter를 씁니다. 저장소가 설정되지 않으면 503(`attachment_storage_unavailable`)으로 거절하고, 개발 외 환경은 `APP_ATTACHMENT_DIR` 없이 기동하지 않습니다.
+- 보존 정리(worker): `WORKER_ATTACHMENT_SWEEP_MS`(기본 6시간)마다 만료된 첨부를 한 배치씩 지웁니다. bytes를 먼저 지우고 성공한 행만 삭제하며, 실패한 행은 남겨 다음 주기에 다시 시도합니다.
+- 검증 (2026-09-27, Windows): `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo test --workspace --locked`(118개), foundation 30개, repository guard. 실제 개발 DB에서 `crates/db/tests/attachments.rs` 5개, worker sweep 1개, relay 6개가 통과했고, 실제 provider+PostgreSQL E2E 5개(전체 흐름·초대·내보내기·역할 4종·첨부)를 통합 SHA `aaa55c5` 기준으로 통과시켰습니다. 남은 `@example.test` 계정과 행은 0입니다.
+- 아직: private R2 bucket·credential과 presigned 직접 업로드 capability, 제출 작성·검토 화면, 실제 네트워크 단절·재시도 사람 검증.
 
 ## 세션 유지와 offline 초안 (S-05)
 

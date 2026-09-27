@@ -8,8 +8,8 @@
 | --- | --- | --- | --- |
 | 1 | 완료: S-01 PR #24 통합(`f573bfb`) | 완료: P-01 PR #25 통합(`11a0af0`)·실제 창 검증 | 완료: C-01 학교/개인 진입 경계 통합(설정·offline 세부는 남음) |
 | 2 | 완료: S-02 구성원 초대·합류(PR #28, `9416c6c`) | 완료: P-02 확장·현재 화면 등록(PR #30, `795dc26`) | C-02: 기존 auth/RBAC 부정 테스트·관측 보강 |
-| 3 | 완료: S-03 편집(PR #41), S-06 worker(PR #43), S-05 세션·초안(PR #45·#46) / 남음: S-04 첨부 | 완료: P-03 엔진(PR #32·#33), P-04 행렬(PR #35), P-06 감시(PR #37), P-07 추천(PR #51) | C-03 서버 운영, C-05 대상별 배포 검증 |
-| 4 | 완료: S-07 결과 내보내기·화면·역할 4종 검증(PR #48·#50·#53) | P-05 데이터 연결 | C-04 보안·협업 게이트를 해당 출시 전에 확인 |
+| 3 | 완료: S-03 편집(PR #41), S-06 worker(PR #43), S-05 세션·초안(PR #45·#46) | 완료: P-03 엔진(PR #32·#33), P-04 행렬(PR #35), P-06 감시(PR #37), P-07 추천(PR #51) | C-03 서버 운영, C-05 대상별 배포 검증 |
+| 4 | 완료: S-07 결과 내보내기·화면·역할 4종 검증(PR #48·#50·#53), S-04 첨부 1~3차(PR #58·#59·#60) / 남음: S-04 4차(private R2 adapter·presigned·화면) | P-05 데이터 연결 | C-04 보안·협업 게이트를 해당 출시 전에 확인 |
 
 선후 관계가 없는 기능은 병렬로 진행할 수 있습니다. 개인기능의 학교 데이터 연결(P-05)만 필요한 학교 API 계약을 선행 조건으로 가집니다. 출시일은 아직 확정하지 않았습니다.
 
@@ -29,9 +29,9 @@ C-03은 학교 서버에 의존하는 기능의 운영 게이트입니다. C-05�
 
 - PR #17: `packages/ui` tokens/components와 AppShell.
 - PR #19: 실제 provider 토큰 검증, issuer/subject -> user 연결, membership 기반 권한, 수합 기본 상태 전이·version 충돌, request ID 계층.
-- PR #20: 개발자별 PostgreSQL/NATS/API/migrator/worker Docker 구성. NATS 컨테이너가 있다는 사실은 relay/consumer 구현을 의미하지 않습니다. 현재 worker 코드는 기동/종료 기반뿐입니다.
+- PR #20: 개발자별 PostgreSQL/NATS/API/migrator/worker Docker 구성. 이후 S-06(PR #43)이 outbox relay를, S-04 3차(PR #60)가 첨부 만료 sweep을 worker에 추가했습니다. 이벤트를 소비하는 알림 서비스는 아직 없습니다.
 
-외부 브라우저 PKCE·OS 보안 저장소·SQLite 초안·R2·outbox/JetStream 업무 처리는 별도로 완료해야 합니다. provider 선택은 [ADR-0002](ADR/0002-supabase-identity-and-database.md)를 따릅니다.
+외부 브라우저 PKCE와 R2 실제 저장소 연결은 별도로 완료해야 합니다(OS 보안 저장소·SQLite 초안·outbox/JetStream relay·첨부 metadata/API/sweep은 완료). provider 선택은 [ADR-0002](ADR/0002-supabase-identity-and-database.md)를 따릅니다.
 
 ## 변경 소유권과 통합
 
