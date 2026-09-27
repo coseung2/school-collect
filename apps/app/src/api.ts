@@ -548,6 +548,16 @@ export type Attachment = {
   contentUrl: string;
 };
 
+/**
+ * Whether the retention deadline passed. Expired rows can never hold bytes
+ * again, so they neither block the answer nor keep a place: the API applies
+ * the same rule when it refuses to serve them and when it counts a slot.
+ */
+export function attachmentExpired(attachment: Attachment): boolean {
+  const expiresAt = Date.parse(attachment.expiresAt);
+  return Number.isFinite(expiresAt) && expiresAt <= Date.now();
+}
+
 /** Largest file the server accepts. */
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 

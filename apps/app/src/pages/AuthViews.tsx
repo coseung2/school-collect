@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Button, Card, ErrorState, FormField } from "@school-collect/ui";
 import {
   cancelBrowserLogin,
@@ -31,6 +31,7 @@ export function SignInView({
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [browserBusy, setBrowserBusy] = useState(false);
+  const attempt = useRef(0);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -71,21 +72,34 @@ export function SignInView({
    * 학교 계정 로그인: 시스템 브라우저에서 결과를 기다립니다. 시도가 끝나거나
    * 취소·만료되면 native가 이유를 코드와 문구로 돌려줍니다.
    */
+  /**
+   * Leaving or cancelling invalidates the attempt: a native result that arrives
+   * afterwards must not sign the user in after they stopped it.
+   */
+  function invalidateBrowserAttempt() {
+    attempt.current += 1;
+    setBrowserBusy(false);
+  }
+
   async function browserSignIn() {
+    const attemptId = ++attempt.current;
     setBrowserBusy(true);
     setError(null);
     setNotice(null);
     try {
       const session = await signInWithBrowser();
+      if (attempt.current !== attemptId) return;
       setBrowserBusy(false);
       onSignedIn(session);
     } catch (caught) {
+      if (attempt.current !== attemptId) return;
       setBrowserBusy(false);
       setError(messageOf(caught));
     }
   }
 
   async function cancelBrowserSignIn() {
+    invalidateBrowserAttempt();
     await cancelBrowserLogin();
   }
 
@@ -175,7 +189,14 @@ export function SignInView({
         )}
         {onBack ? (
           <div className="app-form__actions">
-            <Button onClick={onBack} type="button" variant="quiet">
+            <Button
+              onClick={() => {
+                if (browserBusy) void cancelBrowserSignIn();
+                onBack();
+              }}
+              type="button"
+              variant="quiet"
+            >
               돌아가기
             </Button>
           </div>

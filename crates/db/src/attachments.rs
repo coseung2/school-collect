@@ -226,13 +226,30 @@ pub async fn claim_attachment_upload(
     .bind(&attempt_key)
     .fetch_one(&mut *tx)
     .await?;
-    tx.commit().await?;
 
     // A slot that never had an attempt has no object worth removing; every
     // other previous key may hold bytes from the attempt that lost the slot.
     let superseded_object_key = previous_attempt
         .filter(|_| object_key != attempt_key)
         .map(|_| object_key);
+    // Recording the superseded object in the same transaction that stops
+    // pointing the row at it is what keeps it tracked: once this commits, a
+    // crash before any storage call cannot lose the key, and a late `PUT` from
+    // the writer that just lost the slot is still covered when the sweep runs.
+    if let Some(superseded) = &superseded_object_key {
+        sqlx::query(
+            "INSERT INTO school_collect.attachment_orphans (id, tenant_id, object_key)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (object_key) DO NOTHING",
+        )
+        .bind(Uuid::now_v7())
+        .bind(tenant_id)
+        .bind(superseded)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+
     Ok(ClaimUploadOutcome::Claimed {
         record: Box::new(claimed),
         superseded_object_key,
@@ -316,27 +333,10 @@ pub async fn create_attachment(
         return Ok(CreateAttachmentOutcome::ItemMissing);
     }
 
-    // An answer that was handed in keeps its files, so a slot must not open
-    // after a submit. The answer row is locked first, then the assignment row:
-    // that is the same order `save_draft` uses, so the two cannot deadlock.
-    let submission_status = sqlx::query_scalar::<_, String>(
-        "SELECT status FROM school_collect.collect_submissions
-         WHERE collect_id = $1 AND user_id = $2
-         FOR UPDATE",
-    )
-    .bind(collect_id)
-    .bind(user_id)
-    .fetch_optional(&mut *tx)
-    .await?;
-    if submission_status.as_deref() == Some("submitted") {
-        tx.rollback().await?;
-        return Ok(CreateAttachmentOutcome::AlreadySubmitted);
-    }
-
-    // Only a target of the collect owes an answer. Locking the assignment row
-    // serializes every slot opened for this member, so two concurrent requests
-    // cannot both pass the count checks below and exceed the per-item or
-    // per-submission limit.
+    // Only a target of the collect owes an answer, and every writer of that
+    // answer takes the assignment row first: locking it here is what serializes
+    // slot creation against the first draft save and the submit, even when no
+    // answer row exists yet (a `FOR UPDATE` on a missing row locks nothing).
     let assigned = sqlx::query_scalar::<_, i32>(
         "SELECT 1 FROM school_collect.collect_assignments
          WHERE collect_id = $1 AND user_id = $2
@@ -351,9 +351,29 @@ pub async fn create_attachment(
         return Ok(CreateAttachmentOutcome::NotAssigned);
     }
 
+    // An answer that was handed in keeps its files, so a slot must not open
+    // after a submit. The answer row is read under the assignment lock, so a
+    // submit that ran while this transaction waited is visible here.
+    let submission_status = sqlx::query_scalar::<_, String>(
+        "SELECT status FROM school_collect.collect_submissions
+         WHERE collect_id = $1 AND user_id = $2
+         FOR UPDATE",
+    )
+    .bind(collect_id)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if submission_status.as_deref() == Some("submitted") {
+        tx.rollback().await?;
+        return Ok(CreateAttachmentOutcome::AlreadySubmitted);
+    }
+
+    // A slot past its retention deadline can never hold bytes again, so it does
+    // not use up a place: the same rule the submit check and the screen use.
     let item_count = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM school_collect.collect_attachments
-         WHERE collect_id = $1 AND user_id = $2 AND item_key = $3 AND status <> 'deleted'",
+         WHERE collect_id = $1 AND user_id = $2 AND item_key = $3
+           AND status <> 'deleted' AND expires_at > now()",
     )
     .bind(collect_id)
     .bind(user_id)
@@ -362,7 +382,8 @@ pub async fn create_attachment(
     .await?;
     let submission_count = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM school_collect.collect_attachments
-         WHERE collect_id = $1 AND user_id = $2 AND status <> 'deleted'",
+         WHERE collect_id = $1 AND user_id = $2
+           AND status <> 'deleted' AND expires_at > now()",
     )
     .bind(collect_id)
     .bind(user_id)
@@ -699,15 +720,23 @@ pub async fn record_attachment_orphan(
 }
 
 /// Objects the sweep still has to remove.
+///
+/// Only rows recorded before `created_before` are returned. A fresh row may
+/// still belong to a writer whose claim was just taken over: it can send its
+/// bytes a little longer, so the tracking is kept until that window passed
+/// instead of being cleared while a late `PUT` could recreate the object.
 pub async fn orphaned_attachments(
     pool: &PgPool,
+    created_before: DateTime<Utc>,
     limit: i64,
 ) -> anyhow::Result<Vec<OrphanAttachment>> {
     let records = sqlx::query_as::<_, OrphanAttachment>(
         "SELECT id, tenant_id, object_key FROM school_collect.attachment_orphans
+         WHERE created_at <= $1
          ORDER BY created_at
-         LIMIT $1",
+         LIMIT $2",
     )
+    .bind(created_before)
     .bind(limit)
     .fetch_all(pool)
     .await?;

@@ -6,10 +6,11 @@
 
 use std::{future::Future, sync::Arc, time::Duration};
 
-use chrono::Utc;
+use chrono::{Duration as ChronoDuration, Utc};
 use school_collect_application::storage::ObjectStorage;
 use school_collect_db::{
-    expired_attachments, orphaned_attachments, purge_attachment, purge_attachment_orphan,
+    UPLOAD_CLAIM_TIMEOUT_SECONDS, expired_attachments, orphaned_attachments, purge_attachment,
+    purge_attachment_orphan,
 };
 use sqlx::PgPool;
 
@@ -61,8 +62,12 @@ pub async fn purge_expired_attachments(
 
     // Bytes whose owning row is gone: a taken-over attempt's object, or one
     // whose cleanup delete failed. They have no metadata left to age out, so
-    // they are removed here instead of lingering untracked in the bucket.
-    let orphans = orphaned_attachments(pool, batch).await?;
+    // they are removed here instead of lingering untracked in the bucket. Only
+    // objects recorded before the claim timeout are taken: a younger one may
+    // still belong to a writer that is allowed to send its bytes, and clearing
+    // the record while that is possible would lose it.
+    let claim_cutoff = Utc::now() - ChronoDuration::seconds(UPLOAD_CLAIM_TIMEOUT_SECONDS);
+    let orphans = orphaned_attachments(pool, claim_cutoff, batch).await?;
     for orphan in orphans {
         match storage.delete(&orphan.object_key).await {
             Ok(()) => {

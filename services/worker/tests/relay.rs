@@ -191,8 +191,12 @@ async fn concurrent_relays_never_take_the_same_event() {
     };
     let _guard = DB_LOCK.lock().await;
     clear_outbox(&pool).await;
+    // Another test binary in this run may leave its own pending events in the
+    // shared outbox table, so every assertion below is scoped to these ids: the
+    // claim itself is what must never hand one event to both relays.
+    let mut inserted = Vec::new();
     for index in 0..4 {
-        insert_test_event(&pool, &format!("test.concurrent.{index}")).await;
+        inserted.push(insert_test_event(&pool, &format!("test.concurrent.{index}")).await);
     }
 
     let first = Arc::new(RecordingPublisher::default());
@@ -206,17 +210,21 @@ async fn concurrent_relays_never_take_the_same_event() {
         run_once(&pool, first.as_ref(), config),
         run_once(&pool, second.as_ref(), config),
     );
-    assert_eq!(
-        left.expect("left").published + right.expect("right").published,
-        4
+    assert!(
+        left.expect("left").published + right.expect("right").published >= 4,
+        "both relays must publish"
     );
 
     let mut seen = first.delivered();
     seen.extend(second.delivered());
-    seen.sort();
-    let mut unique = seen.clone();
+    let mut mine: Vec<Uuid> = seen
+        .into_iter()
+        .filter(|id| inserted.contains(id))
+        .collect();
+    mine.sort();
+    let mut unique = mine.clone();
     unique.dedup();
-    assert_eq!(seen.len(), 4, "every event is delivered once");
+    assert_eq!(mine.len(), 4, "every event is delivered once");
     assert_eq!(unique.len(), 4, "no event is handed to both relays");
 
     clear_outbox(&pool).await;

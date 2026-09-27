@@ -815,11 +815,14 @@ pub async fn save_draft(
         return Ok(SaveDraftOutcome::CollectNotOpen { status });
     }
 
-    // Assignment decides who owes an answer. A member removed from the target
-    // list cannot create or edit a submission.
+    // Assignment decides who owes an answer, and locking it is the stable
+    // serialization point for one member's answer: it exists even before the
+    // first draft row, unlike the answer row itself. Every writer of that
+    // answer (draft, submit, slot creation) takes it first, in this order.
     let assigned = sqlx::query_scalar::<_, i32>(
         "SELECT 1 FROM school_collect.collect_assignments
-         WHERE collect_id = $1 AND user_id = $2",
+         WHERE collect_id = $1 AND user_id = $2
+         FOR UPDATE",
     )
     .bind(collect_id)
     .bind(user_id)
@@ -940,7 +943,8 @@ pub async fn submit(
 
     let assigned = sqlx::query_scalar::<_, i32>(
         "SELECT 1 FROM school_collect.collect_assignments
-         WHERE collect_id = $1 AND user_id = $2",
+         WHERE collect_id = $1 AND user_id = $2
+         FOR UPDATE",
     )
     .bind(collect_id)
     .bind(user_id)

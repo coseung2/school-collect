@@ -19,7 +19,14 @@ pub mod nats;
 
 pub mod attachments;
 
+pub mod consumer;
+
 pub use attachments::{PurgeReport, purge_expired_attachments, run_sweep_until_shutdown};
+
+pub use consumer::{
+    CONSUMER_NAME, ConsumeOutcome, ConsumedEvent, ConsumerReport, EventEffect, JetStreamConsumer,
+    RecordOnlyEffect, consume_batch, consume_one, run_consumer_until_shutdown,
+};
 
 /// How the relay delivers one event.
 pub trait EventPublisher: Send + Sync {

@@ -9,6 +9,7 @@ import {
 } from "@school-collect/ui";
 import {
   ApiError,
+  attachmentExpired,
   fetchCollect,
   listAttachments,
   saveDraft,
@@ -153,8 +154,12 @@ export function AssignmentPage({
   const open = detail.status === "published";
   const editable = open && !submitted && canSubmit(role);
   const attachmentBusy = busyItemKeys.length > 0;
+  // An expired slot can never hold bytes again, so it neither blocks the answer
+  // nor keeps a place: the server applies exactly this rule.
   const unfinishedAttachments = attachments.filter(
-    (entry) => entry.status === "pending" || entry.status === "uploading",
+    (entry) =>
+      (entry.status === "pending" || entry.status === "uploading") &&
+      !attachmentExpired(entry),
   ).length;
   const expectedVersion = detail.submission?.version ?? 0;
   const collectIdForSave = detail.id;
@@ -338,9 +343,19 @@ export function AssignmentPage({
             </FormField>
           ))}
           {attachmentError ? (
-            <p className="app-form__notice" role="status">
-              첨부 파일을 불러오지 못했습니다: {attachmentError}
-            </p>
+            <div className="app-form__actions">
+              <p className="app-form__notice" role="status">
+                첨부 파일을 불러오지 못했습니다: {attachmentError}
+              </p>
+              <Button
+                onClick={() => void loadAttachments()}
+                size="small"
+                type="button"
+                variant="secondary"
+              >
+                다시 불러오기
+              </Button>
+            </div>
           ) : null}
           <div className="app-form__actions">
             {unfinishedAttachments > 0 ? (

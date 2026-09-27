@@ -153,6 +153,22 @@ jobs:
             exit 1
           fi
           grep -q "MIGRATION_DATABASE_URL is required" /tmp/migrator-nourl.log
+      - name: API runs against the runtime role
+        shell: bash
+        env:
+          DATABASE_URL: ${{ env.RUNTIME_DATABASE_URL }}
+          APP_BIND_ADDR: 127.0.0.1:3003
+        run: |
+          cargo run -p school-collect-api --locked > /tmp/api-runtime.log 2>&1 &
+          api_pid=$!
+          trap 'kill "$api_pid" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:3003/ready >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          echo "the API did not become ready with the runtime role"
+          cat /tmp/api-runtime.log
+          exit 1
       - name: Backup and restore drill
         shell: bash
         env:
@@ -229,6 +245,8 @@ jobs:
           --health-retries 20
     env:
       DATABASE_URL: postgres://school_collect:school_collect_ci@127.0.0.1:5432/school_collect
+      MIGRATION_DATABASE_URL: postgres://school_collect:school_collect_ci@127.0.0.1:5432/school_collect
+      RUNTIME_DATABASE_URL: postgres://school_collect_runtime:school_collect_runtime_ci@127.0.0.1:5432/school_collect
       NATS_URL: nats://127.0.0.1:4222
     steps:
       - uses: actions/checkout@v4
@@ -248,6 +266,23 @@ jobs:
           exit 1
       - name: Outbox relay against JetStream
         run: cargo test -p school-collect-worker --locked
+      - name: Runtime role writes rows but cannot run DDL
+        run: bash scripts/runtime_role_check.sh
+      - name: Worker relay and sweep run against the runtime role
+        shell: bash
+        run: |
+          APP_ATTACHMENT_DIR="$(mktemp -d)" \
+          DATABASE_URL="$RUNTIME_DATABASE_URL" APP_ENV=development \
+            cargo run -p school-collect-worker --locked > /tmp/worker-runtime.log 2>&1 &
+          worker_pid=$!
+          sleep 10
+          if ! kill -0 "$worker_pid" 2>/dev/null; then
+            echo "the worker exited when it ran as the runtime role"
+            cat /tmp/worker-runtime.log
+            exit 1
+          fi
+          kill "$worker_pid" 2>/dev/null || true
+          echo "the worker stayed up with the runtime role"
 
   container:
     name: server-image
