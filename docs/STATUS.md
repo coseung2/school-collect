@@ -11,7 +11,7 @@
 - 병합 후 실제 데스크톱 창에서 로그인 없는 개인 화면 열기, 레시피 등록·열기·삭제·실행 취소·재시작 보존을 확인했고, 학교 화면은 Permission 상태로 표시되는 것을 확인했습니다.
 - S-02 초대는 실제 Supabase 로그인과 실제 PostgreSQL에서 E2E(`membership_invitation_end_to_end`)로 확인했고, 생성한 계정·행은 테스트가 삭제했습니다. PR #28(`9416c6c`)로 develop에 통합했습니다.
 - P-02 로컬 브리지·브라우저 확장은 PR #30으로 develop에 통합했습니다(`795dc26`). 병합 전 CI 6개가 성공했고, 실제 브라우저(Edge) 검증은 병합 전 브랜치 SHA에서 수행했습니다.
-- P-03 자동입력 레시피의 저장 형식·요소 선택·dry-run 미리보기는 `feat/personal-fill-recipes` 브랜치에 구현했습니다. develop 통합 전이므로 아래 표에는 "브랜치"로 표시합니다.
+- P-03 자동입력 레시피 엔진은 1차(저장·요소 선택·미리보기, PR #32, `455dcdc`)를 develop에 통합했고, 2차(실행·결과 검증)는 `feat/personal-fill-execute` 브랜치에 구현했습니다. develop 통합 전이므로 아래 표에는 "브랜치"로 표시합니다.
 - 학교 화면의 로그인 이후 흐름과 과거 native/API/DB·브라우저 검증, 외부 운영 설정은 이번에 재실행·재조회하지 않았습니다. CI 성공도 production 배포를 대신하지 않습니다.
 
 ## 학교업무 / 개인기능 상태
@@ -19,7 +19,7 @@
 | 영역 | 통합된 것 | 통합 전 구현 | 남은 우선 작업 |
 | --- | --- | --- | --- |
 | 학교업무 | PR #19·#24 통합(`f573bfb`) + S-02 초대·합류 통합(`9416c6c`) | 없음 | S-03 항목·대상 편집과 권한 규칙 |
-| 개인기능 | PR #25 로컬 바로가기·개인 화면(`11a0af0`) + PR #30 브리지·확장(`795dc26`) 통합 | 브랜치: P-03 자동입력 레시피 저장·요소 선택·미리보기 | P-03 실행·결과 검증 슬라이스, 이후 P-04 |
+| 개인기능 | PR #25 개인 화면(`11a0af0`) + PR #30 브리지·확장(`795dc26`) + PR #32 자동입력 1차(`455dcdc`) 통합 | 브랜치: P-03 자동입력 실행·결과 검증 | P-04 학생 × 날짜 행렬 |
 | 공통 기반 | PR #17 DS/AppShell, PR #20 Docker 스택, PR #24 병합에서 학교/개인 화면 경계 정리 | 없음 | C-01 설정·offline 세부, C-02~C-05 보안·운영·배포 |
 
 PR #24/#25는 모두 develop에 병합됐습니다(`f573bfb`, `11a0af0`). 병합 과정에서 학교 화면 구조는 PR #24 방식을 유지하고 개인기능은 `pages/AutomationPage.tsx`와 `#automation` 라우트로 분리했습니다.
@@ -166,12 +166,13 @@ Stage 3 미검증 항목:
 - 검증(실제 브라우저, Edge 154): 임시 프로필에 확장을 로드해 실제 ID가 `dfobjphjganlegjomdgmaaphbjcgpoea`로 열리는 것, 토큰 저장·연결 확인·현재 화면 등록으로 레시피가 기록되는 것을 확인하고 검증 레시피는 되돌렸습니다.
 - 아직 아님: 도구 모음 아이콘 클릭 팝업과 `activeTab` 부여 경로, 실제 업무 사이트 주소 등록. 상세는 [AUTOMATION_DESIGN.md](AUTOMATION_DESIGN.md)의 2단계 절에 있습니다.
 
-### 자동입력 레시피 (P-03 1차 슬라이스, 브랜치)
+### 자동입력 레시피 (P-03)
 
-- 브랜치 `feat/personal-fill-recipes`에 자동입력 레시피 저장 형식(`kind=fill`, 화면 주소 + 필드 목록), 확장의 요소 선택·위치 후보 생성, dry-run 미리보기를 구현했습니다. 실행(입력)과 결과 검증은 다음 슬라이스입니다.
+- 1차(PR #32, `455dcdc`, develop 통합): 자동입력 레시피 저장 형식(`kind=fill`, 화면 주소 + 필드 목록), 확장의 요소 선택·위치 후보 생성, dry-run 미리보기.
+- 2차(`feat/personal-fill-execute`, 브랜치): 값 입력 실행과 결과 검증, 모호한 위치·쓸 수 없는 컨트롤에서 아무것도 입력하지 않고 중단. 저장·제출 버튼은 누르지 않습니다.
 - 위치는 `id`/`name`/`label`/`css`만 허용하고, CSS는 문자 집합과 함수형 선택자를 제한합니다. 브리지에 `POST /v1/bridge/fill-recipes`, `GET /v1/bridge/recipes`를 추가했고 토큰·고정 origin 검사는 그대로입니다.
-- 검증: Rust fmt/clippy/테스트(워크스페이스 55개), 앱 typecheck/build, foundation 24개, repository guard, 실제 브라우저(Edge)에서 요소 선택·저장·미리보기, 실제 Tauri 창에서 목록 표시와 두 단계 삭제.
-- 아직 아님: 값 입력과 실행, 결과 검증, develop 통합. 상세는 [AUTOMATION_DESIGN.md](AUTOMATION_DESIGN.md)의 3단계 절에 있습니다.
+- 검증: Rust fmt/clippy/테스트(워크스페이스 55개), 앱 typecheck/build, foundation 24개, repository guard, 실제 브라우저(Edge)에서 요소 선택·저장·미리보기·실행·중단 경로, 실제 Tauri 창에서 목록 표시와 두 단계 삭제.
+- 아직 아님: 학생 × 날짜 행렬, 감시, 실제 업무 사이트에서의 사람 검증, 2차 develop 통합. 상세는 [AUTOMATION_DESIGN.md](AUTOMATION_DESIGN.md)의 3단계 절에 있습니다.
 
 ## 배포 기반
 
