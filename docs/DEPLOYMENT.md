@@ -34,6 +34,9 @@ curl -fsS https://<api-host>/ready
 - `DATABASE_URL` = PostgreSQL pooler 주소
 - `OIDC_ISSUER_URL`, `OIDC_AUDIENCE` (`OIDC_JWKS_URL`은 discovery가 없는
   provider용 선택값)
+- `APP_ATTACHMENT_DIR` = 첨부 bytes를 둘 경로(개발용 디렉터리 adapter).
+  `development`가 아닌 환경에서는 필수이며, private R2 adapter가 준비되면
+  교체합니다.
 
 값은 Infisical에서 실행 시점에 주입하고, 이미지나 저장소에 넣지 않습니다.
 

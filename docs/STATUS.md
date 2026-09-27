@@ -23,13 +23,16 @@
 - P-07 레시피 추천은 PR #51(`8704d95`)로 develop에 통합했습니다. `apps/extension`과 `scripts/tests`만 바꿔 변경 경로에 해당하는 `repository-checks`가 성공했고, 실제 Edge에서 자동입력·표 입력·감시 후보의 생성·저장·실행과 로그인 화면·화면 변경 중단 경로를 확인했습니다.
 - S-07 역할 4종 검증은 PR #53(`9b63abf`)으로 develop에 통합했습니다. 병합 전 CI 7개가 성공했고, 실제 provider + 실제 PostgreSQL에서 `collect_flow_e2e` 4개(전체 흐름·초대·내보내기·역할 4종)를 통합 SHA `9b63abf` 기준으로 다시 통과시켰습니다. 남은 행 0, provider에 `@example.test` 계정 없음을 확인했습니다.
 - C-01/C-05 native 검증은 PR #54(`394f9c9`)로 develop에 통합했습니다. 실제 Tauri 창에서 permission·설정·offline·키보드·narrow를 확인해 설정 안내 문구(세션 저장 방식)와 640px 가로 넘침을 고쳤습니다. 병합 전 CI 7개가 성공했습니다.
+- S-04 파일 첨부 1차(metadata 계약·보존 규칙)는 PR #58(`e3a541c`)로 develop에 통합했습니다. 병합 전 CI 7개가 성공했고, 실제 개발 DB에서 `crates/db/tests/attachments.rs` 5개(슬롯 열기·완료·목록/조회·삭제 규칙·만료/purge)가 통과했습니다.
+- S-04 2차(업로드·다운로드 API와 저장소 port)는 PR #59(`2486f8d`)로 develop에 통합했습니다. 병합 전 CI 7개가 성공했고, 실제 provider+PostgreSQL E2E `attachment_flow_end_to_end`가 업로드·조회·목록·삭제와 다른 학교 접근 404/403을 확인한 뒤 생성한 계정·행을 모두 삭제합니다.
+- S-04 3차(보존 기간 정리 sweep)는 PR #60(`aaa55c5`)로 develop에 통합했습니다. 병합 전 CI 7개가 성공했고, 실제 개발 DB에서 worker `attachment_sweep` 1개(만료 첨부 삭제, bytes 삭제 실패 시 행 유지)와 relay 6개가 통과했습니다. 통합 SHA `aaa55c5`에서 E2E 5개와 `@example.test` 잔여 0을 다시 확인했습니다.
 - 학교 화면의 로그인 이후 흐름과 과거 native/API/DB·브라우저 검증, 외부 운영 설정은 이번에 재실행·재조회하지 않았습니다. CI 성공도 production 배포를 대신하지 않습니다.
 
 ## 학교업무 / 개인기능 상태
 
 | 영역 | 통합된 것 | 통합 전 구현 | 남은 우선 작업 |
 | --- | --- | --- | --- |
-| 학교업무 | PR #19·#24(`f573bfb`) + S-02(`9416c6c`) + S-03(`70dcbfe`) + S-06(`e722bce`) + S-05 세션·초안(`93cebdc`) + S-07 내보내기·역할 검증(`9860710`, `88b0a38`, `9b63abf`) | 없음 | S-05 외부 브라우저 PKCE(provider redirect 결정 필요), S-04 파일 첨부(private R2·C-03 저장소 설정 필요) |
+| 학교업무 | PR #19·#24(`f573bfb`) + S-02(`9416c6c`) + S-03(`70dcbfe`) + S-06(`e722bce`) + S-05 세션·초안(`93cebdc`) + S-07 내보내기·역할 검증(`9860710`, `88b0a38`, `9b63abf`) + S-04 첨부 metadata·API·sweep(`e3a541c`, `2486f8d`, `aaa55c5`) | 없음 | S-05 외부 브라우저 PKCE(provider redirect 결정 필요), S-04 4차(private R2 adapter·presigned capability·제출 작성·검토 화면 — 저장소 자원 필요) |
 | 개인기능 | PR #25 개인 화면(`11a0af0`) + PR #30 브리지·확장(`795dc26`) + PR #32·#33 자동입력 엔진(`5318a96`) + PR #35 표 입력(`09b3f88`) + PR #37 감시(`e5415dc`) + PR #51 레시피 추천(`8704d95`) 통합 | 없음 | P-05 앱 데이터 연결(데이터 원천·권한 계약 대기) |
 | 공통 기반 | PR #17 DS/AppShell, PR #20 Docker 스택, PR #24 병합에서 학교/개인 화면 경계 정리, PR #54 설정·narrow 보완 | 없음 | C-01 Figma DS 확장, C-02~C-05 보안·운영·배포(소유자 결정·외부 자원 필요) |
 
@@ -43,7 +46,8 @@ PR #24/#25는 모두 develop에 병합됐습니다(`f573bfb`, `11a0af0`). 병합
 - 수정: E2E 정리가 panic 경로에서 보장되지 않았습니다. `TestCleanup` 가드가 panic에도 provider 계정과 행을 지우고, 네 테스트 모두 정리 후 남은 행 0을 확인합니다.
 - 수정: 확장 권한 문서가 `scripting`을 빠뜨렸고, 감시의 "본문 미저장" 문구가 사용자 선택을 반영하지 못했습니다. 문서와 확장 README를 실제 동작에 맞췄습니다.
 - 검증 보강: 통합 SHA `02f16a2`와 수정 통합 SHA `67e7dc1`에서 실제 provider·PostgreSQL E2E 4개를 다시 통과시켰고, 남은 계정·행이 0임을 확인했습니다. `394f9c9 -> 02f16a2` 차이는 문서뿐이라 그 이전 CI(V2 Architecture 성공)가 같은 앱·서버 코드를 덮고, `02f16a2 -> 67e7dc1`은 이 검토 대응 변경(초안 접근·정리·문서)입니다.
-- 남은 blocker(소유자 결정·외부 자원 필요): S-04 private R2 첨부, S-05 외부 브라우저 PKCE, C-03 staging/prod·최소 권한 DB·backup/restore drill, C-05 서명·업데이트. 승격 전에 닫아야 합니다.
+- 남은 blocker(소유자 결정·외부 자원 필요): S-04 private R2 adapter·presigned·화면, S-05 외부 브라우저 PKCE, C-03 staging/prod·최소 권한 DB·backup/restore drill, C-05 서명·업데이트. 승격 전에 닫아야 합니다.
+- 검토자가 저장소 안에서 선행 가능하다고 밝힌 범위를 진행했습니다: S-04 attachment contract·storage port·개발 adapter·만료 sweep까지 PR #58~#60으로 통합했습니다. C-03 backup/restore 검증 스크립트와 C-05 bundle/updater 설정은 이후 슬라이스로 남아 있습니다.
 - 기존 한계(이번에 바뀌지 않음): 자동화는 아직 `origin`까지만 비교합니다(월/화면 식별자 미구현).
 
 ## 단계 상태
@@ -55,8 +59,8 @@ PR #24/#25는 모두 develop에 병합됐습니다(`f573bfb`, `11a0af0`). 병합
 | 3. 실행 기반 | 조건 충족 | lockfile 커밋 + frozen/locked CI, TS strict, fmt/clippy/test, PostgreSQL 18 migration, /health·/ready 분리 검증, Windows native build, local tauri dev | mobile/Linux/macOS 미검증, client production CSP·환경 분리 후속 |
 | 4. Figma | 시안 승인 | Design System/Product 핵심 UI 승인, Stage 5 기본 token/component mapping | interaction/accessibility detail, Library/Code Connect 후속 |
 | 5. Code DS/AppShell | 완료 (PR #17, `9697363`) | `packages/ui` token/component와 실제 Tauri AppShell, 상태·키보드·wide/narrow 검증 | Figma Library/Code Connect 후속 |
-| 6. Auth/Data/Ops | 구현 중 | Supabase Auth 실로그인 + ES256/JWKS 검증, user/membership provisioning, tenant RBAC, Collect 상태 전이와 version 충돌까지 실제 프로젝트·실제 DB에서 E2E 통과. C-02로 키 회전·장애·캐시, 네 역할, 요청 ID·redaction, `/metrics`와 풀 재사용 학교 격리를 보강 | R2/NATS/SQLite/backup, 환경 분리, 세션 영속화 |
-| 7. Collect | 구현 중 | PR #19 기본 흐름, PR #24 항목·대상·제출 현황·내 배정·구성원 화면, S-03 편집, S-07 결과 내보내기·화면·역할 4종 검증을 통합하고 실제 프로젝트 E2E 4개로 확인 | 첨부(S-04), offline 세부 |
+| 6. Auth/Data/Ops | 구현 중 | Supabase Auth 실로그인 + ES256/JWKS 검증, user/membership provisioning, tenant RBAC, Collect 상태 전이와 version 충돌까지 실제 프로젝트·실제 DB에서 E2E 통과. C-02로 키 회전·장애·캐시, 네 역할, 요청 ID·redaction, `/metrics`와 풀 재사용 학교 격리를 보강. S-06 outbox relay·S-05 세션/초안·S-04 첨부 metadata·API·sweep을 통합 | R2 실제 연결, backup/restore drill, 환경 분리 (NATS relay·SQLite 초안·세션 영속화는 통합) |
+| 7. Collect | 구현 중 | PR #19 기본 흐름, PR #24 항목·대상·제출 현황·내 배정·구성원 화면, S-03 편집, S-07 결과 내보내기·화면·역할 4종 검증, S-04 첨부 1~3차를 통합하고 실제 프로젝트 E2E 5개로 확인 | 첨부 4차(R2 adapter·presigned·화면), offline 세부 |
 
 ## 확인된 원격 상태
 
@@ -207,7 +211,7 @@ Stage 3 미검증 항목:
 - Git history rewrite
 - 나머지 외부 credential 실제 폐기/회전 확인 (Infisical dev 서비스 토큰은 2026-09-25 회전 기록 있음)
 - production infra 생성/배포
-- R2/NATS 업무 처리 및 production 연결, 학교 환경 분리
+- R2 실제 저장소 연결과 production 연결, 학교 환경 분리
 - production DB migration
 
 인증 provider는 [ADR-0002](ADR/0002-supabase-identity-and-database.md)의 Supabase Auth이며 ZITADEL 구축은 현행 대기 작업이 아닙니다. 클라이언트 세션은 OS 자격 증명 저장소에 저장되어 재시작 후에도 유지됩니다(S-05). 외부 브라우저 PKCE 로그인은 identity provider의 redirect 허용 목록 결정이 필요해 후속으로 남아 있습니다.
