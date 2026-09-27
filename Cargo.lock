@@ -3343,6 +3343,7 @@ dependencies = [
  "serde",
  "tauri",
  "tauri-build",
+ "url",
 ]
 
 [[package]]
