@@ -18,7 +18,7 @@
 | --- | --- | --- | --- |
 | S-01 | 항목·대상·제출 현황과 화면 확장 / 완료(PR #24, `f573bfb`) | C-01 공통 진입 계약 | develop 통합과 CI 6개 통과 확인. 다음은 S-02 |
 | S-02 | 구성원 초대·합류 / 완료(PR #28, `9416c6c`) | S-01 | 초대된 계정이 해당 학교 contributor로 합류해 수합 제출; 다른 학교·계정에는 권한이 생기지 않음. 다음은 S-03 |
-| S-03 | 항목·대상 편집과 권한 규칙 / 계획 | S-01, 구성원 변경 시 S-02 | 배포 전후 변경·역할 변경·미배정 제출 정책 확정, 서버 검증·충돌 처리·변경 기록과 UI 검증 |
+| S-03 | 항목·대상 편집과 권한 규칙 / 완료(PR #41, `70dcbfe`) | S-01, 구성원 변경 시 S-02 | 배포 전후 변경·역할 변경·미배정 제출 정책 확정, 서버 검증·충돌 처리·변경 기록과 UI 검증 |
 | S-04 | 파일 첨부 / 계획 | S-01, C-03 승인된 저장소 설정 | 권한 확인 후 private R2 업로드/다운로드, 크기·유형·만료·보존 정책, 실패/재시도·학교 간 접근 차단 |
 | S-05 | 세션 유지·offline 초안 / 계획 | S-01, C-01/C-02 | 외부 브라우저 PKCE + OS 보안 저장소, 사용자/학교별 SQLite 초안, 재시작 복구·재전송·충돌·로그아웃 정리 |
 | S-06 | 알림·재처리용 outbox/worker / 계획 | S-01 | 업무 변경+outbox 단일 transaction, relay/JetStream/idempotent 처리, commit 후 ACK, retry/dead-letter·중복 전달 복구 |
@@ -37,6 +37,23 @@
 - 수락은 토큰의 확인된 이메일이 초대 주소와 일치할 때만 성립하고, 학교와 역할은 초대 행에서만 결정합니다. 이미 구성원이면 기존 역할을 유지합니다.
 - 구성원 화면에서 초대 생성·코드 1회 표시·취소·상태 목록을, 설정 화면에서 초대 코드 합류를 제공합니다.
 - 검증: `services/api/tests/collect_flow_e2e.rs`의 `membership_invitation_end_to_end`가 실제 로그인과 실제 PostgreSQL에서 코드 해시 저장, 중복 초대 409, admin 초대 400, 다른 주소 수락 403, 합류 후 배정·제출·현황 집계, 코드 재사용 409, 취소 200/404, 만료 410, 미초대 계정 403을 확인하고 생성한 계정·행을 모두 삭제합니다.
+## 항목·대상 편집 (S-03)
+
+PR #41(`feat/collect-item-editing`)로 배포 전후 편집 규칙을 develop에 통합했습니다.
+
+- 항목: 초안은 자유롭게 개편합니다. 배포 후에는 이름·필수 여부 변경과 항목 추가를 허용하고, 답변이 저장된 항목의 삭제는 거부합니다(`409 item_has_answers`). 마감된 수합은 편집할 수 없습니다(`409 collect_not_editable`).
+- 대상: 제출 가능한 구성원만 대상이 될 수 있습니다(viewer·타 학교 사용자 거부 `409 target_not_assignable`). 초안을 저장했거나 제출한 대상의 제외는 거부합니다(`409 target_has_answers`).
+- 미배정 제출: 대상이 아닌 구성원은 초안 저장·제출을 할 수 없습니다(`403 not_assigned`). 배포 시 대상 목록이 비어 있으면 제출 가능한 구성원 전체가 기본 대상이 됩니다.
+- 충돌 처리: 두 편집 모두 `expectedVersion`을 요구하고 어긋나면 현재 버전과 함께 `409 version_conflict`를 돌려줍니다. 편집마다 버전이 오르고 감사 이벤트(`collect.items_updated`, `collect.assignments_updated`)가 남습니다.
+- API: `PUT /v1/collects/{id}/items`, `PUT /v1/collects/{id}/assignments`(Manage 권한: admin·coordinator). 화면은 수합 상세의 `항목 편집`·`대상 편집`입니다.
+
+검증 (2026-09-27, Windows):
+
+- `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo test --workspace --locked`(85개), 앱 typecheck/build, foundation 25개, repository guard.
+- 실제 개발 DB: `crates/db/tests/collect_editing.rs` 2개가 항목 개편·배포 후 추가·답변 있는 항목 삭제 거부·버전 충돌·마감 후 거부와 대상 추가·viewer/외부인 거부·답변 있는 대상 제거 거부·미배정 저장·제출 거부를 확인했습니다. CI `postgres` 작업이 이 테스트를 실행합니다. 기존 `collect_flow_e2e` 2개도 그대로 통과했습니다.
+- 실제 Tauri 창(WebView2 CDP): 로그인 → 자료수합 → 수합 상세 → `항목 편집`(이름 수정·항목 추가) 저장 → `대상 편집` 저장까지 화면에서 확인했습니다. 검증용 계정·학교·수합은 정리했습니다.
+- 아직 아님: 거부 경로(답변 있는 항목 삭제 등)의 화면 조작 검증과 편집 이력 화면 표시.
+
 ## 이미 있는 기반과 남은 검증
 
 인증과 membership RBAC를 새로 시작하는 작업으로 되돌리지 않습니다. `crates/auth`의 OIDC/JWKS 검증, `crates/db/src/records.rs`의 사용자 upsert·membership 조회, `services/api/src/lib.rs`의 권한 및 request ID 처리가 이미 있습니다.
