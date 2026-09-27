@@ -121,6 +121,7 @@ PR #24/#25는 모두 develop에 병합됐습니다(`f573bfb`, `11a0af0`). 병합
 - CI: `postgres` 작업이 runtime 역할로 API를 띄워 `/ready` 200을 확인하고, `nats-outbox` 작업이 같은 역할로 worker 기동을 확인합니다.
 - 실제 Tauri 창(WebView2 CDP, 가짜 provider) 확인: 로그인 화면 → native 명령 → loopback 콜백 → code 교환 → OS 자격 증명 저장소에 provider가 발급한 `sub`와 같은 사용자로 저장, 첨부 상태 기계(완료 전 409, 미완료 행·제출 잠금, 실제 업로드 뒤 받기·제출 가능), 목록 실패 뒤 제출 잠금 해제와 화면 재시도.
 - 검증: `cargo test --workspace --locked` 161개, 실제 개발 DB `crates/db/tests/attachments.rs` 10개·worker sweep 1개·소비 worker 2개·relay 6개, 실제 provider + PostgreSQL E2E 5개, foundation 34개, repository guard 0건, `@example.test`·검증 학교·행 잔여 0. 백업 drill은 migration 9개·테이블 15개입니다.
+- PR #79(`f551ab8`)로 develop에 통합했습니다. 병합 전 CI 7개가 성공했습니다. `nats-outbox` 작업이 실제 JetStream으로 소비 worker의 commit 후 ACK·중복 처리를 확인했고, 같은 역할 검사로 runtime 역할 worker가 유지되는 것을, `postgres` 작업이 runtime 역할로 띄운 API의 `/ready` 200과 drill(`migrations=9 tables=15`)을 확인했습니다.
 
 ## 단계 상태
 
