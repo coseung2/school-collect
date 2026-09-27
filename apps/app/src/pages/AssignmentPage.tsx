@@ -10,10 +10,13 @@ import {
 import {
   ApiError,
   fetchCollect,
+  listAttachments,
   saveDraft,
   sendSubmission,
+  type Attachment,
   type CollectDetail,
 } from "../api";
+import { AttachmentList } from "./AttachmentList";
 import {
   deleteLocalDraft,
   loadLocalDraft,
@@ -52,6 +55,20 @@ export function AssignmentPage({
   const [conflict, setConflict] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [pendingLocal, setPendingLocal] = useState(false);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+
+  // Attachments are optional to the page: if they cannot load (offline, or
+  // storage not configured), the text answer still works.
+  const loadAttachments = useCallback(async () => {
+    try {
+      const value = await listAttachments(token, tenantId, collectId);
+      setAttachments(value.attachments);
+      setAttachmentError(null);
+    } catch (caught) {
+      setAttachmentError(messageOf(caught));
+    }
+  }, [collectId, tenantId, token]);
 
   const load = useCallback(async () => {
     try {
@@ -81,7 +98,8 @@ export function AssignmentPage({
 
   useEffect(() => {
     void load();
-  }, [load]);
+    void loadAttachments();
+  }, [load, loadAttachments]);
 
   const items = useMemo(
     () =>
@@ -289,8 +307,25 @@ export function AssignmentPage({
                 rows={4}
                 value={values[item.key] ?? ""}
               />
+              {attachmentError === null ? (
+                <AttachmentList
+                  attachments={attachments.filter((entry) => entry.itemKey === item.key)}
+                  collectId={collectIdForSave}
+                  editable={editable}
+                  itemKey={item.key}
+                  itemLabel={item.label}
+                  onChanged={loadAttachments}
+                  tenantId={tenantId}
+                  token={token}
+                />
+              ) : null}
             </FormField>
           ))}
+          {attachmentError ? (
+            <p className="app-form__notice" role="status">
+              첨부 파일을 불러오지 못했습니다: {attachmentError}
+            </p>
+          ) : null}
           <div className="app-form__actions">
             <Button
               disabled={!editable || busy}

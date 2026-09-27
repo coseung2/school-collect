@@ -148,7 +148,8 @@ R2는 private bucket을 기본으로 합니다. 서버가 tenant/resource 권한
 - API: `POST /v1/collects/{id}/attachments`(슬롯 열기) → `PUT /v1/attachments/{id}/content`(bytes, 선언 크기·형식·checksum 검증) → `GET /v1/attachments/{id}`·`/content`, `GET /v1/collects/{id}/attachments`(담당자는 자기 파일, 관리자는 전체), `DELETE /v1/attachments/{id}`.
 - bytes는 `ObjectStorage` port(`crates/application`) 뒤에 있습니다. 개발은 `APP_ATTACHMENT_DIR`의 디렉터리 adapter를 쓰고, 운영은 private R2 adapter로 바꿉니다. 저장소가 설정되지 않으면 첨부 endpoint는 503으로 거절하며, 개발 외 환경에서는 `APP_ATTACHMENT_DIR` 없이 기동하지 않습니다.
 - 정리: worker가 한 배치를 끝낸 뒤 `WORKER_ATTACHMENT_SWEEP_MS`(기본 6시간)를 온전히 기다리고 다음 배치를 시작합니다. 삭제 표시된 행도 보존 기간이 지나면 metadata까지 지웁니다. bytes 삭제에 실패한 행은 지우지 않고 다음 주기에 다시 시도합니다(`APP_ATTACHMENT_DIR`이 설정된 worker에서만 동작). worker는 migration을 실행하지 않고, migrator가 적용한 schema가 없으면 기동하지 않습니다.
-- 아직(4차 이후): R2 adapter와 presigned capability(직접 업로드 URL), 화면(제출 작성·검토).
+- 화면: 제출 작성 화면의 항목별 첨부와 관리자 수합 상세의 제출 첨부 받기가 위 API를 씁니다. 받은 bytes는 native `save_downloaded_file`이 다운로드 폴더에만 씁니다(이름 검사·덮어쓰기 없음·10MB 상한).
+- 아직: R2 adapter와 presigned capability(직접 업로드 URL).
 
 ## Local/offline
 

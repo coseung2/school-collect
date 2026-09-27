@@ -231,6 +231,49 @@
   justify-content: flex-end;
 }
 
+/* Attachments sit under an answer field: same list surface, compact add row. */
+.app-attachments {
+  display: grid;
+  gap: var(--sc-space-2);
+  margin-top: var(--sc-space-2);
+}
+
+.app-attachments__add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sc-space-3);
+}
+
+.app-attachments__hint {
+  color: var(--sc-color-text-muted);
+  font-size: 13px;
+}
+
+.app-review-files {
+  display: grid;
+  gap: var(--sc-space-1);
+  margin-bottom: var(--sc-space-3);
+}
+
+.app-review-files__owner {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+/* The native file input stays in the page for the picker; the visible button
+   is the one control users and assistive technology interact with. */
+.app-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .app-detail-head {
   display: flex;
   align-items: center;
