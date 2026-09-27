@@ -37,6 +37,10 @@ async fn pool() -> Option<PgPool> {
     Some(pool)
 }
 
+/// These tests read the shared outbox table, so they run one at a time and
+/// keep their event counts exact.
+static DB_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 async fn clear_outbox(pool: &PgPool) {
     sqlx::query("DELETE FROM school_collect.outbox_events WHERE topic LIKE 'test.%'")
         .execute(pool)
@@ -101,6 +105,7 @@ async fn relay_publishes_due_events_and_never_repeats_them() {
         eprintln!("DATABASE_URL is not set; skipping the outbox relay check");
         return;
     };
+    let _guard = DB_LOCK.lock().await;
     clear_outbox(&pool).await;
 
     let first = insert_test_event(&pool, "test.first").await;
@@ -135,6 +140,7 @@ async fn relay_retries_failures_then_dead_letters() {
         eprintln!("DATABASE_URL is not set; skipping the outbox retry check");
         return;
     };
+    let _guard = DB_LOCK.lock().await;
     clear_outbox(&pool).await;
     let event = insert_test_event(&pool, "test.failure").await;
 
@@ -143,6 +149,7 @@ async fn relay_retries_failures_then_dead_letters() {
         batch_size: 10,
         max_attempts: 2,
         retry_delay: Duration::from_millis(0),
+        claim_lease: Duration::from_secs(60),
     };
 
     let report = run_once(&pool, &publisher, config)
@@ -182,6 +189,7 @@ async fn concurrent_relays_never_take_the_same_event() {
         eprintln!("DATABASE_URL is not set; skipping the outbox concurrency check");
         return;
     };
+    let _guard = DB_LOCK.lock().await;
     clear_outbox(&pool).await;
     for index in 0..4 {
         insert_test_event(&pool, &format!("test.concurrent.{index}")).await;
@@ -220,6 +228,7 @@ async fn business_changes_write_their_event_in_the_same_transaction() {
         eprintln!("DATABASE_URL is not set; skipping the outbox transaction check");
         return;
     };
+    let _guard = DB_LOCK.lock().await;
     let run_id = Uuid::now_v7().to_string();
     let admin = school_collect_db::upsert_user(
         &pool,
@@ -331,6 +340,7 @@ async fn jetstream_acknowledges_deliveries_and_dedupes_repeats() {
         eprintln!("DATABASE_URL is not set; skipping the JetStream delivery check");
         return;
     };
+    let _guard = DB_LOCK.lock().await;
     clear_outbox(&pool).await;
     let event_id = insert_test_event(&pool, "test.jetstream").await;
 
@@ -421,10 +431,13 @@ async fn failed_claims_are_counted_before_publishing() {
         eprintln!("DATABASE_URL is not set; skipping the outbox attempt check");
         return;
     };
+    let _guard = DB_LOCK.lock().await;
     clear_outbox(&pool).await;
     let event = insert_test_event(&pool, "test.attempts").await;
 
-    let claimed = claim_outbox_batch(&pool, 10).await.expect("claim");
+    let claimed = claim_outbox_batch(&pool, 10, Duration::from_secs(60))
+        .await
+        .expect("claim");
     assert_eq!(claimed.len(), 1);
     assert_eq!(claimed[0].attempts, 1, "the attempt is counted on claim");
 

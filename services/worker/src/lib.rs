@@ -46,6 +46,8 @@ pub struct RelayConfig {
     pub max_attempts: i32,
     /// Base delay between attempts; grows with the attempt count.
     pub retry_delay: Duration,
+    /// How long a claimed batch is reserved for this relay.
+    pub claim_lease: Duration,
 }
 
 impl Default for RelayConfig {
@@ -54,6 +56,7 @@ impl Default for RelayConfig {
             batch_size: 20,
             max_attempts: 5,
             retry_delay: Duration::from_secs(5),
+            claim_lease: Duration::from_secs(60),
         }
     }
 }
@@ -75,7 +78,7 @@ pub async fn run_once(
     publisher: &dyn EventPublisher,
     config: RelayConfig,
 ) -> anyhow::Result<RelayReport> {
-    let events = claim_outbox_batch(pool, config.batch_size).await?;
+    let events = claim_outbox_batch(pool, config.batch_size, config.claim_lease).await?;
     let mut report = RelayReport {
         claimed: events.len(),
         ..RelayReport::default()

@@ -78,22 +78,27 @@ impl OutboxEventRecord {
 
 /// Claims up to `limit` due events and counts the attempt.
 ///
-/// `SKIP LOCKED` keeps concurrent relays from blocking each other, and the
-/// attempt counter moves before publishing so a worker that dies mid-publish
-/// does not retry forever.
+/// The claim is one committed statement, so `SKIP LOCKED` alone would let a
+/// second relay take the same rows once the first statement commits. The lease
+/// (`claimed_until`) closes that window: a row another relay is working on is
+/// skipped until its lease expires, which also recovers rows from a worker that
+/// died mid-publish.
 pub async fn claim_outbox_batch(
     pool: &PgPool,
     limit: i64,
+    lease: std::time::Duration,
 ) -> anyhow::Result<Vec<OutboxEventRecord>> {
     let rows = sqlx::query(
         "UPDATE school_collect.outbox_events AS claimed
-         SET attempts = claimed.attempts + 1
+         SET attempts = claimed.attempts + 1,
+             claimed_until = now() + make_interval(secs => $2)
          WHERE claimed.id IN (
              SELECT pending.id
              FROM school_collect.outbox_events pending
              WHERE pending.published_at IS NULL
                AND pending.dead_lettered_at IS NULL
                AND pending.available_at <= now()
+               AND (pending.claimed_until IS NULL OR pending.claimed_until < now())
              ORDER BY pending.available_at, pending.created_at
              LIMIT $1
              FOR UPDATE SKIP LOCKED
@@ -102,6 +107,7 @@ pub async fn claim_outbox_batch(
                    claimed.aggregate_id, claimed.payload, claimed.attempts",
     )
     .bind(limit)
+    .bind(lease.as_millis() as f64 / 1000.0)
     .fetch_all(pool)
     .await?;
 
@@ -112,7 +118,7 @@ pub async fn claim_outbox_batch(
 pub async fn mark_outbox_published(pool: &PgPool, id: Uuid) -> anyhow::Result<()> {
     sqlx::query(
         "UPDATE school_collect.outbox_events
-         SET published_at = now(), last_error = NULL
+         SET published_at = now(), last_error = NULL, claimed_until = NULL
          WHERE id = $1",
     )
     .bind(id)
@@ -153,7 +159,7 @@ pub async fn mark_outbox_failed(
     if attempts >= max_attempts {
         sqlx::query(
             "UPDATE school_collect.outbox_events
-             SET dead_lettered_at = now(), last_error = $2
+             SET dead_lettered_at = now(), last_error = $2, claimed_until = NULL
              WHERE id = $1",
         )
         .bind(id)
@@ -166,7 +172,7 @@ pub async fn mark_outbox_failed(
     let delay = retry_delay_ms.saturating_mul(i64::from(attempts.max(1)));
     sqlx::query(
         "UPDATE school_collect.outbox_events
-         SET available_at = now() + make_interval(secs => $2), last_error = $3
+         SET available_at = now() + make_interval(secs => $2), last_error = $3, claimed_until = NULL
          WHERE id = $1",
     )
     .bind(id)

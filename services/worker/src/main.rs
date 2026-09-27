@@ -25,6 +25,7 @@ async fn main() -> anyhow::Result<()> {
         batch_size: read_number("WORKER_BATCH_SIZE", 20)?,
         max_attempts: read_number("WORKER_MAX_ATTEMPTS", 5)?,
         retry_delay: Duration::from_millis(read_number("WORKER_RETRY_DELAY_MS", 5_000)?),
+        claim_lease: Duration::from_millis(read_number("WORKER_CLAIM_LEASE_MS", 60_000)?),
     };
     let poll_interval = Duration::from_millis(read_number("WORKER_POLL_MS", 1_000)?);
 
