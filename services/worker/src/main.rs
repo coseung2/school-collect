@@ -33,10 +33,12 @@ async fn main() -> anyhow::Result<()> {
     let poll_interval = Duration::from_millis(read_number("WORKER_POLL_MS", 1_000)?);
 
     let pool = school_collect_db::connect(&database_url).await?;
-    school_collect_db::MIGRATOR
-        .run(&pool)
+    // Schema changes belong to `school-collect-migrator` alone, so the worker
+    // can run with a role that has no DDL rights. It only checks that the
+    // migrator already ran.
+    school_collect_db::verify_schema(&pool)
         .await
-        .context("failed to apply migrations")?;
+        .context("the database schema is not ready; run school-collect-migrator first")?;
     let publisher = Arc::new(NatsPublisher::connect(&nats_url).await?);
     tracing::info!(
         stream = school_collect_worker::nats::STREAM_NAME,

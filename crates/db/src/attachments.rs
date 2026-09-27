@@ -72,8 +72,12 @@ pub enum CompleteAttachmentOutcome {
 
 #[derive(Debug)]
 pub enum DeleteAttachmentOutcome {
-    Deleted { object_key: String },
+    Deleted {
+        object_key: String,
+    },
     NotFound,
+    /// The answer was handed in, so only a manager may remove its files.
+    Submitted,
 }
 
 /// Opens one attachment slot for a submission item.
@@ -117,10 +121,13 @@ pub async fn create_attachment(
     }
 
     // Only a target of the collect owes an answer, and an answer that was handed
-    // in keeps its files.
+    // in keeps its files. Locking the assignment row serializes every slot
+    // opened for this member, so two concurrent requests cannot both pass the
+    // count checks below and exceed the per-item or per-submission limit.
     let assigned = sqlx::query_scalar::<_, i32>(
         "SELECT 1 FROM school_collect.collect_assignments
-         WHERE collect_id = $1 AND user_id = $2",
+         WHERE collect_id = $1 AND user_id = $2
+         FOR UPDATE",
     )
     .bind(collect_id)
     .bind(user_id)
@@ -326,14 +333,50 @@ pub async fn list_collect_attachments(
 }
 
 /// Hides one attachment and hands back the object key to remove.
+///
+/// `owner_rules` applies the member rule: a handed-in answer keeps its files.
+/// The submission row is locked in the same transaction, so a submit that
+/// races this delete either sees the file or the file is already gone; the
+/// state can never be read as "draft" and then change before the row updates.
 pub async fn delete_attachment(
     pool: &PgPool,
     tenant_id: Uuid,
     attachment_id: Uuid,
     actor: Uuid,
+    owner_rules: bool,
     now: DateTime<Utc>,
 ) -> anyhow::Result<DeleteAttachmentOutcome> {
     let mut tx = pool.begin().await?;
+
+    let target = sqlx::query_as::<_, (Uuid, Uuid)>(
+        "SELECT collect_id, user_id FROM school_collect.collect_attachments
+         WHERE tenant_id = $1 AND id = $2 AND status <> 'deleted'
+         FOR UPDATE",
+    )
+    .bind(tenant_id)
+    .bind(attachment_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((collect_id, owner)) = target else {
+        tx.rollback().await?;
+        return Ok(DeleteAttachmentOutcome::NotFound);
+    };
+    if owner_rules {
+        let submission = sqlx::query_scalar::<_, String>(
+            "SELECT status FROM school_collect.collect_submissions
+             WHERE tenant_id = $1 AND collect_id = $2 AND user_id = $3
+             FOR UPDATE",
+        )
+        .bind(tenant_id)
+        .bind(collect_id)
+        .bind(owner)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if submission.as_deref() == Some("submitted") {
+            tx.rollback().await?;
+            return Ok(DeleteAttachmentOutcome::Submitted);
+        }
+    }
 
     let deleted = sqlx::query_as::<_, AttachmentRecord>(&format!(
         "UPDATE school_collect.collect_attachments
@@ -376,6 +419,10 @@ pub struct ExpiredAttachment {
 }
 
 /// Attachments the retention sweep still has to remove.
+///
+/// Deleted rows are included on purpose: their bytes may still be in storage
+/// if removal failed, and their metadata (file name, owner) must not outlive
+/// the retention period either.
 pub async fn expired_attachments(
     pool: &PgPool,
     now: DateTime<Utc>,
@@ -383,7 +430,7 @@ pub async fn expired_attachments(
 ) -> anyhow::Result<Vec<ExpiredAttachment>> {
     let records = sqlx::query_as::<_, ExpiredAttachment>(
         "SELECT id, tenant_id, object_key FROM school_collect.collect_attachments
-         WHERE status <> 'deleted' AND expires_at <= $1
+         WHERE expires_at <= $1
          ORDER BY expires_at
          LIMIT $2",
     )

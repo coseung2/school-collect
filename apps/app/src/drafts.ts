@@ -57,11 +57,10 @@ export async function deleteLocalDraft(
   }
 }
 
-/** Signing out clears that user's drafts from this computer. */
+/**
+ * Signing out clears that user's drafts from this computer. A failure means
+ * drafts may remain, so it is reported to the caller instead of swallowed.
+ */
 export async function clearLocalDrafts(userId: string): Promise<void> {
-  try {
-    await invoke("clear_local_drafts", { userId });
-  } catch {
-    // Nothing to clear on platforms without the store.
-  }
+  await invoke("clear_local_drafts", { userId });
 }

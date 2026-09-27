@@ -26,7 +26,7 @@
 - S-04 파일 첨부 1차(metadata 계약·보존 규칙)는 PR #58(`e3a541c`)로 develop에 통합했습니다. 병합 전 CI 7개가 성공했고, 실제 개발 DB에서 `crates/db/tests/attachments.rs` 5개(슬롯 열기·완료·목록/조회·삭제 규칙·만료/purge)가 통과했습니다.
 - S-04 2차(업로드·다운로드 API와 저장소 port)는 PR #59(`2486f8d`)로 develop에 통합했습니다. 병합 전 CI 7개가 성공했고, 실제 provider+PostgreSQL E2E `attachment_flow_end_to_end`가 업로드·조회·목록·삭제와 다른 학교 접근 404/403을 확인한 뒤 생성한 계정·행을 모두 삭제합니다.
 - S-04 3차(보존 기간 정리 sweep)는 PR #60(`aaa55c5`)로 develop에 통합했습니다. 병합 전 CI 7개가 성공했고, 실제 개발 DB에서 worker `attachment_sweep` 1개(만료 첨부 삭제, bytes 삭제 실패 시 행 유지)와 relay 6개가 통과했습니다. 통합 SHA `aaa55c5`에서 E2E 5개와 `@example.test` 잔여 0을 다시 확인했습니다.
-- 독립 검토가 저장소 안에서 선행 가능하다고 밝힌 나머지 범위를 PR #62~#66으로 통합했습니다. 각 PR은 병합 전 CI 7개가 성공했습니다.
+- 독립 검토가 저장소 안에서 선행 가능하다고 밝힌 나머지 범위를 PR #62~#66으로 통합했습니다. #62·#63·#65·#66은 병합 전 CI 7개, 문서·스크립트만 바꾼 #64는 해당 경로의 `repository-checks` 1개가 성공했습니다.
   - C-03 백업·복구 drill(PR #62, `74e1149`): CI `postgres` 작업이 dump → 빈 DB 복구 → schema version·migration 5개·`school_collect` 테이블 13개 행 수·canary 행을 대조합니다. 첫 실행에서 client가 입력을 가로채 테이블 1개만 검사하던 결함을 CI 로그로 찾아 고쳤습니다.
   - C-05 Windows 설치 파일(PR #63, `73067bd`): CI가 `School Collect_0.2.0_x64-setup.exe`(약 2.97MB)를 매번 만들고 서명 상태(`NotSigned`)를 기록합니다. updater는 켜지 않았습니다.
   - C-04 전체 이력 스캔(PR #64, `8829326`): 155개 커밋에서 HEAD 0건, 과거 revision의 rewrite 후보 3묶음을 [SECURITY_BASELINE.md](SECURITY_BASELINE.md)에 기록했습니다. 값은 출력하지 않습니다.
@@ -56,6 +56,20 @@ PR #24/#25는 모두 develop에 병합됐습니다(`f573bfb`, `11a0af0`). 병합
 - 남은 blocker(소유자 결정·외부 자원 필요): S-04 private R2 adapter·presigned·화면, S-05 외부 브라우저 PKCE, C-03 staging/prod·최소 권한 DB·backup/restore drill, C-05 서명·업데이트. 승격 전에 닫아야 합니다.
 - 검토자가 저장소 안에서 선행 가능하다고 밝힌 범위를 모두 진행했습니다: S-04 attachment contract·storage port·개발 adapter·만료 sweep(PR #58~#60), C-03 backup/restore drill(#62), C-05 설치 파일 번들(#63), C-04 full-history scan과 rewrite 범위(#64), S-05 PKCE state 검증(#65), C-01 Select·Checkbox(#66). Dialog·Sheet·Toast와 updater는 각각 Figma 승인과 서명 키가 필요해 남겨 두었습니다.
 - 자동화 화면 확인: 1차 검토의 MEDIUM 지적(origin만 비교)에 따라 origin과 path를 함께 비교하도록 고쳤습니다. 화면 안의 월·학기 식별은 아직 없습니다([AUTOMATION_DESIGN.md](AUTOMATION_DESIGN.md) "화면 확인").
+
+### 2차 독립 검토 (2026-09-27, HEAD `033fa00`)
+
+같은 검토자(gpt-6-astra, reasoning 매우높음)에게 1차 지적이 닫혔는지 다시 확인받았습니다. 판정은 **BLOCK**이었고, 저장소 안에서 고칠 수 있는 지적은 모두 다음 PR에서 고쳤습니다.
+
+- 초안 소유자(F1): 세션의 사용자 id를 token의 `sub`와 같을 때만 저장하고, 초안 명령도 저장된 token의 `sub`와 대조합니다. 앱은 앱 DB id 대신 provider subject로 초안을 엽니다. 실제 Tauri 창에서 로그인 → API 중단 중 임시 저장(로컬 SQLite, 소유자 = token subject) → 앱 재시작 후 로그인 유지·초안 복구 → 로그아웃 시 세션·초안 0행을 확인했고, 다른 사용자 id의 초안 조회와 subject가 다른 세션 저장은 거부됐습니다.
+- 정리 실패 안내(F2): 세션·초안 삭제 래퍼가 오류를 삼키지 않고, 로그아웃은 두 단계의 실패를 모두 모아 안내합니다.
+- 첨부(F3·F4·F7·F8): 저장된 첨부 재업로드 409, 삭제는 행 잠금 안에서 제출 여부를 확인한 뒤 행 → bytes 순서, 슬롯 열기는 배정 행 잠금, 삭제 표시된 행도 보존 기간 뒤 정리(migration `0006`).
+- worker(F5·F6): 배치 사이에 주기를 온전히 기다리고(가상 시간 테스트), migration을 실행하지 않으며, 개발·배포 compose가 worker에 DB·NATS·첨부 경로를 전달하고 api와 첨부 volume을 공유합니다.
+- E2E 정리(F9): provider 계정 삭제 실패를 오류로 모으고, 앱 사용자는 id와 provider subject로 함께 찾아 지웁니다.
+- 이력 스캔(F10): 허용 목록은 비밀 값 전체가 placeholder와 같을 때만 통과하고, "HEAD에 있음"은 경로가 아니라 HEAD 내용으로 판정합니다(회귀 테스트 3개).
+- PKCE(F11): 오류 응답도 state가 맞을 때만 받아들입니다.
+- 자동화 화면(F12): PR #68로 origin+path 비교를 통합했습니다.
+- 검토가 지적한 문서 부정확: #64는 문서·스크립트만 바꿔 `repository-checks` 한 개만 실행됐습니다. "#62~#66 각각 CI 7개"는 #64에 대해 사실이 아니었습니다. `docs/PERSONAL_PLAN.md`의 확장 권한에 `scripting`을 추가했습니다.
 
 ## 단계 상태
 

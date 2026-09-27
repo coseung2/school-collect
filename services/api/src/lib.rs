@@ -899,6 +899,17 @@ async fn upload_attachment_content(
             "남의 첨부 파일에는 내용을 올릴 수 없습니다.",
         );
     }
+    // Bytes are written once. Re-uploading a stored slot would overwrite the
+    // object while the row keeps the first checksum, so storage and metadata
+    // would disagree. Refuse before touching storage.
+    if record.status != "pending" {
+        return failure(
+            &headers,
+            StatusCode::CONFLICT,
+            "attachment_already_stored",
+            "이미 올린 첨부 파일입니다. 바꾸려면 지우고 새로 올려 주세요.",
+        );
+    }
 
     let declared = headers
         .get(axum::http::header::CONTENT_TYPE)
@@ -1005,14 +1016,11 @@ async fn delete_attachment(
         Err(response) => return *response,
     };
 
-    // An answer that was handed in keeps its files unless a manager says otherwise.
-    let submitted = !role.can_manage_collects()
-        && matches!(
-            school_collect_db::get_submission(&state.pool, tenant_id, record.collect_id, record.user_id)
-                .await,
-            Ok(Some(submission)) if submission.status == "submitted"
-        );
-    if !attachments::can_delete(role, record.user_id == user.id, submitted) {
+    let manager = role.can_manage_collects();
+    let owner = record.user_id == user.id;
+    // Who may delete at all. Whether the answer was already handed in is checked
+    // inside the delete transaction, so it cannot change between check and write.
+    if !attachments::can_delete(role, owner, false) {
         return failure(
             &headers,
             StatusCode::FORBIDDEN,
@@ -1021,27 +1029,45 @@ async fn delete_attachment(
         );
     }
 
-    if let Err(error) = storage.delete(&record.object_key).await {
-        return attachment_storage_failure(&headers, error);
-    }
-    match school_collect_db::delete_attachment(
+    // Row first, bytes second: once the row is hidden nobody can read the file,
+    // and if removing the bytes fails the retention sweep removes them later.
+    let object_key = match school_collect_db::delete_attachment(
         &state.pool,
         tenant_id,
         record.id,
         user.id,
+        !manager,
         Utc::now(),
     )
     .await
     {
-        Ok(DeleteAttachmentOutcome::Deleted { .. }) => StatusCode::NO_CONTENT.into_response(),
-        Ok(DeleteAttachmentOutcome::NotFound) => failure(
-            &headers,
-            StatusCode::NOT_FOUND,
-            "attachment_not_found",
-            "이 첨부 파일을 찾지 못했습니다.",
-        ),
-        Err(_) => storage_failure(&headers),
+        Ok(DeleteAttachmentOutcome::Deleted { object_key }) => object_key,
+        Ok(DeleteAttachmentOutcome::NotFound) => {
+            return failure(
+                &headers,
+                StatusCode::NOT_FOUND,
+                "attachment_not_found",
+                "이 첨부 파일을 찾지 못했습니다.",
+            );
+        }
+        Ok(DeleteAttachmentOutcome::Submitted) => {
+            return failure(
+                &headers,
+                StatusCode::FORBIDDEN,
+                "forbidden",
+                "제출한 답변의 첨부 파일은 관리자만 지울 수 있습니다.",
+            );
+        }
+        Err(_) => return storage_failure(&headers),
+    };
+    if let Err(error) = storage.delete(&object_key).await {
+        tracing::warn!(
+            attachment.id = %record.id,
+            reason = %error,
+            "attachment bytes were not removed; the retention sweep will retry"
+        );
     }
+    StatusCode::NO_CONTENT.into_response()
 }
 
 fn storage_failure(headers: &HeaderMap) -> Response {

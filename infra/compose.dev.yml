@@ -74,9 +74,14 @@ services:
       OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-}
       OIDC_AUDIENCE: ${OIDC_AUDIENCE:-authenticated}
       DATABASE_URL: postgres://school_collect:${POSTGRES_PASSWORD:-school_collect_local_only}@postgres:5432/school_collect
+      # Attachment bytes live on a volume shared with the worker, whose
+      # retention sweep removes the same files.
+      APP_ATTACHMENT_DIR: /var/lib/school-collect/attachments
       RUST_LOG: ${RUST_LOG:-info,tower_http=info}
     ports:
       - "127.0.0.1:3000:3000"
+    volumes:
+      - school_collect_attachments:/var/lib/school-collect/attachments
     depends_on:
       postgres:
         condition: service_healthy
@@ -84,8 +89,8 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
-  # Async consumer placeholder. It stays up so a developer working on jobs has
-  # a running process and a broker to attach to.
+  # Outbox relay and attachment retention sweep. It never runs migrations;
+  # it starts after the migrator and refuses to run on an unmigrated schema.
   worker:
     image: ${SCHOOL_COLLECT_SERVER_IMAGE:-school-collect-server:local}
     build:
@@ -94,9 +99,15 @@ services:
     entrypoint: ["/usr/local/bin/school-collect-worker"]
     environment:
       APP_ENV: development
+      DATABASE_URL: postgres://school_collect:${POSTGRES_PASSWORD:-school_collect_local_only}@postgres:5432/school_collect
       NATS_URL: nats://nats:4222
+      APP_ATTACHMENT_DIR: /var/lib/school-collect/attachments
       RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - school_collect_attachments:/var/lib/school-collect/attachments
     depends_on:
+      postgres:
+        condition: service_healthy
       nats:
         condition: service_started
       migrator:
@@ -105,3 +116,4 @@ services:
 
 volumes:
   school_collect_pg:
+  school_collect_attachments:

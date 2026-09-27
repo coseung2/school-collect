@@ -113,8 +113,8 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 }
 
 /// Validates the loopback callback and returns the authorization code.
-/// Order matters: the redirect is checked first, then provider errors, then
-/// `state` (in constant time), and only then the code is accepted.
+/// Order matters: the redirect is checked first, then `state` (in constant
+/// time), then provider errors, and only then the code is accepted.
 pub(crate) fn validate_callback(
     callback: &Url,
     expected_redirect: &Url,
@@ -145,16 +145,18 @@ pub(crate) fn validate_callback(
         *slot = Some(value.into_owned());
     }
 
-    if let Some(error) = error {
-        return Err(CallbackError::ProviderError(
-            error.chars().take(100).collect(),
-        ));
-    }
     match state {
         Some(state)
             if !expected_state.is_empty()
                 && constant_time_eq(state.as_bytes(), expected_state.as_bytes()) => {}
         _ => return Err(CallbackError::StateMismatch),
+    }
+    // Only after `state` matches: an error response is bound to this attempt
+    // too, so a stray request cannot cancel someone's login.
+    if let Some(error) = error {
+        return Err(CallbackError::ProviderError(
+            error.chars().take(100).collect(),
+        ));
     }
     match code {
         Some(code)
@@ -289,6 +291,16 @@ mod tests {
             validate_callback(&denied, &redirect(), "abc123"),
             Err(CallbackError::ProviderError("access_denied".into()))
         );
+        // An error without the attempt's state is a stray request, not the
+        // provider answering this login.
+        for query in ["error=access_denied", "state=other&error=access_denied"] {
+            let stray = Url::parse(&format!("http://127.0.0.1:53682/callback?{query}")).unwrap();
+            assert_eq!(
+                validate_callback(&stray, &redirect(), "abc123"),
+                Err(CallbackError::StateMismatch),
+                "{query}"
+            );
+        }
 
         for query in [
             "state=abc123",

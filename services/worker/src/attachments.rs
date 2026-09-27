@@ -66,30 +66,93 @@ pub async fn run_sweep_until_shutdown(
     interval: Duration,
     shutdown: impl Future<Output = ()>,
 ) {
+    run_every(interval, shutdown, || async {
+        match purge_expired_attachments(&pool, storage.as_ref(), batch).await {
+            Ok(report) if report.considered == 0 => {}
+            Ok(report) => {
+                tracing::info!(
+                    considered = report.considered,
+                    purged = report.purged,
+                    failed = report.failed,
+                    "attachment sweep finished"
+                );
+            }
+            Err(error) => {
+                tracing::error!(%error, "attachment sweep round failed");
+            }
+        }
+    })
+    .await;
+    tracing::info!("attachment sweep stopping");
+}
+
+/// Runs `round`, then waits the full `interval`, until `shutdown` resolves.
+///
+/// The wait starts only after a round finishes and never races it, so a quick
+/// round cannot trigger the next one immediately, and failures are retried at
+/// the configured pace instead of in a tight loop.
+async fn run_every<F, Fut>(interval: Duration, shutdown: impl Future<Output = ()>, mut round: F)
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = ()>,
+{
     tokio::pin!(shutdown);
     loop {
         tokio::select! {
-            () = &mut shutdown => {
-                tracing::info!("attachment sweep stopping");
-                return;
-            }
-            result = purge_expired_attachments(&pool, storage.as_ref(), batch) => {
-                match result {
-                    Ok(report) if report.considered == 0 => {}
-                    Ok(report) => {
-                        tracing::info!(
-                            considered = report.considered,
-                            purged = report.purged,
-                            failed = report.failed,
-                            "attachment sweep finished"
-                        );
-                    }
-                    Err(error) => {
-                        tracing::error!(%error, "attachment sweep round failed");
-                    }
-                }
-            }
+            () = &mut shutdown => return,
+            () = round() => {}
+        }
+        tokio::select! {
+            () = &mut shutdown => return,
             () = tokio::time::sleep(interval) => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::run_every;
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
+
+    #[tokio::test(start_paused = true)]
+    async fn rounds_are_spaced_by_the_full_interval() {
+        let rounds = Arc::new(AtomicUsize::new(0));
+        let counter = rounds.clone();
+        let interval = Duration::from_secs(6 * 60 * 60);
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let task = tokio::spawn(run_every(
+            interval,
+            async {
+                let _ = stopped.await;
+            },
+            move || {
+                let counter = counter.clone();
+                async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                }
+            },
+        ));
+
+        // The first round runs at once; an instant round must not start another.
+        tokio::task::yield_now().await;
+        assert_eq!(rounds.load(Ordering::SeqCst), 1);
+        tokio::time::advance(interval - Duration::from_secs(1)).await;
+        assert_eq!(
+            rounds.load(Ordering::SeqCst),
+            1,
+            "no round before the interval ends"
+        );
+        tokio::time::advance(Duration::from_secs(1)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(rounds.load(Ordering::SeqCst), 2);
+
+        stop.send(()).expect("stop");
+        task.await.expect("sweep stops on shutdown");
     }
 }
