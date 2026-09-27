@@ -17,6 +17,9 @@ School Collect는 서버(API·migrator·worker)와 데스크톱 앱으로 나뉩
   만들고, `tauri dev`로 개발 실행합니다.
 - 로컬 개발 스택: `infra/compose.dev.yml`이 개발자별 `postgres`(18), `nats`,
   일회성 `migrator`, `api`, `worker`를 정의합니다.
+- 백업/복구 drill: `scripts/backup_restore_drill.sh`가 `pg_dump` → 빈 DB
+  `pg_restore` → schema version·migration 수·테이블 목록·테이블별 행 수 대조를
+  수행하고, 어긋나면 실패합니다. CI `postgres` 작업이 매번 실행합니다.
 
 ## 서버 실행 순서
 
@@ -87,7 +90,9 @@ pnpm --filter @school-collect/app tauri dev  # 데스크톱 창
 - **비밀값 주입**: 대상 호스트에서 Infisical Machine Identity를 쓸지 여부
 - **DB 역할 분리**: runtime 역할과 migration 역할 분리 및 최소 권한
 - **데스크톱 서명·업데이트**: 코드 서명 인증서와 업데이트 채널
-- **백업·복구**: 백업 주기와 실제 복구 훈련(RPO/RTO 기록)
+- **백업·복구**: 백업 주기와 실제 운영 DB 대상 복구 훈련(RPO/RTO 기록).
+  저장소 쪽 drill 스크립트는 준비되어 있고, 운영 자원·일정은 소유자 결정이
+  필요합니다.
 
 ## 확인 범위
 
