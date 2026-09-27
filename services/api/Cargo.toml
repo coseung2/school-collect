@@ -8,6 +8,7 @@ license.workspace = true
 anyhow = { workspace = true }
 axum = { workspace = true }
 chrono = { workspace = true }
+hex = { workspace = true }
 http = { workspace = true }
 school-collect-auth = { path = "../../crates/auth" }
 school-collect-contracts = { path = "../../crates/contracts" }
@@ -16,6 +17,7 @@ school-collect-domain = { path = "../../crates/domain" }
 school-collect-observability = { path = "../../crates/observability" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 sqlx = { workspace = true }
 tokio = { workspace = true }
 tower = { workspace = true }

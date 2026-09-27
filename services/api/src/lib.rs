@@ -8,19 +8,23 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post, put},
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use school_collect_auth::{AuthMode, OidcVerifier, VerifiedPrincipal};
 use school_collect_contracts::{
-    ApiError, AssignmentDto, AssignmentListResponse, CollectDetailResponse, CollectDto,
-    CollectItemDto, CollectListResponse, CollectProgressDto, CollectStatusResponse,
-    CollectStatusRowDto, CreateCollectRequest, CreateTenantRequest, MemberDto, MemberListResponse,
-    MembershipDto, PrincipalResponse, SaveSubmissionRequest, ServiceStatus, SessionResponse,
-    SubmissionDto, TenantListResponse, UserDto, VersionConflictResponse,
+    AcceptInvitationRequest, AcceptInvitationResponse, ApiError, AssignmentDto,
+    AssignmentListResponse, CollectDetailResponse, CollectDto, CollectItemDto, CollectListResponse,
+    CollectProgressDto, CollectStatusResponse, CollectStatusRowDto, CreateCollectRequest,
+    CreateInvitationRequest, CreateInvitationResponse, CreateTenantRequest, InvitationDto,
+    InvitationListResponse, MemberDto, MemberListResponse, MembershipDto, PrincipalResponse,
+    SaveSubmissionRequest, ServiceStatus, SessionResponse, SubmissionDto, TenantListResponse,
+    UserDto, VersionConflictResponse,
 };
 use school_collect_db::{
-    CollectRecord, NewCollectItem, SaveDraftOutcome, SubmitOutcome, TransitionOutcome, UserRecord,
+    AcceptInvitationOutcome, CollectRecord, CreateInvitationOutcome, InvitationRecord,
+    NewCollectItem, SaveDraftOutcome, SubmitOutcome, TransitionOutcome, UserRecord,
 };
 use school_collect_domain::MembershipRole;
+use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use tower_http::{
     cors::CorsLayer,
@@ -76,6 +80,10 @@ impl AuthState {
         collect_detail,
         collect_status,
         list_members,
+        list_invitations,
+        create_invitation,
+        revoke_invitation,
+        accept_invitation,
         list_assignments,
         publish_collect,
         close_collect,
@@ -91,6 +99,12 @@ impl AuthState {
         SessionResponse,
         TenantListResponse,
         CreateTenantRequest,
+        InvitationDto,
+        InvitationListResponse,
+        CreateInvitationRequest,
+        CreateInvitationResponse,
+        AcceptInvitationRequest,
+        AcceptInvitationResponse,
         CollectDto,
         CollectListResponse,
         CreateCollectRequest,
@@ -115,6 +129,15 @@ pub fn router(state: AppState, cors_origin: HeaderValue, auth_state: AuthState) 
         .route("/v1/auth/principal", get(current_principal))
         .route("/v1/session", get(session))
         .route("/v1/tenants", get(list_tenants).post(create_tenant))
+        .route(
+            "/v1/invitations",
+            get(list_invitations).post(create_invitation),
+        )
+        .route(
+            "/v1/invitations/{invitation_id}/revoke",
+            post(revoke_invitation),
+        )
+        .route("/v1/invitations/accept", post(accept_invitation))
         .route("/v1/collects", get(list_collects).post(create_collect))
         .route("/v1/collects/{collect_id}", get(collect_detail))
         .route("/v1/collects/{collect_id}/status", get(collect_status))
@@ -557,6 +580,318 @@ async fn create_tenant(
             }),
         )
             .into_response(),
+        Err(_) => storage_failure(&headers),
+    }
+}
+
+/// Invitations stay valid for two weeks. This slice has no email provider, so
+/// the inviter shares the one-time code out of band.
+const INVITATION_VALID_DAYS: i64 = 14;
+
+fn normalize_email(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.chars().count() < 3 || trimmed.chars().count() > 254 {
+        return None;
+    }
+    if trimmed
+        .chars()
+        .any(|character| character.is_whitespace() || character.is_control())
+    {
+        return None;
+    }
+    let mut parts = trimmed.split('@');
+    let local = parts.next().unwrap_or("");
+    let domain = parts.next().unwrap_or("");
+    if local.is_empty() || domain.is_empty() || parts.next().is_some() {
+        return None;
+    }
+    if local.starts_with('.') || local.ends_with('.') || local.contains("..") {
+        return None;
+    }
+    if !domain.contains('.') || domain.starts_with('.') || domain.ends_with('.') {
+        return None;
+    }
+    Some(trimmed.to_lowercase())
+}
+
+/// Admin rights are never handed out through an invitation.
+fn invitation_role(value: Option<&str>) -> Option<&'static str> {
+    let requested = value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("contributor");
+    match requested {
+        "contributor" => Some("contributor"),
+        "coordinator" => Some("coordinator"),
+        "viewer" => Some("viewer"),
+        _ => None,
+    }
+}
+
+fn generate_invitation_code() -> String {
+    let mut bytes = [0u8; 32];
+    bytes[..16].copy_from_slice(Uuid::new_v4().as_bytes());
+    bytes[16..].copy_from_slice(Uuid::new_v4().as_bytes());
+    hex::encode(bytes)
+}
+
+fn hash_invitation_code(code: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(code.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+fn invitation_dto(record: &InvitationRecord) -> InvitationDto {
+    InvitationDto {
+        id: record.id.to_string(),
+        email: record.email.clone(),
+        role: record.role.clone(),
+        status: record.status.clone(),
+        created_at: timestamp(record.created_at),
+        expires_at: timestamp(record.expires_at),
+        accepted_at: record.accepted_at.map(timestamp),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/invitations",
+    request_body = CreateInvitationRequest,
+    responses(
+        (status = 201, description = "Invitation created; the code is returned once", body = CreateInvitationResponse),
+        (status = 409, description = "A pending invitation for this address already exists", body = ApiError)
+    )
+)]
+async fn create_invitation(
+    State(state): State<Arc<AppState>>,
+    Extension(principal): Extension<VerifiedPrincipal>,
+    headers: HeaderMap,
+    Json(body): Json<CreateInvitationRequest>,
+) -> Response {
+    let user = match current_user(&state, &principal, &headers).await {
+        Ok(user) => user,
+        Err(response) => return *response,
+    };
+    let (tenant_id, _) = match authorize(&state, &headers, &user, Capability::Manage).await {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let Some(email) = normalize_email(&body.email) else {
+        return failure(
+            &headers,
+            StatusCode::BAD_REQUEST,
+            "invalid_email",
+            "a valid email address is required",
+        );
+    };
+    let Some(role) = invitation_role(body.role.as_deref()) else {
+        return failure(
+            &headers,
+            StatusCode::BAD_REQUEST,
+            "invalid_role",
+            "the role must be contributor, coordinator, or viewer",
+        );
+    };
+
+    let code = generate_invitation_code();
+    let expires_at = Utc::now() + Duration::days(INVITATION_VALID_DAYS);
+    match school_collect_db::create_invitation(
+        &state.pool,
+        tenant_id,
+        user.id,
+        &email,
+        role,
+        &hash_invitation_code(&code),
+        expires_at,
+    )
+    .await
+    {
+        Ok(CreateInvitationOutcome::Created(record)) => (
+            StatusCode::CREATED,
+            Json(CreateInvitationResponse {
+                invitation: invitation_dto(&record),
+                code,
+            }),
+        )
+            .into_response(),
+        Ok(CreateInvitationOutcome::Duplicate) => failure(
+            &headers,
+            StatusCode::CONFLICT,
+            "invitation_exists",
+            "a pending invitation for this address already exists",
+        ),
+        Err(_) => storage_failure(&headers),
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/invitations",
+    responses((status = 200, description = "Invitations of the caller's school", body = InvitationListResponse))
+)]
+async fn list_invitations(
+    State(state): State<Arc<AppState>>,
+    Extension(principal): Extension<VerifiedPrincipal>,
+    headers: HeaderMap,
+) -> Response {
+    let user = match current_user(&state, &principal, &headers).await {
+        Ok(user) => user,
+        Err(response) => return *response,
+    };
+    let (tenant_id, _) = match authorize(&state, &headers, &user, Capability::Manage).await {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    match school_collect_db::list_invitations(&state.pool, tenant_id).await {
+        Ok(rows) => Json(InvitationListResponse {
+            invitations: rows.iter().map(invitation_dto).collect(),
+        })
+        .into_response(),
+        Err(_) => storage_failure(&headers),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/invitations/{invitation_id}/revoke",
+    params(("invitation_id" = String, Path, description = "Invitation identifier")),
+    responses(
+        (status = 200, description = "Invitation revoked", body = InvitationDto),
+        (status = 404, description = "Pending invitation not found", body = ApiError)
+    )
+)]
+async fn revoke_invitation(
+    State(state): State<Arc<AppState>>,
+    Extension(principal): Extension<VerifiedPrincipal>,
+    headers: HeaderMap,
+    Path(invitation_id): Path<String>,
+) -> Response {
+    let user = match current_user(&state, &principal, &headers).await {
+        Ok(user) => user,
+        Err(response) => return *response,
+    };
+    let (tenant_id, _) = match authorize(&state, &headers, &user, Capability::Manage).await {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let Ok(invitation_id) = Uuid::parse_str(invitation_id.trim()) else {
+        return failure(
+            &headers,
+            StatusCode::BAD_REQUEST,
+            "invitation_invalid",
+            "the invitation identifier is not valid",
+        );
+    };
+    match school_collect_db::revoke_invitation(&state.pool, tenant_id, invitation_id).await {
+        Ok(Some(record)) => Json(invitation_dto(&record)).into_response(),
+        Ok(None) => failure(
+            &headers,
+            StatusCode::NOT_FOUND,
+            "invitation_not_found",
+            "no pending invitation with this identifier",
+        ),
+        Err(_) => storage_failure(&headers),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/invitations/accept",
+    request_body = AcceptInvitationRequest,
+    responses(
+        (status = 200, description = "Invitation accepted; the membership now exists", body = AcceptInvitationResponse),
+        (status = 403, description = "The invitation belongs to another address", body = ApiError),
+        (status = 410, description = "The invitation expired", body = ApiError)
+    )
+)]
+async fn accept_invitation(
+    State(state): State<Arc<AppState>>,
+    Extension(principal): Extension<VerifiedPrincipal>,
+    headers: HeaderMap,
+    Json(body): Json<AcceptInvitationRequest>,
+) -> Response {
+    let user = match current_user(&state, &principal, &headers).await {
+        Ok(user) => user,
+        Err(response) => return *response,
+    };
+    let code = body.code.trim().to_lowercase();
+    if code.len() != 64 || !code.chars().all(|character| character.is_ascii_hexdigit()) {
+        return failure(
+            &headers,
+            StatusCode::BAD_REQUEST,
+            "invalid_code",
+            "the invitation code is not valid",
+        );
+    }
+    // The address comes from the verified token, never from the request body.
+    let Some(email) = principal
+        .email
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_lowercase)
+    else {
+        return failure(
+            &headers,
+            StatusCode::BAD_REQUEST,
+            "email_required",
+            "your verified email address is required to accept an invitation",
+        );
+    };
+
+    match school_collect_db::accept_invitation(
+        &state.pool,
+        &hash_invitation_code(&code),
+        &email,
+        user.id,
+    )
+    .await
+    {
+        Ok(AcceptInvitationOutcome::Accepted { tenant_id, role }) => {
+            let memberships = match school_collect_db::list_memberships(&state.pool, user.id).await
+            {
+                Ok(rows) => rows,
+                Err(_) => return storage_failure(&headers),
+            };
+            match memberships
+                .into_iter()
+                .find(|row| row.tenant_id == tenant_id)
+            {
+                Some(row) => Json(AcceptInvitationResponse {
+                    membership: MembershipDto {
+                        tenant_id: tenant_id.to_string(),
+                        tenant_name: row.tenant_name,
+                        role,
+                    },
+                })
+                .into_response(),
+                None => storage_failure(&headers),
+            }
+        }
+        Ok(AcceptInvitationOutcome::NotFound) => failure(
+            &headers,
+            StatusCode::NOT_FOUND,
+            "invitation_not_found",
+            "the invitation code is not valid",
+        ),
+        Ok(AcceptInvitationOutcome::Expired) => failure(
+            &headers,
+            StatusCode::GONE,
+            "invitation_expired",
+            "this invitation has expired",
+        ),
+        Ok(AcceptInvitationOutcome::EmailMismatch) => failure(
+            &headers,
+            StatusCode::FORBIDDEN,
+            "invitation_email_mismatch",
+            "this invitation was issued to a different email address",
+        ),
+        Ok(AcceptInvitationOutcome::AlreadyUsed { status }) => failure(
+            &headers,
+            StatusCode::CONFLICT,
+            "invitation_used",
+            format!("this invitation is already {status}"),
+        ),
         Err(_) => storage_failure(&headers),
     }
 }
@@ -1328,5 +1663,56 @@ mod tests {
         .unwrap();
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn invitation_emails_are_normalized_or_rejected() {
+        assert_eq!(
+            normalize_email("  Teacher.Name@Example.School.KR ").as_deref(),
+            Some("teacher.name@example.school.kr")
+        );
+        for invalid in [
+            "",
+            "not-an-email",
+            "no-domain@",
+            "@no-local.example",
+            "two@@example.com",
+            "no-dot@example",
+            "spaces in@example.com",
+            ".leading@example.com",
+            "trailing.@example.com",
+        ] {
+            assert!(
+                normalize_email(invalid).is_none(),
+                "{invalid} should not be a valid invited address"
+            );
+        }
+    }
+
+    #[test]
+    fn invitation_roles_exclude_admin_and_default_to_contributor() {
+        assert_eq!(invitation_role(None), Some("contributor"));
+        assert_eq!(invitation_role(Some("  ")), Some("contributor"));
+        assert_eq!(invitation_role(Some("contributor")), Some("contributor"));
+        assert_eq!(invitation_role(Some("coordinator")), Some("coordinator"));
+        assert_eq!(invitation_role(Some("viewer")), Some("viewer"));
+        assert_eq!(invitation_role(Some("admin")), None);
+        assert_eq!(invitation_role(Some("owner")), None);
+    }
+
+    #[test]
+    fn invitation_codes_are_random_and_stored_hashed() {
+        let first = generate_invitation_code();
+        let second = generate_invitation_code();
+
+        assert_eq!(first.len(), 64);
+        assert!(first.chars().all(|character| character.is_ascii_hexdigit()));
+        assert_ne!(first, second, "two codes must not collide");
+
+        let hash = hash_invitation_code(&first);
+        assert_eq!(hash.len(), 64);
+        assert_ne!(hash, first, "the stored value must not be the code itself");
+        assert_eq!(hash, hash_invitation_code(&first));
+        assert_ne!(hash, hash_invitation_code(&second));
     }
 }

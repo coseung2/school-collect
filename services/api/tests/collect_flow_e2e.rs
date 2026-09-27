@@ -583,3 +583,490 @@ async fn authenticated_collect_flow_end_to_end() {
         panic!("collect flow end-to-end verification failed: {message}");
     }
 }
+
+/// Verifies the invitation path a teacher takes to join a school: the admin
+/// issues a code, only the invited address can use it, and the new membership
+/// can be assigned and submit. It runs against the real provider and database,
+/// and skips silently when the integration environment is not configured.
+#[tokio::test]
+async fn membership_invitation_end_to_end() {
+    let (Some(database_url), Some(supabase_url), Some(anon_key), Some(service_role)) = (
+        env_value("DATABASE_URL"),
+        env_value("SUPABASE_URL"),
+        env_value("SUPABASE_ANON_KEY"),
+        env_value("SUPABASE_SERVICE_ROLE_KEY"),
+    ) else {
+        eprintln!(
+            "membership_invitation_e2e skipped: integration environment variables are not set"
+        );
+        return;
+    };
+
+    let issuer = Url::parse(&format!("{supabase_url}/auth/v1")).expect("issuer url");
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .after_connect(|connection, _meta| {
+            Box::pin(async move {
+                sqlx::query("SET search_path TO school_collect,public")
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&database_url)
+        .await
+        .expect("connect");
+    school_collect_db::MIGRATOR
+        .run(&pool)
+        .await
+        .expect("migrate");
+
+    let client = reqwest::Client::builder().build().expect("http client");
+    let run_id = Uuid::now_v7().simple().to_string();
+
+    // admin: issues invitations. teacher: the invited address. other: a third
+    // account that must not be able to use someone else's code. expired: an
+    // invited address whose invitation lapses before acceptance.
+    let mut identities: Vec<(String, TestIdentity)> = Vec::new();
+    for kind in ["admin", "teacher", "other", "expired"] {
+        let email = format!("invite-{kind}-{run_id}@example.test");
+        let password = format!("It3st-{run_id}!");
+        let supabase_user_id =
+            create_supabase_user(&client, &supabase_url, &service_role, &email, &password).await;
+        let access_token = sign_in(&client, &supabase_url, &anon_key, &email, &password).await;
+        identities.push((
+            email,
+            TestIdentity {
+                supabase_user_id,
+                access_token,
+            },
+        ));
+    }
+
+    let verifier = OidcVerifier::new(OidcConfig {
+        issuer_url: issuer.clone(),
+        audience: "authenticated".to_owned(),
+        jwks_url: None,
+    })
+    .expect("verifier");
+    let app = router(
+        AppState { pool: pool.clone() },
+        HeaderValue::from_static("http://127.0.0.1:1420"),
+        AuthState::oidc(verifier),
+    );
+
+    let mut tenant_ids: Vec<Uuid> = Vec::new();
+    let mut local_user_ids: Vec<Uuid> = Vec::new();
+
+    let result: Result<(), String> = async {
+        let admin = &identities[0].1;
+        let teacher = &identities[1].1;
+        let other = &identities[2].1;
+        let expired_invitee = &identities[3].1;
+        let teacher_email = identities[1].0.as_str();
+        let expired_email = identities[3].0.as_str();
+
+        // Every identity is exchanged for a local user row on first use.
+        for identity in [admin, teacher, other, expired_invitee] {
+            let (status, session) = call(
+                &app,
+                "GET",
+                "/v1/session",
+                Some(&identity.access_token),
+                None,
+                None,
+            )
+            .await;
+            if status != StatusCode::OK {
+                return Err(format!("session failed: {status} {session}"));
+            }
+            let user_id = Uuid::parse_str(session["user"]["id"].as_str().unwrap_or_default())
+                .map_err(|_| "session did not return a user id".to_owned())?;
+            local_user_ids.push(user_id);
+        }
+
+        let (status, tenant) = call(
+            &app,
+            "POST",
+            "/v1/tenants",
+            Some(&admin.access_token),
+            None,
+            Some(json!({ "name": "E2E Invitation School" })),
+        )
+        .await;
+        if status != StatusCode::CREATED {
+            return Err(format!("tenant creation failed: {status} {tenant}"));
+        }
+        let tenant_id = tenant["tenantId"].as_str().unwrap_or_default().to_owned();
+        tenant_ids.push(Uuid::parse_str(&tenant_id).map_err(|_| "tenant id".to_owned())?);
+
+        // The manager invites the teacher; the code is returned exactly once.
+        let (status, created) = call(
+            &app,
+            "POST",
+            "/v1/invitations",
+            Some(&admin.access_token),
+            Some(&tenant_id),
+            Some(json!({ "email": teacher_email })),
+        )
+        .await;
+        if status != StatusCode::CREATED {
+            return Err(format!("invitation creation failed: {status} {created}"));
+        }
+        if created["invitation"]["role"] != "contributor"
+            || created["invitation"]["status"] != "pending"
+        {
+            return Err(format!(
+                "the default invitation role or status is wrong: {created}"
+            ));
+        }
+        let code = created["code"].as_str().unwrap_or_default().to_owned();
+        let invitation_id = created["invitation"]["id"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        if code.len() != 64 || !code.chars().all(|value| value.is_ascii_hexdigit()) {
+            return Err(format!("the invite code shape is wrong: {code}"));
+        }
+
+        // The stored value must be a hash, never the code itself.
+        let stored_hash: Option<String> =
+            sqlx::query_scalar("SELECT code_hash FROM school_collect.invitations WHERE id = $1")
+                .bind(Uuid::parse_str(&invitation_id).map_err(|_| "invitation id".to_owned())?)
+                .fetch_optional(&pool)
+                .await
+                .map_err(|error| format!("code hash lookup failed: {error}"))?;
+        match stored_hash {
+            Some(hash) if hash.len() == 64 && hash != code => {}
+            other => {
+                return Err(format!(
+                    "the invitation code must be stored hashed: {other:?}"
+                ));
+            }
+        }
+
+        // One pending invitation per address and school.
+        let (status, duplicate) = call(
+            &app,
+            "POST",
+            "/v1/invitations",
+            Some(&admin.access_token),
+            Some(&tenant_id),
+            Some(json!({ "email": teacher_email })),
+        )
+        .await;
+        if status != StatusCode::CONFLICT || duplicate["code"] != "invitation_exists" {
+            return Err(format!(
+                "a duplicate pending invitation was not refused: {status} {duplicate}"
+            ));
+        }
+
+        // An invitation can never hand out admin rights.
+        let (status, refused) = call(
+            &app,
+            "POST",
+            "/v1/invitations",
+            Some(&admin.access_token),
+            Some(&tenant_id),
+            Some(json!({ "email": "admin-target@example.test", "role": "admin" })),
+        )
+        .await;
+        if status != StatusCode::BAD_REQUEST || refused["code"] != "invalid_role" {
+            return Err(format!(
+                "an admin invitation was not refused: {status} {refused}"
+            ));
+        }
+
+        // Someone else's address cannot use the code.
+        let (status, mismatch) = call(
+            &app,
+            "POST",
+            "/v1/invitations/accept",
+            Some(&other.access_token),
+            None,
+            Some(json!({ "code": code })),
+        )
+        .await;
+        if status != StatusCode::FORBIDDEN || mismatch["code"] != "invitation_email_mismatch" {
+            return Err(format!(
+                "another address accepted the invitation: {status} {mismatch}"
+            ));
+        }
+
+        // The invited address joins and receives the stored role.
+        let (status, accepted) = call(
+            &app,
+            "POST",
+            "/v1/invitations/accept",
+            Some(&teacher.access_token),
+            None,
+            Some(json!({ "code": code })),
+        )
+        .await;
+        if status != StatusCode::OK {
+            return Err(format!("accept failed: {status} {accepted}"));
+        }
+        if accepted["membership"]["role"] != "contributor"
+            || accepted["membership"]["tenantId"] != tenant_id
+        {
+            return Err(format!(
+                "the membership after acceptance is wrong: {accepted}"
+            ));
+        }
+
+        // The code is single use.
+        let (status, reused) = call(
+            &app,
+            "POST",
+            "/v1/invitations/accept",
+            Some(&teacher.access_token),
+            None,
+            Some(json!({ "code": code })),
+        )
+        .await;
+        if status != StatusCode::CONFLICT || reused["code"] != "invitation_used" {
+            return Err(format!("the code was accepted twice: {status} {reused}"));
+        }
+
+        // The new member can be assigned, write a draft, and submit.
+        let (status, draft) = call(
+            &app,
+            "POST",
+            "/v1/collects",
+            Some(&admin.access_token),
+            Some(&tenant_id),
+            Some(json!({
+                "title": "E2E 초대 수합",
+                "items": [{ "key": "plan", "label": "계획서", "required": true }]
+            })),
+        )
+        .await;
+        if status != StatusCode::CREATED {
+            return Err(format!("collect creation failed: {status} {draft}"));
+        }
+        let collect_id = draft["id"].as_str().unwrap_or_default().to_owned();
+
+        let (status, published) = call(
+            &app,
+            "POST",
+            &format!("/v1/collects/{collect_id}/publish"),
+            Some(&admin.access_token),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        if status != StatusCode::OK {
+            return Err(format!("publish failed: {status} {published}"));
+        }
+
+        let (status, assignments) = call(
+            &app,
+            "GET",
+            "/v1/assignments",
+            Some(&teacher.access_token),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        if status != StatusCode::OK {
+            return Err(format!("assignments failed: {status} {assignments}"));
+        }
+        let assigned = assignments["assignments"]
+            .as_array()
+            .map(|rows| {
+                rows.iter()
+                    .any(|row| row["collectId"] == collect_id.as_str())
+            })
+            .unwrap_or(false);
+        if !assigned {
+            return Err(format!(
+                "the newly joined member was not assigned: {assignments}"
+            ));
+        }
+
+        let (status, saved) = call(
+            &app,
+            "PUT",
+            &format!("/v1/collects/{collect_id}/submission"),
+            Some(&teacher.access_token),
+            Some(&tenant_id),
+            Some(json!({ "expectedVersion": 0, "payload": { "plan": "제출" } })),
+        )
+        .await;
+        if status != StatusCode::OK {
+            return Err(format!("draft save failed: {status} {saved}"));
+        }
+        let (status, submitted) = call(
+            &app,
+            "POST",
+            &format!("/v1/collects/{collect_id}/submission/submit"),
+            Some(&teacher.access_token),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        if status != StatusCode::OK || submitted["status"] != "submitted" {
+            return Err(format!("submit failed: {status} {submitted}"));
+        }
+
+        let (status, progress) = call(
+            &app,
+            "GET",
+            &format!("/v1/collects/{collect_id}/status"),
+            Some(&admin.access_token),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        if status != StatusCode::OK || progress["submitted"].as_i64() != Some(1) {
+            return Err(format!(
+                "the manager view did not count the new submission: {status} {progress}"
+            ));
+        }
+
+        // Revoking only applies to a pending invitation.
+        let second_email = format!("revoked-{run_id}@example.test");
+        let (status, second) = call(
+            &app,
+            "POST",
+            "/v1/invitations",
+            Some(&admin.access_token),
+            Some(&tenant_id),
+            Some(json!({ "email": second_email, "role": "viewer" })),
+        )
+        .await;
+        if status != StatusCode::CREATED {
+            return Err(format!("second invitation failed: {status} {second}"));
+        }
+        let second_id = second["invitation"]["id"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        let (status, revoked) = call(
+            &app,
+            "POST",
+            &format!("/v1/invitations/{second_id}/revoke"),
+            Some(&admin.access_token),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        if status != StatusCode::OK || revoked["status"] != "revoked" {
+            return Err(format!("revoke failed: {status} {revoked}"));
+        }
+        let (status, again) = call(
+            &app,
+            "POST",
+            &format!("/v1/invitations/{second_id}/revoke"),
+            Some(&admin.access_token),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        if status != StatusCode::NOT_FOUND || again["code"] != "invitation_not_found" {
+            return Err(format!(
+                "revoking an already revoked invitation was not a 404: {status} {again}"
+            ));
+        }
+
+        // An invitation that lapsed cannot be accepted.
+        let (status, expired_created) = call(
+            &app,
+            "POST",
+            "/v1/invitations",
+            Some(&admin.access_token),
+            Some(&tenant_id),
+            Some(json!({ "email": expired_email })),
+        )
+        .await;
+        if status != StatusCode::CREATED {
+            return Err(format!(
+                "expired invitation setup failed: {status} {expired_created}"
+            ));
+        }
+        let expired_id = expired_created["invitation"]["id"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        let expired_code = expired_created["code"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        sqlx::query(
+            "UPDATE school_collect.invitations
+                SET created_at = now() - interval '15 days',
+                    expires_at = now() - interval '1 day'
+              WHERE id = $1",
+        )
+        .bind(Uuid::parse_str(&expired_id).map_err(|_| "expired invitation id".to_owned())?)
+        .execute(&pool)
+        .await
+        .map_err(|error| format!("expiry update failed: {error}"))?;
+        let (status, expired) = call(
+            &app,
+            "POST",
+            "/v1/invitations/accept",
+            Some(&expired_invitee.access_token),
+            None,
+            Some(json!({ "code": expired_code })),
+        )
+        .await;
+        if status != StatusCode::GONE || expired["code"] != "invitation_expired" {
+            return Err(format!(
+                "an expired invitation was accepted: {status} {expired}"
+            ));
+        }
+
+        // The list keeps the accepted, revoked, and pending rows.
+        let (status, list) = call(
+            &app,
+            "GET",
+            "/v1/invitations",
+            Some(&admin.access_token),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        if status != StatusCode::OK {
+            return Err(format!("invitation list failed: {status} {list}"));
+        }
+        let rows = list["invitations"].as_array().cloned().unwrap_or_default();
+        let has_state = |state: &str| rows.iter().any(|row| row["status"] == state);
+        if !(has_state("accepted") && has_state("revoked") && has_state("pending")) {
+            return Err(format!("the invitation list is missing states: {list}"));
+        }
+
+        // An account that never accepted the invitation cannot read the school.
+        let (status, _) = call(
+            &app,
+            "GET",
+            "/v1/collects",
+            Some(&other.access_token),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        if status != StatusCode::FORBIDDEN {
+            return Err(format!("an uninvited account read the school: {status}"));
+        }
+
+        Ok(())
+    }
+    .await;
+
+    // Always remove what the test created, including identity-provider records.
+    for (_, identity) in &identities {
+        delete_supabase_user(
+            &client,
+            &supabase_url,
+            &service_role,
+            &identity.supabase_user_id,
+        )
+        .await;
+    }
+    cleanup(&pool, &tenant_ids, &local_user_ids).await;
+
+    if let Err(message) = result {
+        panic!("membership invitation end-to-end verification failed: {message}");
+    }
+}

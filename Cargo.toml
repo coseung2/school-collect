@@ -35,5 +35,7 @@ tower-http = { version = "0.6", features = ["cors", "trace", "request-id"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 utoipa = { version = "5", features = ["axum_extras", "uuid"] }
-uuid = { version = "1", features = ["v7", "serde"] }
+uuid = { version = "1", features = ["v7", "v4", "serde"] }
 url = "2"
+sha2 = "0.10"
+hex = "0.4"
