@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::{
     Extension, Json, Router,
     body::Bytes,
-    extract::{DefaultBodyLimit, Path, Request, State},
+    extract::{DefaultBodyLimit, Path, Query, Request, State},
     http::{HeaderMap, HeaderValue, Method, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -24,10 +24,10 @@ use school_collect_contracts::{
     VersionConflictResponse,
 };
 use school_collect_db::{
-    AcceptInvitationOutcome, AttachmentRecord, CollectRecord, CompleteAttachmentOutcome,
-    CreateAttachmentOutcome, CreateInvitationOutcome, DeleteAttachmentOutcome, InvitationRecord,
-    NewAttachment, NewCollectItem, SaveDraftOutcome, SubmitOutcome, TransitionOutcome,
-    UpdateAssignmentsOutcome, UpdateItemsOutcome, UserRecord,
+    AcceptInvitationOutcome, AttachmentRecord, ClaimUploadOutcome, CollectRecord,
+    CompleteAttachmentOutcome, CreateAttachmentOutcome, CreateInvitationOutcome,
+    DeleteAttachmentOutcome, InvitationRecord, NewAttachment, NewCollectItem, SaveDraftOutcome,
+    SubmitOutcome, TransitionOutcome, UpdateAssignmentsOutcome, UpdateItemsOutcome, UserRecord,
 };
 use school_collect_domain::{
     MembershipRole,
@@ -703,13 +703,17 @@ async fn create_attachment(
 #[utoipa::path(
     get,
     path = "/v1/collects/{collect_id}/attachments",
-    params(("collect_id" = String, Path, description = "Collect identifier")),
+    params(
+        ("collect_id" = String, Path, description = "Collect identifier"),
+        ("scope" = Option<String>, Query, description = "`mine` limits the list to the caller's own files, whatever the role")
+    ),
     responses((status = 200, description = "Attachments of one collect", body = AttachmentListResponse))
 )]
 async fn list_collect_attachments(
     State(state): State<Arc<AppState>>,
     Extension(principal): Extension<VerifiedPrincipal>,
     Path(collect_id): Path<String>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
     headers: HeaderMap,
 ) -> Response {
     let user = match current_user(&state, &principal, &headers).await {
@@ -729,8 +733,10 @@ async fn list_collect_attachments(
         );
     };
 
-    // A manager sees the whole collect; everyone else sees only their own files.
-    let records = if role.can_manage_collects() {
+    // A manager reviewing a collect sees every file; the submission screen asks
+    // for `scope=mine` so a manager who also answers sees only their own.
+    let own_only = query.get("scope").map(String::as_str) == Some("mine");
+    let records = if role.can_manage_collects() && !own_only {
         school_collect_db::list_collect_attachments(&state.pool, tenant_id, collect_id).await
     } else {
         school_collect_db::list_submission_attachments(&state.pool, tenant_id, collect_id, user.id)
@@ -900,18 +906,6 @@ async fn upload_attachment_content(
             "남의 첨부 파일에는 내용을 올릴 수 없습니다.",
         );
     }
-    // Bytes are written once. Re-uploading a stored slot would overwrite the
-    // object while the row keeps the first checksum, so storage and metadata
-    // would disagree. Refuse before touching storage.
-    if record.status != "pending" {
-        return failure(
-            &headers,
-            StatusCode::CONFLICT,
-            "attachment_already_stored",
-            "이미 올린 첨부 파일입니다. 바꾸려면 지우고 새로 올려 주세요.",
-        );
-    }
-
     let declared = headers
         .get(axum::http::header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
@@ -933,12 +927,78 @@ async fn upload_attachment_content(
         );
     }
 
+    // Become the only writer of this slot before touching storage. A second,
+    // concurrent upload is refused here, so the stored bytes are always the
+    // ones whose checksum the row records.
+    let now = Utc::now();
+    match school_collect_db::claim_attachment_upload(&state.pool, tenant_id, record.id, now).await {
+        Ok(ClaimUploadOutcome::Claimed(_)) => {}
+        Ok(ClaimUploadOutcome::Busy) => {
+            return failure(
+                &headers,
+                StatusCode::CONFLICT,
+                "attachment_upload_in_progress",
+                "이 첨부 파일을 올리는 중입니다. 잠시 뒤 다시 시도해 주세요.",
+            );
+        }
+        Ok(ClaimUploadOutcome::AlreadyStored) => {
+            return failure(
+                &headers,
+                StatusCode::CONFLICT,
+                "attachment_already_stored",
+                "이미 올린 첨부 파일입니다. 바꾸려면 지우고 새로 올려 주세요.",
+            );
+        }
+        Ok(ClaimUploadOutcome::NotFound) => {
+            return failure(
+                &headers,
+                StatusCode::NOT_FOUND,
+                "attachment_not_found",
+                "이 첨부 파일을 찾지 못했습니다.",
+            );
+        }
+        Ok(ClaimUploadOutcome::Expired) => {
+            return failure(
+                &headers,
+                StatusCode::CONFLICT,
+                "attachment_expired",
+                "보존 기간이 지나 이 첨부 파일은 더 받을 수 없습니다.",
+            );
+        }
+        Err(_) => return storage_failure(&headers),
+    }
+
+    // From here on every failure removes the written bytes and hands the slot
+    // back, so neither an orphan object nor a stuck claim is left behind.
+    let abandon = |key: String| {
+        let storage = storage.clone();
+        let pool = state.pool.clone();
+        let attachment_id = record.id;
+        async move {
+            if let Err(error) = storage.delete(&key).await {
+                tracing::warn!(
+                    attachment.id = %attachment_id,
+                    reason = %error,
+                    "failed upload left bytes behind; the retention sweep will remove them"
+                );
+            }
+            let _ = school_collect_db::release_attachment_upload(
+                &pool,
+                tenant_id,
+                attachment_id,
+                Utc::now(),
+            )
+            .await;
+        }
+    };
+
     let bytes = body.to_vec();
     let checksum = hex::encode(Sha256::digest(&bytes));
     if let Err(error) = storage
         .put(&record.object_key, bytes.clone(), &record.content_type)
         .await
     {
+        abandon(record.object_key.clone()).await;
         return attachment_storage_failure(&headers, error);
     }
 
@@ -955,24 +1015,38 @@ async fn upload_attachment_content(
         Ok(CompleteAttachmentOutcome::Stored(stored)) => {
             (StatusCode::OK, Json(attachment_dto(&stored))).into_response()
         }
-        Ok(CompleteAttachmentOutcome::AlreadyStored(stored)) => {
-            (StatusCode::OK, Json(attachment_dto(&stored))).into_response()
-        }
-        Ok(CompleteAttachmentOutcome::NotFound) => failure(
-            &headers,
-            StatusCode::NOT_FOUND,
-            "attachment_not_found",
-            "이 첨부 파일을 찾지 못했습니다.",
-        ),
-        Ok(CompleteAttachmentOutcome::Expired) => failure(
+        // Only the claim holder completes, so another writer cannot have
+        // stored bytes here. If it happens anyway, do not claim success over
+        // bytes whose checksum the row does not describe.
+        Ok(CompleteAttachmentOutcome::AlreadyStored(_)) => failure(
             &headers,
             StatusCode::CONFLICT,
-            "attachment_expired",
-            "보존 기간이 지나 이 첨부 파일은 더 받을 수 없습니다.",
+            "attachment_already_stored",
+            "이미 올린 첨부 파일입니다. 바꾸려면 지우고 새로 올려 주세요.",
         ),
-        Ok(CompleteAttachmentOutcome::SizeMismatch { declared, received }) => {
-            // The bytes are not what the slot promised, so drop them again.
+        Ok(CompleteAttachmentOutcome::NotFound) => {
+            // The slot was deleted meanwhile; its bytes must not linger.
             let _ = storage.delete(&record.object_key).await;
+            failure(
+                &headers,
+                StatusCode::NOT_FOUND,
+                "attachment_not_found",
+                "이 첨부 파일을 찾지 못했습니다.",
+            )
+        }
+        Ok(CompleteAttachmentOutcome::Expired) => {
+            abandon(record.object_key.clone()).await;
+            failure(
+                &headers,
+                StatusCode::CONFLICT,
+                "attachment_expired",
+                "보존 기간이 지나 이 첨부 파일은 더 받을 수 없습니다.",
+            )
+        }
+        Ok(CompleteAttachmentOutcome::SizeMismatch { declared, received }) => {
+            // The bytes are not what the slot promised: drop them and let the
+            // owner retry with the right file.
+            abandon(record.object_key.clone()).await;
             failure(
                 &headers,
                 StatusCode::BAD_REQUEST,
@@ -980,7 +1054,10 @@ async fn upload_attachment_content(
                 format!("신고한 크기({declared})와 실제 크기({received})가 다릅니다."),
             )
         }
-        Err(_) => storage_failure(&headers),
+        Err(_) => {
+            abandon(record.object_key.clone()).await;
+            storage_failure(&headers)
+        }
     }
 }
 

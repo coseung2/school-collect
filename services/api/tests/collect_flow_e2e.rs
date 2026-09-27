@@ -416,8 +416,9 @@ async fn authenticated_collect_flow_end_to_end() {
         let password = format!("It3st-{run_id}!");
         let supabase_user_id =
             create_supabase_user(&client, &supabase_url, &service_role, &email, &password).await;
-        let access_token = sign_in(&client, &supabase_url, &anon_key, &email, &password).await;
+        // Registered before signing in, so a failed sign-in still removes the account.
         cleanup.identity(&supabase_user_id);
+        let access_token = sign_in(&client, &supabase_url, &anon_key, &email, &password).await;
         identities.push(TestIdentity { access_token });
     }
 
@@ -1155,8 +1156,9 @@ async fn membership_invitation_end_to_end() {
         let password = format!("It3st-{run_id}!");
         let supabase_user_id =
             create_supabase_user(&client, &supabase_url, &service_role, &email, &password).await;
-        let access_token = sign_in(&client, &supabase_url, &anon_key, &email, &password).await;
+        // Registered before signing in, so a failed sign-in still removes the account.
         cleanup.identity(&supabase_user_id);
+        let access_token = sign_in(&client, &supabase_url, &anon_key, &email, &password).await;
         identities.push((email, TestIdentity { access_token }));
     }
 
@@ -1629,8 +1631,9 @@ async fn role_sweep_end_to_end() {
         let email = format!("role-{role}-{run_id}@example.test");
         let supabase_user_id =
             create_supabase_user(&client, &supabase_url, &service_role, &email, &password).await;
-        let access_token = sign_in(&client, &supabase_url, &anon_key, &email, &password).await;
+        // Registered before signing in, so a failed sign-in still removes the account.
         cleanup.identity(&supabase_user_id);
+        let access_token = sign_in(&client, &supabase_url, &anon_key, &email, &password).await;
         identities.push(TestIdentity { access_token });
         emails.push(email);
     }
@@ -2153,8 +2156,9 @@ async fn attachment_flow_end_to_end() {
         let email = format!("attach-{kind}-{run_id}@example.test");
         let supabase_user_id =
             create_supabase_user(&client, &supabase_url, &service_role, &email, &password).await;
-        let access_token = sign_in(&client, &supabase_url, &anon_key, &email, &password).await;
+        // Registered before signing in, so a failed sign-in still removes the account.
         cleanup.identity(&supabase_user_id);
+        let access_token = sign_in(&client, &supabase_url, &anon_key, &email, &password).await;
         identities.push((email, TestIdentity { access_token }));
     }
     let manager = &identities[0].1;

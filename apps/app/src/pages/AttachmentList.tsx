@@ -44,7 +44,12 @@ export function AttachmentList({
   const [problem, setProblem] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const stored = attachments.filter((item) => item.status === "stored");
-  const full = stored.length >= ATTACHMENTS_PER_ITEM;
+  // A slot whose upload never finished still counts against the limit on the
+  // server, so it is shown and can be removed instead of silently blocking.
+  const unfinished = attachments.filter(
+    (item) => item.status === "pending" || item.status === "uploading",
+  );
+  const full = stored.length + unfinished.length >= ATTACHMENTS_PER_ITEM;
 
   async function run(label: string, action: () => Promise<string | null>) {
     setBusy(label);
@@ -72,7 +77,7 @@ export function AttachmentList({
 
   return (
     <div className="app-attachments">
-      {stored.length > 0 ? (
+      {stored.length + unfinished.length > 0 ? (
         <ListSurface aria-label={`${itemLabel} 첨부 파일`}>
           {stored.map((attachment) => (
             <ListRow
@@ -116,6 +121,33 @@ export function AttachmentList({
               title={attachment.fileName}
             />
           ))}
+          {editable
+            ? unfinished.map((attachment) => (
+                <ListRow
+                  action={
+                    <Button
+                      aria-label={`${attachment.fileName} 지우기`}
+                      disabled={busy !== null}
+                      onClick={() =>
+                        void run(`delete-${attachment.id}`, async () => {
+                          await deleteAttachment(token, tenantId, attachment.id);
+                          await onChanged();
+                          return `'${attachment.fileName}'을(를) 지웠습니다.`;
+                        })
+                      }
+                      size="small"
+                      variant="quiet"
+                    >
+                      지우기
+                    </Button>
+                  }
+                  description="올리기가 끝나지 않았습니다. 지우고 다시 올려 주세요."
+                  key={attachment.id}
+                  meta={formatSize(attachment.byteSize)}
+                  title={attachment.fileName}
+                />
+              ))
+            : null}
         </ListSurface>
       ) : null}
       {editable ? (

@@ -70,6 +70,90 @@ pub enum CompleteAttachmentOutcome {
     SizeMismatch { declared: i64, received: i64 },
 }
 
+/// Result of trying to become the one writer of a slot.
+#[derive(Debug)]
+pub enum ClaimUploadOutcome {
+    /// This request owns the slot until it completes or releases it.
+    Claimed(Box<AttachmentRecord>),
+    /// Another request is uploading right now.
+    Busy,
+    /// The bytes are already stored.
+    AlreadyStored,
+    NotFound,
+    Expired,
+}
+
+/// How long a claim blocks other uploads before it counts as abandoned.
+pub const UPLOAD_CLAIM_TIMEOUT_SECONDS: i64 = 300;
+
+/// Makes this request the only writer of a pending slot.
+///
+/// One UPDATE moves `pending` (or a claim older than the timeout) to
+/// `uploading`, so of two concurrent uploads exactly one gets the slot and the
+/// other is refused before it touches storage.
+pub async fn claim_attachment_upload(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    attachment_id: Uuid,
+    now: DateTime<Utc>,
+) -> anyhow::Result<ClaimUploadOutcome> {
+    let claimed = sqlx::query_as::<_, AttachmentRecord>(&format!(
+        "UPDATE school_collect.collect_attachments
+         SET status = 'uploading', upload_claimed_at = $3, updated_at = $3
+         WHERE tenant_id = $1 AND id = $2 AND expires_at > $3
+           AND (status = 'pending'
+                OR (status = 'uploading'
+                    AND upload_claimed_at < $3 - make_interval(secs => $4)))
+         RETURNING {ATTACHMENT_COLUMNS}"
+    ))
+    .bind(tenant_id)
+    .bind(attachment_id)
+    .bind(now)
+    .bind(UPLOAD_CLAIM_TIMEOUT_SECONDS as f64)
+    .fetch_optional(pool)
+    .await?;
+    if let Some(record) = claimed {
+        return Ok(ClaimUploadOutcome::Claimed(Box::new(record)));
+    }
+
+    // Nothing was claimed: report why, from the current row.
+    let current = sqlx::query_as::<_, (String, DateTime<Utc>)>(
+        "SELECT status, expires_at FROM school_collect.collect_attachments
+         WHERE tenant_id = $1 AND id = $2",
+    )
+    .bind(tenant_id)
+    .bind(attachment_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(match current {
+        None => ClaimUploadOutcome::NotFound,
+        Some((status, _)) if status == "deleted" => ClaimUploadOutcome::NotFound,
+        Some((status, _)) if status == "stored" => ClaimUploadOutcome::AlreadyStored,
+        Some((_, expires_at)) if expires_at <= now => ClaimUploadOutcome::Expired,
+        Some(_) => ClaimUploadOutcome::Busy,
+    })
+}
+
+/// Gives a claimed slot back after a failed upload, so the owner can retry.
+pub async fn release_attachment_upload(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    attachment_id: Uuid,
+    now: DateTime<Utc>,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE school_collect.collect_attachments
+         SET status = 'pending', upload_claimed_at = NULL, updated_at = $3
+         WHERE tenant_id = $1 AND id = $2 AND status = 'uploading'",
+    )
+    .bind(tenant_id)
+    .bind(attachment_id)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 #[derive(Debug)]
 pub enum DeleteAttachmentOutcome {
     Deleted {
@@ -254,7 +338,8 @@ pub async fn complete_attachment(
 
     let stored = sqlx::query_as::<_, AttachmentRecord>(&format!(
         "UPDATE school_collect.collect_attachments
-         SET status = 'stored', checksum_sha256 = $3, stored_at = $4, updated_at = $4
+         SET status = 'stored', checksum_sha256 = $3, stored_at = $4, updated_at = $4,
+             upload_claimed_at = NULL
          WHERE tenant_id = $1 AND id = $2
          RETURNING {ATTACHMENT_COLUMNS}"
     ))

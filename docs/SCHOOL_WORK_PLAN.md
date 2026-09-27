@@ -113,6 +113,7 @@ PR #58(`e3a541c`)·PR #59(`2486f8d`)·PR #60(`aaa55c5`)으로 첨부 metadata �
 - 검증 (2026-09-27, Windows): `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo test --workspace --locked`(118개), foundation 30개, repository guard. 실제 개발 DB에서 `crates/db/tests/attachments.rs` 5개, worker sweep 1개, relay 6개가 통과했고, 실제 provider+PostgreSQL E2E 5개(전체 흐름·초대·내보내기·역할 4종·첨부)를 통합 SHA `aaa55c5` 기준으로 통과시켰습니다. 남은 `@example.test` 계정과 행은 0입니다.
 - 화면(4차 일부): 제출 작성 화면의 항목마다 `파일 첨부`·`받기`·`지우기`가 있고, 형식·크기(10MB)는 요청 전에 거절합니다. 제출한 뒤에는 첨부·지우기가 사라집니다. 수합 상세(관리자)의 "제출된 첨부 파일"에서 구성원별 파일을 받을 수 있습니다(지우기 없음). 받은 파일은 다운로드 폴더에 같은 이름이 있으면 번호를 붙여 저장합니다. 실제 Tauri 창에서 올리기 → 목록(69 B) → `.exe` 거절 → 받기(원본과 바이트 일치) → 지우기(저장소 0개) → 첨부 후 제출 → 관리자 화면 표시·받기, 640px·1280px 가로 넘침 없음을 확인했습니다.
 - 이 검증에서 API의 CORS가 `DELETE`를 허용하지 않아 앱에서 지우기가 막히는 결함을 찾아 고쳤고, preflight가 클라이언트가 쓰는 모든 method를 허용하는지 단위 테스트로 고정했습니다.
+- 3차 검토 보강: 동시 올리기는 슬롯을 차지한 한 요청만 bytes를 쓰고(`one_upload_owns_a_slot_at_a_time`: 8개 동시 → 1개 차지·7개 거절, 해제 후 재차지, 5분 뒤 남은 차지 인수, 저장 후 차지 불가), 실패한 올리기는 bytes를 지우고 슬롯을 돌려줍니다. 앱은 올리기가 실패하면 빈 슬롯을 지우고, 끝나지 않은 슬롯이 남으면 목록에 "올리기가 끝나지 않았습니다"와 지우기를 보여 줍니다. 관리자가 자기 제출 화면을 열 때는 `scope=mine`으로 자기 파일만 받습니다.
 - R2 adapter: `R2_*` 변수가 있으면 api·worker가 private R2를 씁니다. 서명은 AWS 공개 예제 값으로, 요청 흐름은 loopback S3 stand-in으로 검증했습니다([ARCHITECTURE.md](ARCHITECTURE.md) Files).
 - 아직: 실제 R2 bucket·credential 연결 확인, presigned 직접 업로드로 바꿀지 결정, 실제 네트워크 단절·재시도 사람 검증.
 
