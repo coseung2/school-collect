@@ -149,7 +149,10 @@ R2는 private bucket을 기본으로 합니다. 서버가 tenant/resource 권한
 - bytes는 `ObjectStorage` port(`crates/application`) 뒤에 있습니다. 개발은 `APP_ATTACHMENT_DIR`의 디렉터리 adapter를 쓰고, 운영은 private R2 adapter로 바꿉니다. 저장소가 설정되지 않으면 첨부 endpoint는 503으로 거절하며, 개발 외 환경에서는 `APP_ATTACHMENT_DIR` 없이 기동하지 않습니다.
 - 정리: worker가 한 배치를 끝낸 뒤 `WORKER_ATTACHMENT_SWEEP_MS`(기본 6시간)를 온전히 기다리고 다음 배치를 시작합니다. 삭제 표시된 행도 보존 기간이 지나면 metadata까지 지웁니다. bytes 삭제에 실패한 행은 지우지 않고 다음 주기에 다시 시도합니다(`APP_ATTACHMENT_DIR`이 설정된 worker에서만 동작). worker는 migration을 실행하지 않고, migrator가 적용한 schema가 없으면 기동하지 않습니다.
 - 화면: 제출 작성 화면의 항목별 첨부와 관리자 수합 상세의 제출 첨부 받기가 위 API를 씁니다. 받은 bytes는 native `save_downloaded_file`이 다운로드 폴더에만 씁니다(이름 검사·덮어쓰기 없음·10MB 상한).
-- 아직: R2 adapter와 presigned capability(직접 업로드 URL).
+- R2 adapter: `crates/application/src/r2.rs`의 `R2Storage`가 같은 `ObjectStorage` port를 구현합니다. S3 API(path-style `{endpoint}/{bucket}/{key}`)에 요청마다 AWS SigV4로 서명하고, 공개 URL은 만들지 않습니다. `R2_ENDPOINT`·`R2_BUCKET`·`R2_ACCESS_KEY_ID`·`R2_SECRET_ACCESS_KEY`가 모두 있으면 api·worker가 R2를, 없으면 `APP_ATTACHMENT_DIR`의 디렉터리를 씁니다. 일부만 있으면 기동하지 않습니다(조용한 대체 없음). credential은 로그·오류·`Debug` 출력에 나오지 않습니다.
+- 검증: 서명은 AWS 공개 예제(GET Object 헤더 서명, presigned URL)의 기대값과 일치하는지 단위 테스트로, 요청 흐름은 loopback S3 stand-in(`crates/application/tests/r2_mock.rs`)으로 확인합니다: 없는 key는 `None`, 올리기→읽기→지우기→두 번 지우기, 선언 형식 전달, presigned PUT 직접 업로드, 잘못된 access key는 403(`AccessDenied`)으로 실패하고 secret은 오류에 나오지 않음.
+- presigned: `R2Storage::presigned_url`은 GET·PUT만, 1초~7일로 제한해 만듭니다. 업로드는 지금도 API를 거칩니다. presigned PUT으로 바꾸면 서버의 크기·checksum 검증을 R2 쪽 조건으로 옮겨야 해서(응답 계약의 `upload.kind`가 그 확장 지점), 실제 bucket에서 검증할 수 있을 때 결정합니다.
+- 아직: 실제 R2 bucket·credential(소유자 자원)에서의 연결 확인.
 
 ## Local/offline
 
