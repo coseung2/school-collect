@@ -93,6 +93,51 @@ class ExtensionContractTests(unittest.TestCase):
                     f"{script.name}: unexpected fetch target {target!r}",
                 )
 
+    def test_recipes_only_run_on_the_screen_they_were_recorded_on(self):
+        """같은 사이트의 다른 화면에서는 레시피를 실행하지 않는지 실제 함수로 확인합니다."""
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node is not available")
+
+        source = (EXTENSION / "popup.js").read_text(encoding="utf-8")
+        functions = []
+        for name in ("normalizedPath", "screenMatch"):
+            match = re.search(
+                rf"^function {name}\(.*?^\}}\n", source, re.MULTILINE | re.DOTALL
+            )
+            self.assertIsNotNone(match, f"popup.js must define {name}()")
+            functions.append(match.group(0))
+
+        cases = [
+            # (recipe URL, tab URL, expected result)
+            ("https://neis.example.test/sports/monthly", "https://neis.example.test/sports/monthly", "match"),
+            ("https://neis.example.test/sports/monthly", "https://neis.example.test/sports/monthly/", "match"),
+            ("https://neis.example.test/sports/monthly?m=3", "https://neis.example.test/sports/monthly?m=4#top", "match"),
+            ("https://neis.example.test/sports/monthly", "https://neis.example.test/attendance/daily", "wrong-screen"),
+            ("https://neis.example.test/sports/monthly", "https://neis.example.test/", "wrong-screen"),
+            ("https://neis.example.test/sports/monthly", "https://other.example.test/sports/monthly", "wrong-origin"),
+            ("https://neis.example.test/sports/monthly", "http://neis.example.test/sports/monthly", "wrong-origin"),
+            ("https://neis.example.test/sports/monthly", "chrome://extensions", "not-web"),
+        ]
+        harness = "\n".join(functions) + (
+            "\nconst cases = JSON.parse(process.argv[2]);\n"
+            "const out = cases.map(([recipe, tab]) => {\n"
+            "  const r = screenMatch({ targetUrl: recipe }, { url: tab });\n"
+            "  return r.ok ? 'match' : r.reason;\n"
+            "});\n"
+            "console.log(JSON.stringify(out));\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / "screen-match.mjs"
+            script.write_text(harness, encoding="utf-8")
+            completed = subprocess.run(
+                [node, str(script), json.dumps([[r, t] for r, t, _ in cases])],
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr.strip())
+        self.assertEqual(json.loads(completed.stdout), [expected for _, _, expected in cases])
+
 
 if __name__ == "__main__":
     unittest.main()

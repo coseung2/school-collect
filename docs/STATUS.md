@@ -55,7 +55,7 @@ PR #24/#25는 모두 develop에 병합됐습니다(`f573bfb`, `11a0af0`). 병합
 - 검증 보강: 통합 SHA `02f16a2`와 수정 통합 SHA `67e7dc1`에서 실제 provider·PostgreSQL E2E 4개를 다시 통과시켰고, 남은 계정·행이 0임을 확인했습니다. `394f9c9 -> 02f16a2` 차이는 문서뿐이라 그 이전 CI(V2 Architecture 성공)가 같은 앱·서버 코드를 덮고, `02f16a2 -> 67e7dc1`은 이 검토 대응 변경(초안 접근·정리·문서)입니다.
 - 남은 blocker(소유자 결정·외부 자원 필요): S-04 private R2 adapter·presigned·화면, S-05 외부 브라우저 PKCE, C-03 staging/prod·최소 권한 DB·backup/restore drill, C-05 서명·업데이트. 승격 전에 닫아야 합니다.
 - 검토자가 저장소 안에서 선행 가능하다고 밝힌 범위를 모두 진행했습니다: S-04 attachment contract·storage port·개발 adapter·만료 sweep(PR #58~#60), C-03 backup/restore drill(#62), C-05 설치 파일 번들(#63), C-04 full-history scan과 rewrite 범위(#64), S-05 PKCE state 검증(#65), C-01 Select·Checkbox(#66). Dialog·Sheet·Toast와 updater는 각각 Figma 승인과 서명 키가 필요해 남겨 두었습니다.
-- 기존 한계(이번에 바뀌지 않음): 자동화는 아직 `origin`까지만 비교합니다(월/화면 식별자 미구현).
+- 자동화 화면 확인: 1차 검토의 MEDIUM 지적(origin만 비교)에 따라 origin과 path를 함께 비교하도록 고쳤습니다. 화면 안의 월·학기 식별은 아직 없습니다([AUTOMATION_DESIGN.md](AUTOMATION_DESIGN.md) "화면 확인").
 
 ## 단계 상태
 

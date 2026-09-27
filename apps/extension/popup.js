@@ -89,6 +89,53 @@ async function activeTab() {
   return tab ?? null;
 }
 
+function normalizedPath(url) {
+  const path = url.pathname.replace(/\/+$/, "");
+  return path === "" ? "/" : path;
+}
+
+/**
+ * Decides whether the active tab is the screen a recipe was recorded on.
+ * Same origin alone is not enough: one work site hosts many screens, and a
+ * recipe must never type into a different form on the same host.
+ * - "match": same origin and path (query/fragment may differ, e.g. a month).
+ * - "wrong-origin" / "wrong-screen": refuse.
+ */
+function screenMatch(recipe, tab) {
+  if (!tab?.url || !/^https?:/i.test(tab.url)) {
+    return { ok: false, reason: "not-web" };
+  }
+  const recipeUrl = new URL(recipe.targetUrl);
+  const tabUrl = new URL(tab.url);
+  if (recipeUrl.origin !== tabUrl.origin) {
+    return { ok: false, reason: "wrong-origin", expected: recipeUrl.origin };
+  }
+  if (normalizedPath(recipeUrl) !== normalizedPath(tabUrl)) {
+    return {
+      ok: false,
+      reason: "wrong-screen",
+      expected: `${recipeUrl.origin}${normalizedPath(recipeUrl)}`,
+    };
+  }
+  return { ok: true };
+}
+
+/** Returns true when the tab is the recipe's screen; otherwise shows why and returns false. */
+function ensureRecipeScreen(recipe, tab, verb) {
+  const match = screenMatch(recipe, tab);
+  if (match.ok) {
+    return true;
+  }
+  if (match.reason === "not-web") {
+    setStatus(`http/https 화면에서만 ${verb} 수 있습니다.`, "error");
+  } else if (match.reason === "wrong-origin") {
+    setStatus(`이 레시피는 ${match.expected} 화면용입니다.`, "error");
+  } else {
+    setStatus(`같은 사이트의 다른 화면입니다. 이 레시피는 ${match.expected} 화면용입니다.`, "error");
+  }
+  return false;
+}
+
 async function runPageCommand(command, { allowFailure = false } = {}) {
   const tab = await activeTab();
   if (!tab?.id || !/^https?:/i.test(tab.url ?? "")) {
@@ -689,14 +736,7 @@ document.getElementById("preview").addEventListener("click", async () => {
 
   try {
     const tab = await activeTab();
-    if (!tab?.url || !/^https?:/i.test(tab.url)) {
-      setStatus("http/https 화면에서만 미리 볼 수 있습니다.", "error");
-      return;
-    }
-    const recipeUrl = new URL(recipe.targetUrl);
-    const tabUrl = new URL(tab.url);
-    if (recipeUrl.origin !== tabUrl.origin) {
-      setStatus(`이 레시피는 ${recipeUrl.origin} 화면용입니다.`, "error");
+    if (!ensureRecipeScreen(recipe, tab, "미리 볼")) {
       return;
     }
 
@@ -722,14 +762,7 @@ document.getElementById("fill").addEventListener("click", async () => {
 
   try {
     const tab = await activeTab();
-    if (!tab?.url || !/^https?:/i.test(tab.url)) {
-      setStatus("http/https 화면에서만 실행할 수 있습니다.", "error");
-      return;
-    }
-    const recipeUrl = new URL(recipe.targetUrl);
-    const tabUrl = new URL(tab.url);
-    if (recipeUrl.origin !== tabUrl.origin) {
-      setStatus(`이 레시피는 ${recipeUrl.origin} 화면용입니다.`, "error");
+    if (!ensureRecipeScreen(recipe, tab, "실행할")) {
       return;
     }
 
@@ -832,12 +865,7 @@ document.getElementById("table-preview").addEventListener("click", async () => {
 
   try {
     const tab = await activeTab();
-    if (!tab?.url || !/^https?:/i.test(tab.url)) {
-      setStatus("http/https 화면에서만 미리 볼 수 있습니다.", "error");
-      return;
-    }
-    if (new URL(recipe.targetUrl).origin !== new URL(tab.url).origin) {
-      setStatus(`이 레시피는 ${new URL(recipe.targetUrl).origin} 화면용입니다.`, "error");
+    if (!ensureRecipeScreen(recipe, tab, "미리 볼")) {
       return;
     }
 
@@ -872,12 +900,7 @@ document.getElementById("table-fill").addEventListener("click", async () => {
 
   try {
     const tab = await activeTab();
-    if (!tab?.url || !/^https?:/i.test(tab.url)) {
-      setStatus("http/https 화면에서만 실행할 수 있습니다.", "error");
-      return;
-    }
-    if (new URL(recipe.targetUrl).origin !== new URL(tab.url).origin) {
-      setStatus(`이 레시피는 ${new URL(recipe.targetUrl).origin} 화면용입니다.`, "error");
+    if (!ensureRecipeScreen(recipe, tab, "실행할")) {
       return;
     }
 
@@ -976,12 +999,7 @@ document.getElementById("watch-scan").addEventListener("click", async () => {
 
   try {
     const tab = await activeTab();
-    if (!tab?.url || !/^https?:/i.test(tab.url)) {
-      setStatus("http/https 화면에서만 실행할 수 있습니다.", "error");
-      return;
-    }
-    if (new URL(recipe.targetUrl).origin !== new URL(tab.url).origin) {
-      setStatus(`이 레시피는 ${new URL(recipe.targetUrl).origin} 화면용입니다.`, "error");
+    if (!ensureRecipeScreen(recipe, tab, "실행할")) {
       return;
     }
 
