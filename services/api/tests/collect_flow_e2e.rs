@@ -161,25 +161,43 @@ async fn delete_supabase_user(
     base_url: &str,
     service_role: &str,
     user_id: &str,
-) {
-    let _ = client
+) -> Result<(), String> {
+    let response = client
         .delete(format!("{base_url}/auth/v1/admin/users/{user_id}"))
         .header("apikey", service_role)
         .header(header::AUTHORIZATION, format!("Bearer {service_role}"))
         .send()
-        .await;
+        .await
+        .map_err(|error| format!("provider account delete request failed: {error}"))?;
+    // 404 means it is already gone, which is the state we want.
+    if response.status().is_success() || response.status() == StatusCode::NOT_FOUND {
+        Ok(())
+    } else {
+        Err(format!(
+            "provider account delete returned {}",
+            response.status()
+        ))
+    }
 }
 
 /// Deletes the rows a test created. Deleting a tenant cascades to memberships,
-/// collects, submissions and audit rows.
-async fn remove_rows(pool: &PgPool, tenant_ids: &[Uuid], user_ids: &[Uuid]) -> Result<(), String> {
+/// collects, submissions and audit rows. App users are matched by id and also
+/// by provider subject, so a user the API created before the test could record
+/// its id is still removed.
+async fn remove_rows(
+    pool: &PgPool,
+    tenant_ids: &[Uuid],
+    user_ids: &[Uuid],
+    subjects: &[String],
+) -> Result<(), String> {
     sqlx::query("DELETE FROM school_collect.tenants WHERE id = ANY($1)")
         .bind(tenant_ids)
         .execute(pool)
         .await
         .map_err(|error| format!("tenant cleanup failed: {error}"))?;
-    sqlx::query("DELETE FROM school_collect.users WHERE id = ANY($1)")
+    sqlx::query("DELETE FROM school_collect.users WHERE id = ANY($1) OR subject = ANY($2)")
         .bind(user_ids)
+        .bind(subjects)
         .execute(pool)
         .await
         .map_err(|error| format!("user cleanup failed: {error}"))?;
@@ -191,14 +209,16 @@ async fn leftover_rows(
     pool: &PgPool,
     tenant_ids: &[Uuid],
     user_ids: &[Uuid],
+    subjects: &[String],
 ) -> Result<i64, String> {
     sqlx::query_scalar(
         "SELECT (SELECT count(*) FROM school_collect.tenants WHERE id = ANY($1))
               + (SELECT count(*) FROM school_collect.memberships WHERE tenant_id = ANY($1))
-              + (SELECT count(*) FROM school_collect.users WHERE id = ANY($2))",
+              + (SELECT count(*) FROM school_collect.users WHERE id = ANY($2) OR subject = ANY($3))",
     )
     .bind(tenant_ids)
     .bind(user_ids)
+    .bind(subjects)
     .fetch_one(pool)
     .await
     .map_err(|error| format!("leftover check failed: {error}"))
@@ -277,8 +297,16 @@ impl TestCleanup {
         };
 
         let client = reqwest::Client::builder().build().expect("http client");
-        for identity in identities {
-            delete_supabase_user(&client, &self.supabase_url, &self.service_role, &identity).await;
+        // The provider user id is also the token subject the API stores, so the
+        // same list finds app users whose id was never registered.
+        let mut problems = Vec::new();
+        for identity in &identities {
+            if let Err(error) =
+                delete_supabase_user(&client, &self.supabase_url, &self.service_role, identity)
+                    .await
+            {
+                problems.push(error);
+            }
         }
 
         let pool = PgPoolOptions::new()
@@ -286,10 +314,13 @@ impl TestCleanup {
             .connect(&self.database_url)
             .await
             .map_err(|error| format!("cleanup connection failed: {error}"))?;
-        remove_rows(&pool, &tenant_ids, &user_ids).await?;
-        let leftover = leftover_rows(&pool, &tenant_ids, &user_ids).await?;
+        remove_rows(&pool, &tenant_ids, &user_ids, &identities).await?;
+        let leftover = leftover_rows(&pool, &tenant_ids, &user_ids, &identities).await?;
         if leftover != 0 {
-            return Err(format!("{leftover} rows were left behind"));
+            problems.push(format!("{leftover} rows were left behind"));
+        }
+        if !problems.is_empty() {
+            return Err(problems.join("; "));
         }
         Ok(())
     }
@@ -319,8 +350,12 @@ impl Drop for TestCleanup {
             };
             runtime.block_on(async move {
                 let client = reqwest::Client::builder().build().expect("http client");
-                for identity in identities {
-                    delete_supabase_user(&client, &supabase_url, &service_role, &identity).await;
+                for identity in &identities {
+                    if let Err(error) =
+                        delete_supabase_user(&client, &supabase_url, &service_role, identity).await
+                    {
+                        eprintln!("test teardown could not remove a provider account: {error}");
+                    }
                 }
                 let Ok(pool) = PgPoolOptions::new()
                     .max_connections(1)
@@ -329,7 +364,7 @@ impl Drop for TestCleanup {
                 else {
                     return;
                 };
-                if let Err(error) = remove_rows(&pool, &tenant_ids, &user_ids).await {
+                if let Err(error) = remove_rows(&pool, &tenant_ids, &user_ids, &identities).await {
                     eprintln!("test teardown could not remove rows: {error}");
                 }
             });
@@ -2398,6 +2433,25 @@ async fn attachment_flow_end_to_end() {
         .await;
         if status != StatusCode::OK {
             return Err(format!("upload failed: {status}"));
+        }
+
+        // A stored slot is write-once: a second upload must not replace the bytes.
+        let mut tampered = pdf.clone();
+        if let Some(last) = tampered.last_mut() {
+            *last ^= 0xff;
+        }
+        let (status, _, _) = call_raw(
+            &app,
+            "PUT",
+            &upload_url,
+            Some(&author.access_token),
+            Some(&tenant_id),
+            Some("application/pdf"),
+            tampered,
+        )
+        .await;
+        if status != StatusCode::CONFLICT {
+            return Err(format!("a stored attachment accepted new bytes: {status}"));
         }
 
         let (status, detail) = call(

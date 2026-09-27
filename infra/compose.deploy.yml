@@ -17,9 +17,13 @@ services:
       DATABASE_URL: ${DATABASE_URL:?set the pooled PostgreSQL URL}
       OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:?set the identity provider issuer}
       OIDC_AUDIENCE: ${OIDC_AUDIENCE:-authenticated}
+      # Required outside development until private R2 storage is connected.
+      APP_ATTACHMENT_DIR: /var/lib/school-collect/attachments
       RUST_LOG: ${RUST_LOG:-info,tower_http=info}
     ports:
       - "127.0.0.1:3000:3000"
+    volumes:
+      - school_collect_attachments:/var/lib/school-collect/attachments
 
   migrator:
     build:
@@ -40,4 +44,13 @@ services:
     entrypoint: ["/usr/local/bin/school-collect-worker"]
     environment:
       APP_ENV: ${APP_ENV:?set APP_ENV to staging or production}
+      # Runtime role: the worker only reads and writes rows, never DDL.
+      DATABASE_URL: ${DATABASE_URL:?set the pooled PostgreSQL URL}
+      NATS_URL: ${NATS_URL:?set the NATS JetStream URL}
+      APP_ATTACHMENT_DIR: /var/lib/school-collect/attachments
       RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - school_collect_attachments:/var/lib/school-collect/attachments
+
+volumes:
+  school_collect_attachments:

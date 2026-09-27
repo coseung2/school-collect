@@ -91,36 +91,38 @@ export default function App() {
   const [retentionNotice, setRetentionNotice] = useState<string | null>(null);
 
   const signOut = useCallback(() => {
-    const signingOutUser = session?.user.id;
+    // Drafts are keyed by the identity provider's subject: that is the id the
+    // native side can check against the stored session.
+    const signingOutUser = session?.user.subject;
     setToken(null);
     setSession(null);
     setActiveTenantId(null);
     setBootError(null);
     setSignInOpen(false);
     void (async () => {
+      const problems: string[] = [];
       // 초안 정리는 세션이 남아 있는 동안 해야 하므로 먼저 끝냅니다.
       if (signingOutUser) {
         try {
           await clearLocalDrafts(signingOutUser);
         } catch (error) {
-          setRetentionNotice(
-            `이 컴퓨터에 저장된 초안을 지우지 못했습니다: ${messageOf(error)}`,
-          );
+          problems.push(`이 컴퓨터에 저장된 초안을 지우지 못했습니다: ${messageOf(error)}`);
         }
       }
       // 저장된 세션을 지워 다음 실행에서 토큰이 남지 않게 합니다.
       try {
         await clearAuthSession();
-        setRetentionNotice(null);
       } catch (error) {
-        setRetentionNotice(`저장된 세션을 지우지 못했습니다: ${messageOf(error)}`);
+        problems.push(`저장된 세션을 지우지 못했습니다: ${messageOf(error)}`);
       }
+      // 한 단계라도 실패하면 그 안내를 남기고, 모두 성공했을 때만 지웁니다.
+      setRetentionNotice(problems.length > 0 ? problems.join(" ") : null);
     })();
     // 로그인 없이 쓸 수 있는 화면에 머무르고, 멤버십이 필요한 화면에서만 홈으로 돌아갑니다.
     if (routeNeedsMembership(parseHash(window.location.hash))) {
       navigate({ page: "overview" });
     }
-  }, [session?.user.id]);
+  }, [session?.user.subject]);
 
   /**
    * Restores the session saved in the OS credential store.
@@ -130,6 +132,17 @@ export default function App() {
    */
   useEffect(() => {
     let cancelled = false;
+    // A stale session must not survive, and if it cannot be removed the user
+    // should know a token may remain on this computer.
+    const dropStoredSession = async () => {
+      try {
+        await clearAuthSession();
+      } catch (error) {
+        if (!cancelled) {
+          setRetentionNotice(`저장된 세션을 지우지 못했습니다: ${messageOf(error)}`);
+        }
+      }
+    };
     void (async () => {
       const stored = await loadAuthSession();
       if (cancelled || !stored) {
@@ -146,12 +159,12 @@ export default function App() {
           }
           return;
         } catch {
-          await clearAuthSession();
+          await dropStoredSession();
           return;
         }
       }
       if (expiringSoon) {
-        await clearAuthSession();
+        await dropStoredSession();
         return;
       }
       setToken(stored.accessToken);
@@ -392,7 +405,7 @@ export default function App() {
             role={activeTenant.role}
             tenantId={activeTenant.tenantId}
             token={token}
-            userId={session?.user.id ?? ""}
+            userId={session?.user.subject ?? ""}
           />
         ) : null}
         {route.page === "members" ? (

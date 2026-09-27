@@ -36,14 +36,39 @@ CONTENT_RULES = {
     ),
 }
 
-# Values that look like secrets but are known local/CI placeholders committed
-# on purpose (developer Docker stack, CI service containers, unit tests).
-ALLOWED_VALUES = (
+# Secret values that are known local/CI placeholders committed on purpose
+# (developer Docker stack, CI service containers, unit tests). A match is
+# allowed only when its whole secret value equals one of these; a real value
+# that merely contains a placeholder is still reported.
+ALLOWED_SECRET_VALUES = frozenset({
     b"school_collect_ci",
     b"school_collect_local_only",
-    b"postgres://unused:unused@",
-    b"postgres://school_collect:school_collect@",
-)
+    b"school_collect",
+    b"unused",
+})
+
+_ENV_DEFAULT = re.compile(rb"^\$\{[A-Z0-9_]+:-(?P<default>[^}]*)\}$")
+_URL_PASSWORD = re.compile(rb"://[^:@/\s'\"]+:(?P<password>[^@/\s'\"]+)@")
+_ASSIGNED_VALUE = re.compile(rb"[=:][ \t]*['\"]?(?P<value>[^\s'\"#]+)")
+
+
+def secret_value(rule: str, matched: bytes) -> bytes | None:
+    """The part of a match that would be the secret, with `${VAR:-x}` reduced to x."""
+    if rule == "postgres-url-with-password":
+        found = _URL_PASSWORD.search(matched)
+    elif rule == "generic-assigned-secret":
+        found = _ASSIGNED_VALUE.search(matched)
+    else:
+        return None  # keys and tokens have no placeholder form
+    if found is None:
+        return None
+    value = found.group(found.lastgroup)
+    default = _ENV_DEFAULT.match(value)
+    return default.group("default") if default else value
+
+
+def is_allowed(rule: str, matched: bytes) -> bool:
+    return secret_value(rule, matched) in ALLOWED_SECRET_VALUES
 
 
 def sensitive_path(name: str) -> str | None:
@@ -99,7 +124,7 @@ def main() -> int:
                     if b"\x00" not in data:
                         for rule, pattern in CONTENT_RULES.items():
                             for match in pattern.finditer(data):
-                                if not any(allowed in match.group(0) for allowed in ALLOWED_VALUES):
+                                if not is_allowed(rule, match.group(0)):
                                     matched.append(rule)
                                     break
                     blob_rules[blob] = matched
@@ -110,7 +135,9 @@ def main() -> int:
                 if not finding.commits or finding.commits[-1] != commit:
                     finding.commits.append(commit)
 
-    head_names = set(git("ls-files", "-z").decode("utf-8", "replace").split("\0"))
+    # "In HEAD" means HEAD's own content still triggers the rule, not merely that
+    # a file with that name exists there.
+    head = git("rev-parse", "HEAD").decode().strip()
     rows = []
     for finding in sorted(findings.values(), key=lambda f: (f.rule, f.path)):
         rows.append({
@@ -119,7 +146,7 @@ def main() -> int:
             "commits": len(finding.commits),
             "first": finding.commits[0][:10],
             "last": finding.commits[-1][:10],
-            "in_head": finding.path in head_names,
+            "in_head": head in finding.commits,
         })
 
     if as_json:

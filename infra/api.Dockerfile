@@ -19,10 +19,13 @@ RUN cargo build --release --locked \
 
 FROM debian:bookworm-slim AS runtime
 
+# The attachment directory serves the development file adapter. A named volume
+# mounted there inherits this owner, so api and worker can both write it.
 RUN apt-get update \
     && apt-get install --no-install-recommends -y ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --system --create-home --uid 10001 schoolcollect
+    && useradd --system --create-home --uid 10001 schoolcollect \
+    && install -d -o schoolcollect -g schoolcollect -m 0700 /var/lib/school-collect/attachments
 
 COPY --from=build /src/target/release/school-collect-api /usr/local/bin/school-collect-api
 COPY --from=build /src/target/release/school-collect-migrator /usr/local/bin/school-collect-migrator

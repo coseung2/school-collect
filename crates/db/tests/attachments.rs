@@ -505,6 +505,7 @@ async fn another_school_cannot_read_or_delete_an_attachment() {
         other_tenant.id,
         created.id,
         other_admin.id,
+        false,
         Utc::now(),
     )
     .await
@@ -562,6 +563,7 @@ async fn deleted_and_expired_attachments_leave_the_store() {
         fixture.tenant,
         created.id,
         fixture.contributor,
+        true,
         Utc::now(),
     )
     .await
@@ -613,6 +615,31 @@ async fn deleted_and_expired_attachments_leave_the_store() {
         .expect("expired");
     assert!(due.iter().any(|row| row.id == expired.id));
 
+    // A file deleted before its deadline still leaves metadata behind, so it
+    // is offered to the sweep once the deadline passes.
+    sqlx::query(
+        "UPDATE school_collect.collect_attachments SET expires_at = $3
+         WHERE tenant_id = $1 AND id = $2",
+    )
+    .bind(fixture.tenant)
+    .bind(created.id)
+    .bind(Utc::now() - Duration::days(1))
+    .execute(&fixture.pool)
+    .await
+    .expect("age the deleted row");
+    let due = expired_attachments(&fixture.pool, Utc::now(), 100)
+        .await
+        .expect("expired");
+    assert!(
+        due.iter().any(|row| row.id == created.id),
+        "an expired deleted row must reach the sweep"
+    );
+    assert!(
+        purge_attachment(&fixture.pool, created.id)
+            .await
+            .expect("purge deleted row")
+    );
+
     assert!(
         purge_attachment(&fixture.pool, expired.id)
             .await
@@ -654,6 +681,110 @@ async fn deleted_and_expired_attachments_leave_the_store() {
         remaining, 0,
         "a removed collect takes its attachments with it"
     );
+
+    fixture.cleanup().await;
+}
+
+#[tokio::test]
+async fn concurrent_requests_cannot_break_attachment_rules() {
+    let Some(url) = database_url() else {
+        eprintln!("DATABASE_URL is not set; skipping the attachment concurrency check");
+        return;
+    };
+    let pool = school_collect_db::connect(&url).await.expect("connect");
+    school_collect_db::MIGRATOR
+        .run(&pool)
+        .await
+        .expect("migrate");
+    let fixture = fixture(pool).await;
+    let collect = new_collect(&fixture, &[item("plan", "계획서")], &[fixture.contributor]).await;
+    publish(&fixture, collect).await;
+
+    // Twice the per-item limit, all at once: the assignment row lock makes the
+    // count-then-insert atomic, so exactly the limit succeeds.
+    let attempts = (MAX_ATTACHMENTS_PER_ITEM * 2) as usize;
+    let mut tasks = Vec::with_capacity(attempts);
+    for index in 0..attempts {
+        let pool = fixture.pool.clone();
+        let (tenant, contributor) = (fixture.tenant, fixture.contributor);
+        tasks.push(tokio::spawn(async move {
+            create_attachment(
+                &pool,
+                tenant,
+                collect,
+                contributor,
+                slot(tenant, "plan", &format!("동시-{index}.pdf"), 10),
+            )
+            .await
+            .expect("create")
+        }));
+    }
+    let mut created = Vec::new();
+    let mut refused = 0;
+    for task in tasks {
+        match task.await.expect("join") {
+            CreateAttachmentOutcome::Created(record) => created.push(record.id),
+            CreateAttachmentOutcome::LimitReached => refused += 1,
+            other => panic!("unexpected outcome: {other:?}"),
+        }
+    }
+    assert_eq!(created.len() as i64, MAX_ATTACHMENTS_PER_ITEM);
+    assert_eq!(refused, attempts - created.len());
+    let stored: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM school_collect.collect_attachments
+         WHERE tenant_id = $1 AND collect_id = $2 AND status <> 'deleted'",
+    )
+    .bind(fixture.tenant)
+    .bind(collect)
+    .fetch_one(&fixture.pool)
+    .await
+    .expect("count");
+    assert_eq!(stored, MAX_ATTACHMENTS_PER_ITEM);
+
+    // Once the answer is handed in, the owner can no longer remove its files;
+    // a manager still can.
+    save_draft(
+        &fixture.pool,
+        fixture.tenant,
+        collect,
+        fixture.contributor,
+        0,
+        &json!({ "plan": "제출" }),
+    )
+    .await
+    .expect("draft");
+    school_collect_db::submit(&fixture.pool, fixture.tenant, collect, fixture.contributor)
+        .await
+        .expect("submit");
+    let refused = delete_attachment(
+        &fixture.pool,
+        fixture.tenant,
+        created[0],
+        fixture.contributor,
+        true,
+        Utc::now(),
+    )
+    .await
+    .expect("owner delete");
+    assert!(matches!(refused, DeleteAttachmentOutcome::Submitted));
+    let kept = get_attachment(&fixture.pool, fixture.tenant, created[0])
+        .await
+        .expect("get");
+    assert!(
+        kept.is_some(),
+        "a refused delete must leave the file visible"
+    );
+    let removed = delete_attachment(
+        &fixture.pool,
+        fixture.tenant,
+        created[0],
+        fixture.admin,
+        false,
+        Utc::now(),
+    )
+    .await
+    .expect("manager delete");
+    assert!(matches!(removed, DeleteAttachmentOutcome::Deleted { .. }));
 
     fixture.cleanup().await;
 }

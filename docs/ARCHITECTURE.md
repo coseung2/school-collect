@@ -142,10 +142,12 @@ R2는 private bucket을 기본으로 합니다. 서버가 tenant/resource 권한
 - `school_collect.collect_attachments`가 (tenant, collect, 담당자, item key) 단위로 metadata를 보관합니다: 파일 이름·형식·선언 크기·checksum·object key·상태(`pending`/`stored`/`deleted`)·만료 시각.
 - object key는 `tenants/{tenant}/attachments/{attachment_id}`로 서버가 만듭니다. 파일 이름은 표시용이며 경로나 object key가 될 수 없습니다.
 - 정책(domain): 파일 1개 최대 10 MiB, 항목당 5개, 제출당 20개, 허용 형식 목록(HWP/HWPX·Office·PDF·PNG/JPEG·text·zip), 보존 180일. 만료된 행은 retention sweep이 bytes를 지운 뒤 row를 지웁니다.
-- 접근 규칙: 읽기는 소유자 또는 관리자, 삭제는 관리자 또는 제출 전 소유자. 모든 조회·변경은 tenant로 한정됩니다.
+- 접근 규칙: 읽기는 소유자 또는 관리자, 삭제는 관리자 또는 제출 전 소유자. 모든 조회·변경은 tenant로 한정됩니다. 제출 여부는 삭제 transaction 안에서 첨부·제출 행을 잠그고 확인하므로 제출과 삭제가 겹쳐도 규칙이 깨지지 않습니다. 슬롯 열기는 배정 행을 잠가 항목당·제출당 개수 제한을 동시 요청에서도 지킵니다.
+- 한 번 쓰기: 저장이 끝난 첨부에 다시 올리면 bytes를 건드리기 전에 409(`attachment_already_stored`)로 거절합니다. 바꾸려면 지우고 새 슬롯을 엽니다.
+- 삭제 순서: 행을 먼저 숨기고 bytes를 지웁니다. bytes 삭제가 실패해도 이미 아무도 읽을 수 없고, 보존 기간이 지나면 sweep이 다시 지웁니다.
 - API: `POST /v1/collects/{id}/attachments`(슬롯 열기) → `PUT /v1/attachments/{id}/content`(bytes, 선언 크기·형식·checksum 검증) → `GET /v1/attachments/{id}`·`/content`, `GET /v1/collects/{id}/attachments`(담당자는 자기 파일, 관리자는 전체), `DELETE /v1/attachments/{id}`.
 - bytes는 `ObjectStorage` port(`crates/application`) 뒤에 있습니다. 개발은 `APP_ATTACHMENT_DIR`의 디렉터리 adapter를 쓰고, 운영은 private R2 adapter로 바꿉니다. 저장소가 설정되지 않으면 첨부 endpoint는 503으로 거절하며, 개발 외 환경에서는 `APP_ATTACHMENT_DIR` 없이 기동하지 않습니다.
-- 정리: worker가 `WORKER_ATTACHMENT_SWEEP_MS`(기본 6시간)마다 만료된 첨부를 한 배치씩 지웁니다. bytes 삭제에 실패한 행은 지우지 않고 다음 주기에 다시 시도합니다(`APP_ATTACHMENT_DIR`이 설정된 worker에서만 동작).
+- 정리: worker가 한 배치를 끝낸 뒤 `WORKER_ATTACHMENT_SWEEP_MS`(기본 6시간)를 온전히 기다리고 다음 배치를 시작합니다. 삭제 표시된 행도 보존 기간이 지나면 metadata까지 지웁니다. bytes 삭제에 실패한 행은 지우지 않고 다음 주기에 다시 시도합니다(`APP_ATTACHMENT_DIR`이 설정된 worker에서만 동작). worker는 migration을 실행하지 않고, migrator가 적용한 schema가 없으면 기동하지 않습니다.
 - 아직(4차 이후): R2 adapter와 presigned capability(직접 업로드 URL), 화면(제출 작성·검토).
 
 ## Local/offline

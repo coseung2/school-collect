@@ -48,11 +48,11 @@ export async function loadAuthSession(): Promise<AuthSession | null> {
   }
 }
 
-/** Removes the stored session. Signing out must not leave a token behind. */
+/**
+ * Removes the stored session. Signing out must not leave a token behind, so a
+ * real failure is reported to the caller. A missing entry is already treated
+ * as success on the native side.
+ */
 export async function clearAuthSession(): Promise<void> {
-  try {
-    await invoke("clear_auth_session");
-  } catch {
-    // A missing entry is not an error; the in-memory session is cleared anyway.
-  }
+  await invoke("clear_auth_session");
 }

@@ -1102,6 +1102,12 @@ fn validate_auth_session(session: &StoredAuthSession) -> Result<String, String> 
     if session.access_token.trim().is_empty() {
         return Err("access token이 비어 있습니다.".to_string());
     }
+    // The owner of local drafts is the token's subject, never a value the
+    // renderer chooses. Refuse a session whose user id disagrees with it.
+    let subject = token_subject(&session.access_token)?;
+    if session.user_id.trim() != subject {
+        return Err("세션 사용자와 토큰의 사용자가 다릅니다.".to_string());
+    }
     for value in [
         Some(session.access_token.as_str()),
         session.refresh_token.as_deref(),
@@ -1120,6 +1126,34 @@ fn validate_auth_session(session: &StoredAuthSession) -> Result<String, String> 
         return Err("세션이 보안 저장소 크기 제한을 넘습니다.".to_string());
     }
     Ok(encoded)
+}
+
+/// Reads the `sub` claim of an identity-provider access token.
+///
+/// The signature is not checked here: the API does that for every request.
+/// Locally the subject only decides which drafts on this computer belong to
+/// the signed-in person, so a forged token could claim nothing it does not
+/// already hold, and it grants no server access.
+fn token_subject(access_token: &str) -> Result<String, String> {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+
+    let mut parts = access_token.trim().split('.');
+    let (Some(_header), Some(payload), Some(_signature), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Err("access token 형식이 올바르지 않습니다.".to_string());
+    };
+    let bytes = URL_SAFE_NO_PAD
+        .decode(payload.trim_end_matches('='))
+        .map_err(|_| "access token을 읽지 못했습니다.".to_string())?;
+    let claims: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|_| "access token을 읽지 못했습니다.".to_string())?;
+    match claims.get("sub").and_then(serde_json::Value::as_str) {
+        Some(subject) if !subject.trim().is_empty() && subject.len() <= 256 => {
+            Ok(subject.trim().to_string())
+        }
+        _ => Err("access token에 사용자 정보가 없습니다.".to_string()),
+    }
 }
 
 #[cfg(windows)]
@@ -1204,7 +1238,10 @@ fn session_user_matches(stored: Option<&StoredAuthSession>, requested: &str) -> 
     let Some(session) = stored else {
         return Err("로그인 세션이 없어 이 컴퓨터의 초안을 사용할 수 없습니다.".to_string());
     };
-    if session.user_id.trim() != requested {
+    // Compare against the token's subject so an edited credential entry
+    // cannot redirect drafts to another person.
+    let owner = token_subject(&session.access_token)?;
+    if owner != requested {
         return Err("지금 로그인한 사용자의 초안만 사용할 수 있습니다.".to_string());
     }
     Ok(())
@@ -1411,7 +1448,7 @@ mod tests {
     #[test]
     fn stored_session_must_fit_the_credential_store() {
         let session = StoredAuthSession {
-            access_token: "a".repeat(64),
+            access_token: test_token("user-1"),
             refresh_token: Some("r".repeat(32)),
             user_id: "user-1".to_string(),
             email: Some("teacher@example.test".to_string()),
@@ -1424,12 +1461,22 @@ mod tests {
         assert!(validate_auth_session(&empty).is_err());
 
         let mut oversized = session.clone();
-        oversized.access_token = "a".repeat(MAX_SESSION_BYTES + 1);
+        oversized.refresh_token = Some("r".repeat(MAX_SESSION_BYTES + 1));
         assert!(validate_auth_session(&oversized).is_err());
 
         let mut broken = session.clone();
         broken.user_id = "user\t1".to_string();
         assert!(validate_auth_session(&broken).is_err());
+
+        // The renderer cannot pick whose session this is: the id must be the
+        // token's own subject, and a token without one is refused.
+        let mut other_user = session.clone();
+        other_user.user_id = "user-2".to_string();
+        assert!(validate_auth_session(&other_user).is_err());
+
+        let mut opaque = session.clone();
+        opaque.access_token = "a".repeat(64);
+        assert!(validate_auth_session(&opaque).is_err());
     }
 
     #[test]
@@ -1464,7 +1511,7 @@ mod tests {
     #[test]
     fn stored_session_round_trips_through_json() {
         let session = StoredAuthSession {
-            access_token: "a".repeat(64),
+            access_token: test_token("user-1"),
             refresh_token: Some("r".repeat(32)),
             user_id: "user-1".to_string(),
             email: Some("teacher@example.test".to_string()),
@@ -1478,7 +1525,7 @@ mod tests {
     #[test]
     fn drafts_are_bound_to_the_stored_session_user() {
         let session = StoredAuthSession {
-            access_token: "a".repeat(64),
+            access_token: test_token("user-1"),
             refresh_token: None,
             user_id: "user-1".to_string(),
             email: None,
@@ -1493,6 +1540,30 @@ mod tests {
         assert!(session_user_matches(Some(&session), "user-2").is_err());
         assert!(session_user_matches(Some(&session), "  ").is_err());
         assert!(session_user_matches(None, "user-1").is_err());
+
+        // Editing the stored user id does not move ownership: the token's
+        // subject decides.
+        let mut edited = session.clone();
+        edited.user_id = "user-2".to_string();
+        assert!(session_user_matches(Some(&edited), "user-2").is_err());
+        assert!(session_user_matches(Some(&edited), "user-1").is_ok());
+    }
+
+    #[test]
+    fn token_subject_reads_only_well_formed_tokens() {
+        assert_eq!(token_subject(&test_token("abc-123")).unwrap(), "abc-123");
+        assert!(token_subject("not-a-jwt").is_err());
+        assert!(token_subject("a.b").is_err());
+        assert!(token_subject("a.b.c.d").is_err());
+        assert!(token_subject("e30.e30.sig").is_err()); // `{}` has no subject
+    }
+
+    /// Unsigned JWT-shaped token carrying only a subject, for local checks.
+    fn test_token(subject: &str) -> String {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none","typ":"JWT"}"#);
+        let claims = URL_SAFE_NO_PAD.encode(format!(r#"{{"sub":"{subject}"}}"#));
+        format!("{header}.{claims}.signature")
     }
 
     #[test]
