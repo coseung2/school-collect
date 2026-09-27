@@ -107,6 +107,16 @@ export type CollectStatus = {
   rows: CollectStatusRow[];
 };
 
+export type Invitation = {
+  id: string;
+  email: string;
+  role: string;
+  status: string;
+  createdAt: string;
+  expiresAt: string;
+  acceptedAt: string | null;
+};
+
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
@@ -255,6 +265,45 @@ export const fetchCollectStatus = (
 
 export const listMembers = (token: string, tenantId: string) =>
   request<{ members: Member[] }>("/v1/members", { token, tenantId });
+
+export const listInvitations = (token: string, tenantId: string) =>
+  request<{ invitations: Invitation[] }>("/v1/invitations", {
+    token,
+    tenantId,
+  });
+
+export const createInvitation = (
+  token: string,
+  tenantId: string,
+  email: string,
+  role: string,
+) =>
+  request<{ invitation: Invitation; code: string }>("/v1/invitations", {
+    method: "POST",
+    token,
+    tenantId,
+    body: { email, role },
+  });
+
+export const revokeInvitation = (
+  token: string,
+  tenantId: string,
+  invitationId: string,
+) =>
+  request<Invitation>(`/v1/invitations/${invitationId}/revoke`, {
+    method: "POST",
+    token,
+    tenantId,
+  });
+
+/// Accepting uses the caller's verified email, so no tenant header is needed:
+/// the membership is created for the school recorded in the invitation.
+export const acceptInvitation = (token: string, code: string) =>
+  request<{ membership: Membership }>("/v1/invitations/accept", {
+    method: "POST",
+    token,
+    body: { code },
+  });
 
 /// Collects this caller has to submit. Managers see every collect in the
 /// tenant through `listCollects`; a contributor starts from here.

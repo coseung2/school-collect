@@ -141,6 +141,28 @@ export default function App() {
     [activeTenantId, session],
   );
 
+  /**
+   * Accepting an invitation changes the memberships, so the shell reloads the
+   * session and keeps the current school when it is still valid.
+   */
+  const refreshSession = useCallback(async () => {
+    if (!token) {
+      return;
+    }
+    try {
+      const value = await fetchSession(token);
+      setSession(value);
+      setActiveTenantId((current) =>
+        current && value.memberships.some((item) => item.tenantId === current)
+          ? current
+          : (value.memberships[0]?.tenantId ?? null),
+      );
+      setBootError(null);
+    } catch (error) {
+      setBootError(messageOf(error));
+    }
+  }, [token]);
+
   const navigation = useMemo<NavigationItem[]>(() => {
     const manage = canManage(activeTenant?.role ?? "");
     // 로그인 전에는 전체 메뉴를 보여주고, 로그인 후에는 역할에 맞게 좁힙니다.
@@ -198,6 +220,7 @@ export default function App() {
       case "settings":
         return (
           <SettingsPage
+            onMembershipChanged={() => void refreshSession()}
             onSignIn={openSignIn}
             session={session}
             tenant={activeTenant}

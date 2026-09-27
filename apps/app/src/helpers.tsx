@@ -17,6 +17,10 @@ const statusTone: Record<string, StatusTone> = {
   submitted: "success",
   assigned: "neutral",
   started: "info",
+  pending: "info",
+  accepted: "success",
+  revoked: "neutral",
+  expired: "danger",
 };
 
 const statusLabel: Record<string, string> = {
@@ -26,6 +30,10 @@ const statusLabel: Record<string, string> = {
   submitted: "제출 완료",
   assigned: "배정됨",
   started: "작성 중",
+  pending: "대기",
+  accepted: "합류",
+  revoked: "취소",
+  expired: "만료",
 };
 
 const roleLabel: Record<string, string> = {

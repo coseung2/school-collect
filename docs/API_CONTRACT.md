@@ -22,6 +22,10 @@ tenant 범위 endpoint는 `X-Tenant-Id`를 함께 받습니다. 이 값은 조�
 | `GET` | `/v1/tenants` | 인증됨 | 접근 가능한 학교 목록 |
 | `POST` | `/v1/tenants` | 인증됨 | 학교 등록(생성자는 `admin`) |
 | `GET` | `/v1/members` | `admin`, `coordinator` | 구성원과 역할 |
+| `GET` | `/v1/invitations` | `admin`, `coordinator` | 초대 목록과 상태 |
+| `POST` | `/v1/invitations` | `admin`, `coordinator` | 초대 생성. 평문 코드는 이 응답에서 한 번만 반환 |
+| `POST` | `/v1/invitations/{id}/revoke` | `admin`, `coordinator` | 대기 중인 초대 취소 |
+| `POST` | `/v1/invitations/accept` | 인증됨 | 확인된 이메일이 초대 주소와 같을 때 합류 |
 | `GET` | `/v1/collects` | `viewer` 이상 | 수합 목록(내 제출 상태 포함) |
 | `POST` | `/v1/collects` | `admin`, `coordinator` | 수합 생성(항목·대상 포함) |
 | `GET` | `/v1/collects/{id}` | `viewer` 이상 | 상세(항목, 내 제출, 진행 수치) |
