@@ -17,6 +17,58 @@ pub struct ApiError {
     pub request_id: String,
 }
 
+/// One stored file, as the client sees it. The bytes stay behind the API.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentDto {
+    pub id: String,
+    pub collect_id: String,
+    pub user_id: String,
+    pub item_key: String,
+    pub file_name: String,
+    pub content_type: String,
+    pub byte_size: i64,
+    pub status: String,
+    pub expires_at: String,
+    pub stored_at: Option<String>,
+    pub created_at: String,
+    /// Where the bytes can be read from with the caller's session.
+    pub content_url: String,
+}
+
+/// Opens one attachment slot. The server decides the object key and the id.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateAttachmentRequest {
+    pub item_key: String,
+    pub file_name: String,
+    pub content_type: String,
+    pub byte_size: i64,
+}
+
+/// How the client should send the bytes for a slot it just opened.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentUploadTarget {
+    /// `api` means the client sends the body to `url` with its own session.
+    pub kind: String,
+    pub url: String,
+    pub method: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateAttachmentResponse {
+    pub attachment: AttachmentDto,
+    pub upload: AttachmentUploadTarget,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentListResponse {
+    pub attachments: Vec<AttachmentDto>,
+}
+
 #[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PrincipalResponse {

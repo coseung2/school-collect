@@ -3677,6 +3677,7 @@ dependencies = [
  "hex",
  "http",
  "reqwest 0.12.28",
+ "school-collect-application",
  "school-collect-auth",
  "school-collect-contracts",
  "school-collect-db",

@@ -10,6 +10,7 @@ axum = { workspace = true }
 chrono = { workspace = true }
 hex = { workspace = true }
 http = { workspace = true }
+school-collect-application = { path = "../../crates/application" }
 school-collect-auth = { path = "../../crates/auth" }
 school-collect-contracts = { path = "../../crates/contracts" }
 school-collect-db = { path = "../../crates/db" }

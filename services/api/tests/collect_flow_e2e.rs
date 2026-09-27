@@ -14,9 +14,9 @@
 use axum::{
     Router,
     body::Body,
-    http::{HeaderValue, Request, StatusCode, header},
+    http::{HeaderMap, HeaderValue, Request, StatusCode, header},
 };
-use school_collect_api::{AppState, AuthState, router};
+use school_collect_api::{AppState, AuthState, FileStorage, router};
 use school_collect_auth::{OidcConfig, OidcVerifier};
 use serde_json::{Value, json};
 use sqlx::{PgPool, postgres::PgPoolOptions};
@@ -71,6 +71,39 @@ async fn call(
         None => builder.body(Body::empty()).expect("request"),
     };
     response_json(app.clone().oneshot(request).await.expect("router")).await
+}
+
+/// Sends raw bytes (attachment content) and returns the response untouched.
+async fn call_raw(
+    app: &Router,
+    method: &str,
+    uri: &str,
+    token: Option<&str>,
+    tenant: Option<&str>,
+    content_type: Option<&str>,
+    body: Vec<u8>,
+) -> (StatusCode, HeaderMap, Vec<u8>) {
+    let mut builder = Request::builder().method(method).uri(uri);
+    if let Some(token) = token {
+        builder = builder.header(header::AUTHORIZATION, format!("Bearer {token}"));
+    }
+    if let Some(tenant) = tenant {
+        builder = builder.header("x-tenant-id", tenant);
+    }
+    if let Some(content_type) = content_type {
+        builder = builder.header(header::CONTENT_TYPE, content_type);
+    }
+    let response = app
+        .clone()
+        .oneshot(builder.body(Body::from(body)).expect("request"))
+        .await
+        .expect("router");
+    let status = response.status();
+    let headers = response.headers().clone();
+    let bytes = axum::body::to_bytes(response.into_body(), 4 * 1024 * 1024)
+        .await
+        .expect("body");
+    (status, headers, bytes.to_vec())
 }
 
 async fn create_supabase_user(
@@ -371,7 +404,10 @@ async fn authenticated_collect_flow_end_to_end() {
     }
 
     let app = router(
-        AppState { pool: pool.clone() },
+        AppState {
+            pool: pool.clone(),
+            storage: None,
+        },
         HeaderValue::from_static("http://127.0.0.1:1420"),
         AuthState::oidc(verifier),
     );
@@ -847,7 +883,10 @@ async fn result_export_end_to_end() {
     .await;
 
     let app = router(
-        AppState { pool: pool.clone() },
+        AppState {
+            pool: pool.clone(),
+            storage: None,
+        },
         HeaderValue::from_static("http://127.0.0.1:1420"),
         AuthState::oidc(
             OidcVerifier::new(OidcConfig {
@@ -1093,7 +1132,10 @@ async fn membership_invitation_end_to_end() {
     })
     .expect("verifier");
     let app = router(
-        AppState { pool: pool.clone() },
+        AppState {
+            pool: pool.clone(),
+            storage: None,
+        },
         HeaderValue::from_static("http://127.0.0.1:1420"),
         AuthState::oidc(verifier),
     );
@@ -1559,7 +1601,10 @@ async fn role_sweep_end_to_end() {
     }
 
     let app = router(
-        AppState { pool: pool.clone() },
+        AppState {
+            pool: pool.clone(),
+            storage: None,
+        },
         HeaderValue::from_static("http://127.0.0.1:1420"),
         AuthState::oidc(
             OidcVerifier::new(OidcConfig {
@@ -2025,5 +2070,602 @@ async fn role_sweep_end_to_end() {
 
     if let Err(message) = result {
         panic!("role sweep end-to-end verification failed: {message}");
+    }
+}
+
+/// Attachments end to end: a target opens a slot, the server takes the bytes,
+/// another member and another school are refused, and the owner can remove them.
+#[tokio::test]
+async fn attachment_flow_end_to_end() {
+    let (Some(database_url), Some(supabase_url), Some(anon_key), Some(service_role)) = (
+        env_value("DATABASE_URL"),
+        env_value("SUPABASE_URL"),
+        env_value("SUPABASE_ANON_KEY"),
+        env_value("SUPABASE_SERVICE_ROLE_KEY"),
+    ) else {
+        eprintln!("attachment_e2e skipped: integration environment variables are not set");
+        return;
+    };
+
+    let issuer = Url::parse(&format!("{supabase_url}/auth/v1")).expect("issuer url");
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .after_connect(|connection, _meta| {
+            Box::pin(async move {
+                sqlx::query("SET search_path TO school_collect,public")
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&database_url)
+        .await
+        .expect("connect");
+    school_collect_db::MIGRATOR
+        .run(&pool)
+        .await
+        .expect("migrate");
+
+    let client = reqwest::Client::builder().build().expect("http client");
+    let run_id = Uuid::now_v7().simple().to_string();
+    let password = format!("It3st-{run_id}!");
+    let cleanup = TestCleanup::new(&database_url, &supabase_url, &service_role);
+    let storage_root = std::env::temp_dir().join(format!("school-collect-attachment-e2e-{run_id}"));
+    let _ = std::fs::remove_dir_all(&storage_root);
+
+    let mut identities: Vec<(String, TestIdentity)> = Vec::new();
+    for kind in ["manager", "author", "peer", "outsider"] {
+        let email = format!("attach-{kind}-{run_id}@example.test");
+        let supabase_user_id =
+            create_supabase_user(&client, &supabase_url, &service_role, &email, &password).await;
+        let access_token = sign_in(&client, &supabase_url, &anon_key, &email, &password).await;
+        cleanup.identity(&supabase_user_id);
+        identities.push((email, TestIdentity { access_token }));
+    }
+    let manager = &identities[0].1;
+    let author = &identities[1].1;
+    let peer = &identities[2].1;
+    let outsider = &identities[3].1;
+    let author_email = identities[1].0.as_str();
+    let peer_email = identities[2].0.as_str();
+
+    let app = router(
+        AppState {
+            pool: pool.clone(),
+            storage: Some(std::sync::Arc::new(FileStorage::new(storage_root.clone()))),
+        },
+        HeaderValue::from_static("http://127.0.0.1:1420"),
+        AuthState::oidc(
+            OidcVerifier::new(OidcConfig {
+                issuer_url: issuer.clone(),
+                audience: "authenticated".to_owned(),
+                jwks_url: None,
+            })
+            .expect("verifier"),
+        ),
+    );
+
+    let result: Result<(), String> = async {
+        // The manager builds a school, invites two teachers, and publishes one
+        // collect that both of them owe.
+        for identity in [author, peer] {
+            let (status, session) = call(
+                &app,
+                "GET",
+                "/v1/session",
+                Some(&identity.access_token),
+                None,
+                None,
+            )
+            .await;
+            if status != StatusCode::OK {
+                return Err(format!("session failed: {status} {session}"));
+            }
+            let user_id = Uuid::parse_str(session["user"]["id"].as_str().unwrap_or_default())
+                .map_err(|_| "session did not return a user id".to_owned())?;
+            cleanup.user(user_id);
+        }
+        let (status, session) = call(
+            &app,
+            "GET",
+            "/v1/session",
+            Some(&manager.access_token),
+            None,
+            None,
+        )
+        .await;
+        if status != StatusCode::OK {
+            return Err(format!("manager session failed: {status} {session}"));
+        }
+        let manager_user_id = Uuid::parse_str(session["user"]["id"].as_str().unwrap_or_default())
+            .map_err(|_| "session did not return a user id".to_owned())?;
+        cleanup.user(manager_user_id);
+
+        let (status, tenant) = call(
+            &app,
+            "POST",
+            "/v1/tenants",
+            Some(&manager.access_token),
+            None,
+            Some(json!({ "name": format!("attach-{run_id}") })),
+        )
+        .await;
+        if status != StatusCode::CREATED {
+            return Err(format!("tenant creation failed: {status} {tenant}"));
+        }
+        let tenant_id = tenant["tenantId"].as_str().unwrap_or_default().to_owned();
+        cleanup.tenant(Uuid::parse_str(&tenant_id).map_err(|_| "tenant id".to_owned())?);
+
+        for (identity, email) in [(author, author_email), (peer, peer_email)] {
+            let (status, invited) = call(
+                &app,
+                "POST",
+                "/v1/invitations",
+                Some(&manager.access_token),
+                Some(&tenant_id),
+                Some(json!({ "email": email })),
+            )
+            .await;
+            if status != StatusCode::CREATED {
+                return Err(format!("invitation failed: {status} {invited}"));
+            }
+            let code = invited["code"].as_str().unwrap_or_default().to_owned();
+            let (status, accepted) = call(
+                &app,
+                "POST",
+                "/v1/invitations/accept",
+                Some(&identity.access_token),
+                None,
+                Some(json!({ "code": code })),
+            )
+            .await;
+            if status != StatusCode::OK {
+                return Err(format!("acceptance failed: {status} {accepted}"));
+            }
+        }
+
+        let (status, collect) = call(
+            &app,
+            "POST",
+            "/v1/collects",
+            Some(&manager.access_token),
+            Some(&tenant_id),
+            Some(json!({
+                "title": format!("attach-{run_id}"),
+                "description": "첨부 검증",
+                "items": [{ "key": "plan", "label": "계획서", "required": true }],
+                "assigneeUserIds": [],
+            })),
+        )
+        .await;
+        if status != StatusCode::CREATED {
+            return Err(format!("collect creation failed: {status} {collect}"));
+        }
+        let collect_id = collect["id"].as_str().unwrap_or_default().to_owned();
+        let (status, published) = call(
+            &app,
+            "POST",
+            &format!("/v1/collects/{collect_id}/publish"),
+            Some(&manager.access_token),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        if status != StatusCode::OK {
+            return Err(format!("publish failed: {status} {published}"));
+        }
+
+        // Policy rejections happen before any slot is opened.
+        let (status, refused) = call(
+            &app,
+            "POST",
+            &format!("/v1/collects/{collect_id}/attachments"),
+            Some(&author.access_token),
+            Some(&tenant_id),
+            Some(json!({
+                "itemKey": "plan",
+                "fileName": "실행 파일.exe",
+                "contentType": "application/x-msdownload",
+                "byteSize": 1024,
+            })),
+        )
+        .await;
+        if status != StatusCode::BAD_REQUEST || refused["code"] != "attachment_type_not_allowed" {
+            return Err(format!("an executable was accepted: {status} {refused}"));
+        }
+        let (status, refused) = call(
+            &app,
+            "POST",
+            &format!("/v1/collects/{collect_id}/attachments"),
+            Some(&author.access_token),
+            Some(&tenant_id),
+            Some(json!({
+                "itemKey": "plan",
+                "fileName": "../escape.pdf",
+                "contentType": "application/pdf",
+                "byteSize": 1024,
+            })),
+        )
+        .await;
+        if status != StatusCode::BAD_REQUEST || refused["code"] != "attachment_name_invalid" {
+            return Err(format!(
+                "a traversing name was accepted: {status} {refused}"
+            ));
+        }
+        let (status, refused) = call(
+            &app,
+            "POST",
+            &format!("/v1/collects/{collect_id}/attachments"),
+            Some(&author.access_token),
+            Some(&tenant_id),
+            Some(json!({
+                "itemKey": "plan",
+                "fileName": "큰 파일.pdf",
+                "contentType": "application/pdf",
+                "byteSize": 10 * 1024 * 1024 + 1,
+            })),
+        )
+        .await;
+        if status != StatusCode::BAD_REQUEST || refused["code"] != "attachment_too_large" {
+            return Err(format!(
+                "an oversized file was accepted: {status} {refused}"
+            ));
+        }
+
+        // The author opens a slot and sends the bytes.
+        let pdf = b"%PDF-1.7 attachment body".to_vec();
+        let (status, opened) = call(
+            &app,
+            "POST",
+            &format!("/v1/collects/{collect_id}/attachments"),
+            Some(&author.access_token),
+            Some(&tenant_id),
+            Some(json!({
+                "itemKey": "plan",
+                "fileName": "계획서.pdf",
+                "contentType": "application/pdf",
+                "byteSize": pdf.len(),
+            })),
+        )
+        .await;
+        if status != StatusCode::CREATED {
+            return Err(format!("slot creation failed: {status} {opened}"));
+        }
+        if opened["attachment"]["status"] != "pending" || opened["upload"]["method"] != "PUT" {
+            return Err(format!("the slot came back wrong: {opened}"));
+        }
+        let attachment_id = opened["attachment"]["id"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        let upload_url = opened["upload"]["url"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+
+        // A body of another type than the slot declared is refused.
+        let (status, _, _) = call_raw(
+            &app,
+            "PUT",
+            &upload_url,
+            Some(&author.access_token),
+            Some(&tenant_id),
+            Some("text/plain"),
+            pdf.clone(),
+        )
+        .await;
+        if status != StatusCode::BAD_REQUEST {
+            return Err(format!("a mismatched content type was accepted: {status}"));
+        }
+
+        // A body of another size than the slot declared is refused and dropped.
+        let (status, _, _) = call_raw(
+            &app,
+            "PUT",
+            &upload_url,
+            Some(&author.access_token),
+            Some(&tenant_id),
+            Some("application/pdf"),
+            b"too short".to_vec(),
+        )
+        .await;
+        if status != StatusCode::BAD_REQUEST {
+            return Err(format!("a mismatched size was accepted: {status}"));
+        }
+        let (status, _, _) = call_raw(
+            &app,
+            "GET",
+            &format!("/v1/attachments/{attachment_id}/content"),
+            Some(&author.access_token),
+            Some(&tenant_id),
+            None,
+            Vec::new(),
+        )
+        .await;
+        if status != StatusCode::NOT_FOUND {
+            return Err(format!("dropped bytes were still readable: {status}"));
+        }
+
+        let (status, _, _) = call_raw(
+            &app,
+            "PUT",
+            &upload_url,
+            Some(&author.access_token),
+            Some(&tenant_id),
+            Some("application/pdf"),
+            pdf.clone(),
+        )
+        .await;
+        if status != StatusCode::OK {
+            return Err(format!("upload failed: {status}"));
+        }
+
+        let (status, detail) = call(
+            &app,
+            "GET",
+            &format!("/v1/attachments/{attachment_id}"),
+            Some(&author.access_token),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        if status != StatusCode::OK
+            || detail["status"] != "stored"
+            || detail["byteSize"].as_i64() != Some(pdf.len() as i64)
+            || detail["itemKey"] != "plan"
+        {
+            return Err(format!("stored metadata is wrong: {status} {detail}"));
+        }
+
+        let (status, headers, body) = call_raw(
+            &app,
+            "GET",
+            &format!("/v1/attachments/{attachment_id}/content"),
+            Some(&author.access_token),
+            Some(&tenant_id),
+            None,
+            Vec::new(),
+        )
+        .await;
+        if status != StatusCode::OK || body != pdf {
+            return Err(format!(
+                "download returned {status} with {} bytes",
+                body.len()
+            ));
+        }
+        if headers
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            != Some("application/pdf")
+        {
+            return Err(format!("download content type is wrong: {headers:?}"));
+        }
+
+        // A peer in the same school sees the collect but not someone else's file.
+        let (status, refused) = call(
+            &app,
+            "GET",
+            &format!("/v1/attachments/{attachment_id}"),
+            Some(&peer.access_token),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        if status != StatusCode::FORBIDDEN {
+            return Err(format!(
+                "a peer read another member's file: {status} {refused}"
+            ));
+        }
+        let (status, _, _) = call_raw(
+            &app,
+            "GET",
+            &format!("/v1/attachments/{attachment_id}/content"),
+            Some(&peer.access_token),
+            Some(&tenant_id),
+            None,
+            Vec::new(),
+        )
+        .await;
+        if status != StatusCode::FORBIDDEN {
+            return Err(format!("a peer downloaded another member's file: {status}"));
+        }
+        let (status, listed) = call(
+            &app,
+            "GET",
+            &format!("/v1/collects/{collect_id}/attachments"),
+            Some(&peer.access_token),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        if status != StatusCode::OK || listed["attachments"].as_array().map(Vec::len) != Some(0) {
+            return Err(format!(
+                "a peer saw someone else's files: {status} {listed}"
+            ));
+        }
+        let (status, listed) = call(
+            &app,
+            "GET",
+            &format!("/v1/collects/{collect_id}/attachments"),
+            Some(&manager.access_token),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        if status != StatusCode::OK || listed["attachments"].as_array().map(Vec::len) != Some(1) {
+            return Err(format!(
+                "the manager could not list the file: {status} {listed}"
+            ));
+        }
+
+        // Another school cannot reach the row, with or without its own tenant id.
+        let (status, other_tenant) = call(
+            &app,
+            "POST",
+            "/v1/tenants",
+            Some(&outsider.access_token),
+            None,
+            Some(json!({ "name": format!("attach-other-{run_id}") })),
+        )
+        .await;
+        if status != StatusCode::CREATED {
+            return Err(format!("outsider tenant failed: {status} {other_tenant}"));
+        }
+        let other_tenant_id = other_tenant["tenantId"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        cleanup.tenant(Uuid::parse_str(&other_tenant_id).map_err(|_| "tenant id".to_owned())?);
+        let (status, session) = call(
+            &app,
+            "GET",
+            "/v1/session",
+            Some(&outsider.access_token),
+            None,
+            None,
+        )
+        .await;
+        if status != StatusCode::OK {
+            return Err(format!("outsider session failed: {status} {session}"));
+        }
+        cleanup.user(
+            Uuid::parse_str(session["user"]["id"].as_str().unwrap_or_default())
+                .map_err(|_| "user id".to_owned())?,
+        );
+        let (status, _) = call(
+            &app,
+            "GET",
+            &format!("/v1/attachments/{attachment_id}"),
+            Some(&outsider.access_token),
+            Some(&other_tenant_id),
+            None,
+        )
+        .await;
+        if status != StatusCode::NOT_FOUND {
+            return Err(format!("another school found the row: {status}"));
+        }
+        let (status, _) = call(
+            &app,
+            "GET",
+            &format!("/v1/attachments/{attachment_id}"),
+            Some(&outsider.access_token),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        if status != StatusCode::FORBIDDEN {
+            return Err(format!("an outsider used the school: {status}"));
+        }
+
+        // Once the answer is handed in the file stays, but nothing new may be added.
+        let (status, saved) = call(
+            &app,
+            "PUT",
+            &format!("/v1/collects/{collect_id}/submission"),
+            Some(&author.access_token),
+            Some(&tenant_id),
+            Some(json!({ "expectedVersion": 0, "payload": { "plan": "제출" } })),
+        )
+        .await;
+        if status != StatusCode::OK {
+            return Err(format!("draft failed: {status} {saved}"));
+        }
+        let (status, submitted) = call(
+            &app,
+            "POST",
+            &format!("/v1/collects/{collect_id}/submission/submit"),
+            Some(&author.access_token),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        if status != StatusCode::OK {
+            return Err(format!("submit failed: {status} {submitted}"));
+        }
+        let (status, refused) = call(
+            &app,
+            "POST",
+            &format!("/v1/collects/{collect_id}/attachments"),
+            Some(&author.access_token),
+            Some(&tenant_id),
+            Some(json!({
+                "itemKey": "plan",
+                "fileName": "뒤늦은.pdf",
+                "contentType": "application/pdf",
+                "byteSize": 10,
+            })),
+        )
+        .await;
+        if status != StatusCode::CONFLICT || refused["code"] != "already_submitted" {
+            return Err(format!("a sent answer took a new file: {status} {refused}"));
+        }
+        let (status, refused) = call(
+            &app,
+            "DELETE",
+            &format!("/v1/attachments/{attachment_id}"),
+            Some(&author.access_token),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        if status != StatusCode::FORBIDDEN {
+            return Err(format!(
+                "the author removed a sent answer's file: {status} {refused}"
+            ));
+        }
+
+        // A manager still removes it, and the bytes go with it.
+        let (status, _) = call(
+            &app,
+            "DELETE",
+            &format!("/v1/attachments/{attachment_id}"),
+            Some(&manager.access_token),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        if status != StatusCode::NO_CONTENT {
+            return Err(format!("the manager could not remove the file: {status}"));
+        }
+        let (status, _, _) = call_raw(
+            &app,
+            "GET",
+            &format!("/v1/attachments/{attachment_id}/content"),
+            Some(&manager.access_token),
+            Some(&tenant_id),
+            None,
+            Vec::new(),
+        )
+        .await;
+        if status != StatusCode::NOT_FOUND {
+            return Err(format!("a removed file was still readable: {status}"));
+        }
+
+        // The audit trail records what happened to the file.
+        let recorded: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM school_collect.audit_events
+             WHERE tenant_id = $1 AND action LIKE 'attachment.%'",
+        )
+        .bind(Uuid::parse_str(&tenant_id).map_err(|_| "tenant id".to_owned())?)
+        .fetch_one(&pool)
+        .await
+        .map_err(|error| format!("audit count failed: {error}"))?;
+        if recorded != 3 {
+            return Err(format!(
+                "expected created, stored and deleted in the audit trail: {recorded}"
+            ));
+        }
+
+        Ok(())
+    }
+    .await;
+
+    if let Err(message) = cleanup.finish().await {
+        panic!("attachment cleanup failed: {message}");
+    }
+    let _ = std::fs::remove_dir_all(&storage_root);
+
+    if let Err(message) = result {
+        panic!("attachment end-to-end verification failed: {message}");
     }
 }
