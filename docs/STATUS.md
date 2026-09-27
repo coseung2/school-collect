@@ -144,7 +144,7 @@ Stage 3 미검증 항목:
 ## 데스크톱 클라이언트 (Stage 5 이후 첫 제품 기능)
 
 - `apps/app`은 로그인 → 학교 등록 → 수합 생성 → 배포 → 초안 저장 → 제출을 실제 API와 연결합니다.
-- 접근 토큰은 창 메모리에만 보관하고 디스크에 저장하지 않습니다.
+- 세션(접근·갱신 토큰)은 이 컴퓨터의 OS 자격 증명 저장소에 보관해 앱을 다시 열어도 로그인이 유지되고, 로그아웃하면 저장된 세션을 지웁니다. 비밀번호는 저장하지 않습니다.
 - 검증: 로컬 API(`APP_AUTH_MODE=oidc`)와 dev 서버를 띄운 상태에서 실제 브라우저로 전체 흐름을 확인했습니다. 검증용 계정과 데이터는 삭제했습니다.
 
 ## 제품 틀과 통합 기록
@@ -197,4 +197,4 @@ Stage 3 미검증 항목:
 - R2/NATS 업무 처리 및 production 연결, 학교 환경 분리
 - production DB migration
 
-인증 provider는 [ADR-0002](ADR/0002-supabase-identity-and-database.md)의 Supabase Auth이며 ZITADEL 구축은 현행 대기 작업이 아닙니다. 현재 클라이언트 토큰은 메모리에만 있고 PKCE·OS 보안 저장소·세션 영속화는 S-05 후속입니다.
+인증 provider는 [ADR-0002](ADR/0002-supabase-identity-and-database.md)의 Supabase Auth이며 ZITADEL 구축은 현행 대기 작업이 아닙니다. 클라이언트 세션은 OS 자격 증명 저장소에 저장되어 재시작 후에도 유지됩니다(S-05). 외부 브라우저 PKCE 로그인은 identity provider의 redirect 허용 목록 결정이 필요해 후속으로 남아 있습니다.
