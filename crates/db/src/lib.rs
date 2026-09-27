@@ -3,10 +3,12 @@ use std::time::Duration;
 use anyhow::Context;
 use sqlx::{PgConnection, PgPool, postgres::PgPoolOptions};
 
+pub mod attachments;
 pub mod invitations;
 pub mod outbox;
 pub mod records;
 
+pub use attachments::*;
 pub use invitations::*;
 pub use outbox::*;
 pub use records::*;
