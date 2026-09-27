@@ -21,10 +21,87 @@ export function automationPageCommand(command) {
   }
 
   function readValue(element) {
+    if (tagOf(element) === "input") {
+      const type = (element.type || "text").toLowerCase();
+      if (type === "checkbox" || type === "radio") {
+        return String(element.checked);
+      }
+    }
     if (isFormControl(element)) {
       return typeof element.value === "string" ? element.value : "";
     }
     return (element.textContent || "").trim();
+  }
+
+  const WRITABLE_INPUT_TYPES = [
+    "text",
+    "search",
+    "url",
+    "tel",
+    "email",
+    "number",
+    "date",
+    "datetime-local",
+    "month",
+    "week",
+    "time",
+    "checkbox",
+    "radio",
+  ];
+
+  function isWritable(element) {
+    const tag = tagOf(element);
+    if (tag === "textarea" || tag === "select") {
+      return true;
+    }
+    if (tag !== "input") {
+      return false;
+    }
+    return WRITABLE_INPUT_TYPES.indexOf((element.type || "text").toLowerCase()) !== -1;
+  }
+
+  function writeValue(element, value) {
+    const tag = tagOf(element);
+    const text = typeof value === "string" ? value : "";
+
+    if (tag === "select") {
+      const options = Array.from(element.options || []);
+      const match =
+        options.filter((option) => option.value === text)[0] ||
+        options.filter((option) => (option.textContent || "").trim() === text)[0];
+      if (!match) {
+        return false;
+      }
+      element.value = match.value;
+    } else if (tag === "input" && (element.type === "checkbox" || element.type === "radio")) {
+      const desired = ["true", "1", "y", "yes", "on"].indexOf(text.toLowerCase()) !== -1;
+      if (element.checked !== desired) {
+        element.click();
+      }
+      if (element.checked !== desired) {
+        return false;
+      }
+    } else if (tag === "textarea") {
+      const descriptor = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value");
+      if (descriptor && descriptor.set) {
+        descriptor.set.call(element, text);
+      } else {
+        element.value = text;
+      }
+    } else if (tag === "input") {
+      const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+      if (descriptor && descriptor.set) {
+        descriptor.set.call(element, text);
+      } else {
+        element.value = text;
+      }
+    } else {
+      return false;
+    }
+
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
   }
 
   function labelTextFor(element) {
@@ -81,6 +158,12 @@ export function automationPageCommand(command) {
     let node = element;
     let depth = 0;
     while (node && node.nodeType === 1 && depth < 6) {
+      const id = safeIdValue(node.id);
+      if (id) {
+        parts.unshift("#" + id);
+        break;
+      }
+
       const tag = tagOf(node);
       let part = tag;
       const parent = node.parentElement;
@@ -93,12 +176,6 @@ export function automationPageCommand(command) {
         }
       }
       parts.unshift(part);
-
-      const id = safeIdValue(node.id);
-      if (id) {
-        parts.unshift("#" + id);
-        break;
-      }
       node = parent;
       depth += 1;
     }
@@ -228,6 +305,51 @@ export function automationPageCommand(command) {
       }
       return result;
     });
+    return { ok: true, url: location.href, title: document.title, results };
+  }
+
+  if (command.op === "fill") {
+    const fields = Array.isArray(command.fields) ? command.fields : [];
+    const values = Array.isArray(command.values) ? command.values : [];
+    const resolved = [];
+    const results = fields.map((field, index) => {
+      const locator = field && field.locator ? field.locator : {};
+      const matches = resolveAll(locator.kind, locator.value);
+      const result = {
+        index,
+        label: (field && field.label) || "",
+        matchCount: matches.length,
+      };
+      if (matches.length === 1) {
+        result.previousValue = readValue(matches[0]);
+        if (!isWritable(matches[0])) {
+          result.unsupported = true;
+        }
+        resolved.push({ element: matches[0], index });
+      }
+      return result;
+    });
+
+    // 하나라도 모호하거나 쓸 수 없으면 아무것도 입력하지 않습니다.
+    if (results.some((result) => result.matchCount !== 1 || result.unsupported)) {
+      return {
+        ok: false,
+        reason: results.some((result) => result.unsupported)
+          ? "unsupported_control"
+          : "locator_not_unique",
+        results,
+      };
+    }
+
+    for (const item of resolved) {
+      const desired = typeof values[item.index] === "string" ? values[item.index] : "";
+      const written = writeValue(item.element, desired);
+      const result = results[item.index];
+      result.writtenValue = desired;
+      result.readBack = readValue(item.element);
+      result.verified = written && result.readBack === desired;
+    }
+
     return { ok: true, url: location.href, title: document.title, results };
   }
 
