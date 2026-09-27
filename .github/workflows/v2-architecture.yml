@@ -307,3 +307,29 @@ jobs:
           if ($installer.Length -lt 1MB) { throw "installer is unexpectedly small: $($installer.Length) bytes" }
           $signature = Get-AuthenticodeSignature -FilePath $installer.FullName
           "installer=$($installer.Name) bytes=$($installer.Length) signature=$($signature.Status)"
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/installers" | Out-Null
+          Copy-Item $installer.FullName "$env:RUNNER_TEMP/installers/older-setup.exe"
+          "OLDER_VERSION=$($conf.version)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+      - name: Build a newer installer for the upgrade check (CI only, version override)
+        shell: pwsh
+        working-directory: apps/app
+        run: |
+          $conf = Get-Content -Raw src-tauri/tauri.conf.json | ConvertFrom-Json
+          $parts = $conf.version.Split('.')
+          $newer = "$($parts[0]).$($parts[1]).$([int]$parts[2] + 1)"
+          # The override changes only this CI build; the repository version stays put.
+          $override = @{ version = $newer } | ConvertTo-Json -Compress
+          Set-Content -Path "$env:RUNNER_TEMP/version-override.json" -Value $override -Encoding utf8
+          pnpm tauri build --bundles nsis --config "$env:RUNNER_TEMP/version-override.json"
+          $newerInstaller = Get-ChildItem -Path ../../target/release/bundle/nsis -Filter "*_${newer}_x64-setup.exe"
+          if (@($newerInstaller).Count -ne 1) { throw "newer installer for $newer not found" }
+          Copy-Item $newerInstaller.FullName "$env:RUNNER_TEMP/installers/newer-setup.exe"
+          "NEWER_VERSION=$newer" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+      - name: Install, upgrade and uninstall the app
+        shell: pwsh
+        run: >-
+          pwsh -NoProfile -File scripts/installer_lifecycle.ps1
+          -Older "$env:RUNNER_TEMP/installers/older-setup.exe"
+          -Newer "$env:RUNNER_TEMP/installers/newer-setup.exe"
+          -OlderVersion $env:OLDER_VERSION
+          -NewerVersion $env:NEWER_VERSION
