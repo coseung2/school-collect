@@ -50,11 +50,12 @@ describe_url() {
 
 # CI runs the PostgreSQL 18 clients from the postgres image so pg_dump and
 # pg_restore always match the server major version. `--network host` lets
-# those containers reach a database published on 127.0.0.1 (Linux).
+# those containers reach a database published on 127.0.0.1 (Linux). Stdin is
+# never attached: the client must not consume the caller's input.
 client() {
   if [[ -n "$client_image" ]]; then
-    docker run --rm -i --network host -v "$work_dir:/drill" -w /drill \
-      "$client_image" "$@"
+    docker run --rm --network host -v "$work_dir:/drill" -w /drill \
+      "$client_image" "$@" </dev/null
   else
     "$@"
   fi
@@ -137,9 +138,13 @@ restored_migrations=$(query "$RESTORE_DATABASE_URL" \
 [[ "$source_migrations" == "$restored_migrations" ]] \
   || fail "applied migration count differs: source=$source_migrations restore=$restored_migrations"
 
-source_tables=$(query "$SOURCE_DATABASE_URL" \
+table_list="$work_dir/table-list.txt"
+query "$SOURCE_DATABASE_URL" \
   "select table_name from information_schema.tables
-   where table_schema = 'school_collect' order by table_name")
+   where table_schema = 'school_collect' order by table_name" > "$table_list"
+[[ -s "$table_list" ]] \
+  || fail "source database has no school_collect tables; run the migrator first"
+source_tables=$(cat "$table_list")
 restored_tables=$(query "$RESTORE_DATABASE_URL" \
   "select table_name from information_schema.tables
    where table_schema = 'school_collect' order by table_name")
@@ -156,7 +161,7 @@ while IFS= read -r table_name; do
   [[ "$source_rows" == "$restored_rows" ]] \
     || fail "row count differs for school_collect.$table_name: source=$source_rows restore=$restored_rows"
   checked_tables=$((checked_tables + 1))
-done <<< "$source_tables"
+done < "$table_list"
 
 if [[ "$canary_created" == "1" ]]; then
   canary_rows=$(query "$RESTORE_DATABASE_URL" \
