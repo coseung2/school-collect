@@ -16,16 +16,19 @@ import {
   exportCollectCsv,
   fetchCollect,
   fetchCollectStatus,
+  listAttachments,
   listMembers,
   publishCollect,
   updateCollectAssignments,
   updateCollectItems,
+  type Attachment,
   type CollectDetail,
   type CollectItemInput,
   type CollectStatus,
   type Member,
 } from "../api";
 import { exportFileName, saveExportFile } from "../files";
+import { AttachmentList } from "./AttachmentList";
 import {
   canManage,
   formatDue,
@@ -62,6 +65,16 @@ export function CollectDetailPage({
   const [targetDrafts, setTargetDrafts] = useState<string[] | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
   const [editNotice, setEditNotice] = useState<string | null>(null);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+
+  // Review aid only: the status list still renders when files cannot load.
+  const loadAttachments = useCallback(async () => {
+    try {
+      setAttachments((await listAttachments(token, tenantId, collectId)).attachments);
+    } catch {
+      setAttachments([]);
+    }
+  }, [collectId, tenantId, token]);
 
   const load = useCallback(async () => {
     try {
@@ -82,7 +95,8 @@ export function CollectDetailPage({
 
   useEffect(() => {
     void load();
-  }, [load]);
+    void loadAttachments();
+  }, [load, loadAttachments]);
 
   if (!manage) {
     return (
@@ -656,6 +670,28 @@ export function CollectDetailPage({
                 ))}
               </ListSurface>
             )}
+            {submitted.some((row) => attachments.some((entry) => entry.userId === row.userId)) ? (
+              <>
+                <h3 className="app-subheading">제출된 첨부 파일</h3>
+                {submitted
+                  .filter((row) => attachments.some((entry) => entry.userId === row.userId))
+                  .map((row) => (
+                    <div className="app-review-files" key={row.userId}>
+                      <p className="app-review-files__owner">{row.displayName ?? row.userId}</p>
+                      <AttachmentList
+                        attachments={attachments.filter((entry) => entry.userId === row.userId)}
+                        collectId={collectId}
+                        editable={false}
+                        itemKey=""
+                        itemLabel={row.displayName ?? row.userId}
+                        onChanged={loadAttachments}
+                        tenantId={tenantId}
+                        token={token}
+                      />
+                    </div>
+                  ))}
+              </>
+            ) : null}
             <h3 className="app-subheading">미제출 구성원</h3>
             {outstanding.length === 0 ? (
               <EmptyState

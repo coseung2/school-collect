@@ -453,3 +453,135 @@ export const sendSubmission = (token: string, tenantId: string, id: string) =>
     token,
     tenantId,
   });
+
+export type Attachment = {
+  id: string;
+  collectId: string;
+  userId: string;
+  itemKey: string;
+  fileName: string;
+  contentType: string;
+  byteSize: number;
+  status: "pending" | "stored" | "deleted";
+  expiresAt: string;
+  storedAt: string | null;
+  createdAt: string;
+  contentUrl: string;
+};
+
+/** Largest file the server accepts. */
+export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+
+// Browsers report HWP/HWPX inconsistently (often as an empty type), so the
+// declared type is derived from the extension when the browser gives none.
+const TYPE_BY_EXTENSION: Record<string, string> = {
+  pdf: "application/pdf",
+  hwp: "application/x-hwp",
+  hwpx: "application/vnd.hancom.hwpx",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  xls: "application/vnd.ms-excel",
+  ppt: "application/vnd.ms-powerpoint",
+  doc: "application/msword",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  txt: "text/plain",
+  zip: "application/zip",
+};
+
+/** File types the server accepts, for the file picker. */
+export const ATTACHMENT_ACCEPT = Object.keys(TYPE_BY_EXTENSION)
+  .map((extension) => `.${extension}`)
+  .join(",");
+
+export function attachmentContentType(file: File): string | null {
+  const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+  return TYPE_BY_EXTENSION[extension] ?? null;
+}
+
+/** Files the caller may see for one collect (their own, or everyone's for a manager). */
+export const listAttachments = (token: string, tenantId: string, collectId: string) =>
+  request<{ attachments: Attachment[] }>(`/v1/collects/${collectId}/attachments`, {
+    token,
+    tenantId,
+  });
+
+/**
+ * Opens a slot, then sends the bytes. The server derives the object key and
+ * checks size, type and checksum; the file name is only a label.
+ */
+export async function uploadAttachment(
+  token: string,
+  tenantId: string,
+  collectId: string,
+  itemKey: string,
+  file: File,
+): Promise<Attachment> {
+  const contentType = attachmentContentType(file);
+  if (!contentType) {
+    throw new ApiError(400, "attachment_type_not_allowed", "올릴 수 없는 파일 형식입니다.", null);
+  }
+  if (file.size === 0) {
+    throw new ApiError(400, "attachment_empty", "빈 파일은 올릴 수 없습니다.", null);
+  }
+  if (file.size > MAX_ATTACHMENT_BYTES) {
+    throw new ApiError(400, "attachment_too_large", "파일은 10MB까지 올릴 수 있습니다.", null);
+  }
+  const slot = await request<{
+    attachment: Attachment;
+    upload: { kind: string; url: string; method: string };
+  }>(`/v1/collects/${collectId}/attachments`, {
+    method: "POST",
+    token,
+    tenantId,
+    body: { itemKey, fileName: file.name, contentType, byteSize: file.size },
+  });
+
+  const response = await fetch(`${apiBaseUrl}${slot.upload.url}`, {
+    method: slot.upload.method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "x-tenant-id": tenantId,
+      "Content-Type": contentType,
+    },
+    body: file,
+  });
+  const text = await response.text();
+  const parsed = (text ? JSON.parse(text) : null) as Record<string, unknown> | null;
+  if (!response.ok) {
+    throw new ApiError(
+      response.status,
+      typeof parsed?.code === "string" ? parsed.code : "request_failed",
+      typeof parsed?.message === "string" ? parsed.message : "파일을 올리지 못했습니다.",
+      null,
+    );
+  }
+  return parsed as unknown as Attachment;
+}
+
+export const deleteAttachment = (token: string, tenantId: string, attachmentId: string) =>
+  request<null>(`/v1/attachments/${attachmentId}`, { method: "DELETE", token, tenantId });
+
+/** Bytes of one attachment, for saving it to the downloads folder. */
+export async function downloadAttachment(
+  token: string,
+  tenantId: string,
+  attachment: Attachment,
+): Promise<Uint8Array> {
+  const response = await fetch(`${apiBaseUrl}${attachment.contentUrl}`, {
+    headers: { Authorization: `Bearer ${token}`, "x-tenant-id": tenantId },
+  });
+  if (!response.ok) {
+    let message = "파일을 받지 못했습니다.";
+    try {
+      const body = (await response.json()) as Record<string, unknown>;
+      if (typeof body.message === "string") message = body.message;
+    } catch {
+      // Not JSON; keep the default message.
+    }
+    throw new ApiError(response.status, "download_failed", message, null);
+  }
+  return new Uint8Array(await response.arrayBuffer());
+}

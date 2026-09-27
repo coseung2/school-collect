@@ -627,13 +627,17 @@ fn write_automation_recipes(path: &Path, recipes: &[AutomationRecipe]) -> Result
     write_file_atomically(path, &content)
 }
 
-fn write_temp_file(path: &Path, content: &str) -> std::io::Result<()> {
+fn write_temp_file(path: &Path, content: &[u8]) -> std::io::Result<()> {
     let mut file = fs::File::create(path)?;
-    file.write_all(content.as_bytes())?;
+    file.write_all(content)?;
     file.sync_all()
 }
 
 pub(crate) fn write_file_atomically(path: &Path, content: &str) -> Result<(), String> {
+    write_bytes_atomically(path, content.as_bytes())
+}
+
+pub(crate) fn write_bytes_atomically(path: &Path, content: &[u8]) -> Result<(), String> {
     let directory = path
         .parent()
         .ok_or_else(|| "자동화 설정 경로를 확인하지 못했습니다.".to_string())?;
@@ -1316,6 +1320,8 @@ fn clear_local_drafts(app_handle: tauri::AppHandle, user_id: String) -> Result<u
 
 /// Largest export the desktop app writes to disk.
 const MAX_EXPORT_BYTES: usize = 4 * 1024 * 1024;
+/// Largest attachment the server accepts, so the largest one saved locally.
+const MAX_SAVED_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
 
 /// Keeps only a file name, never a path, so an export cannot escape the folder.
 fn sanitize_export_name(file_name: &str) -> Result<String, String> {
@@ -1346,11 +1352,32 @@ fn save_export_file(
     file_name: String,
     content: String,
 ) -> Result<String, String> {
-    let file_name = sanitize_export_name(&file_name)?;
     if content.len() > MAX_EXPORT_BYTES {
         return Err("내보낼 내용이 너무 큽니다.".to_string());
     }
+    save_to_downloads(&app_handle, &file_name, content.as_bytes())
+}
 
+/// Saves a downloaded attachment into the user's Downloads folder, with the
+/// same name rules and no-overwrite behaviour as exports.
+#[tauri::command]
+fn save_downloaded_file(
+    app_handle: tauri::AppHandle,
+    file_name: String,
+    content: Vec<u8>,
+) -> Result<String, String> {
+    if content.is_empty() || content.len() > MAX_SAVED_ATTACHMENT_BYTES {
+        return Err("저장할 파일 크기가 올바르지 않습니다.".to_string());
+    }
+    save_to_downloads(&app_handle, &file_name, &content)
+}
+
+fn save_to_downloads(
+    app_handle: &tauri::AppHandle,
+    file_name: &str,
+    content: &[u8],
+) -> Result<String, String> {
+    let file_name = sanitize_export_name(file_name)?;
     let directory = app_handle
         .path()
         .download_dir()
@@ -1373,7 +1400,7 @@ fn save_export_file(
         }
     }
 
-    write_file_atomically(&target, &content)?;
+    write_bytes_atomically(&target, content)?;
     Ok(target.to_string_lossy().to_string())
 }
 
@@ -1430,7 +1457,8 @@ pub fn run() {
             load_local_draft,
             delete_local_draft,
             clear_local_drafts,
-            save_export_file
+            save_export_file,
+            save_downloaded_file
         ])
         .run(tauri::generate_context!())
         .expect("failed to run School Collect");

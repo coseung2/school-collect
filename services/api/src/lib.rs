@@ -218,7 +218,8 @@ pub fn router(state: AppState, cors_origin: HeaderValue, auth_state: AuthState) 
         .layer(
             CorsLayer::new()
                 .allow_origin(cors_origin)
-                .allow_methods([Method::GET, Method::POST, Method::PUT])
+                // DELETE is used by attachment removal.
+                .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
                 .allow_headers([
                     axum::http::header::AUTHORIZATION,
                     axum::http::header::CONTENT_TYPE,
@@ -2727,6 +2728,44 @@ mod tests {
             .expect("body");
         let body: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
         assert_eq!(body["code"], "attachment_storage_unavailable");
+    }
+
+    /// The desktop client is a cross-origin caller, so every method it uses
+    /// must pass the CORS preflight or the browser blocks it before the API sees it.
+    #[tokio::test]
+    async fn preflight_allows_every_method_the_client_uses() {
+        for method in ["GET", "POST", "PUT", "DELETE"] {
+            let response = router(
+                unreachable_state(),
+                HeaderValue::from_static("http://127.0.0.1:1420"),
+                AuthState::development_disabled(),
+            )
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri("/v1/attachments/00000000-0000-7000-8000-000000000000")
+                    .header("origin", "http://127.0.0.1:1420")
+                    .header("access-control-request-method", method)
+                    .header(
+                        "access-control-request-headers",
+                        "authorization,x-tenant-id",
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+            let allowed = response
+                .headers()
+                .get("access-control-allow-methods")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_owned();
+            assert!(
+                allowed.split(',').any(|item| item.trim() == method),
+                "{method} is not allowed by the preflight: {allowed:?}"
+            );
+        }
     }
 
     #[tokio::test]
