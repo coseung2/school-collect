@@ -144,6 +144,8 @@ PR #24/#25는 모두 develop에 병합됐습니다(`f573bfb`, `11a0af0`). 병합
 - P-02·S-03 완료 표현: 두 행이 "완료"이면서 미검증 항목을 함께 적어 서로 어긋났습니다. `docs/SCHOOL_WORK_PLAN.md` S-03 행과 `docs/PERSONAL_PLAN.md` P-02 행을 "완료: … / 남음: …" 형식으로 분리하고 `docs/TEAM_BACKLOG.md` 표에도 같은 남은 검증을 적었습니다. 남은 것은 거부 경로 화면 조작·편집 이력 화면 표시(S-03)와 도구 모음 팝업·`activeTab` 경로·실제 업무 사이트 등록(P-02)입니다.
 - 검증: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo test --workspace --locked`(164개), worker sweep·소비·relay 테스트, foundation 34개, repository guard 0건.
 
+- PR #84(`a2d6fd1`)로 develop에 통합했습니다. 병합 후 CI 7개가 성공했습니다. worker 변경은 `cargo test --workspace --locked`(164개)와 sweep 회차 보고 단위 테스트로 확인했고, foundation 34개와 repository guard도 다시 통과했습니다.
+
 ## 단계 상태
 
 | 단계 | 상태 | 확인된 내용 | 남은 게이트 |
