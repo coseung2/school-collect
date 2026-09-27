@@ -273,7 +273,10 @@ async fn the_durable_consumer_acknowledges_a_delivery_after_committing_it() {
         for _ in 0..8 {
             let report = consume_batch(&pool, &broker, &effect, 16).await;
             if report.failed > 0 {
-                return Err(format!("a delivery failed: {report:?}"));
+                return Err(format!(
+                    "a delivery failed ({report:?}): {}",
+                    report.last_error.as_deref().unwrap_or("no error recorded")
+                ));
             }
             if recorded(&pool, &consumer_name, event_id).await? > 0 {
                 break;

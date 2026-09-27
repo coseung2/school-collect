@@ -232,15 +232,12 @@ impl JetStreamConsumer {
             .request(self.subject.clone(), self.request.clone().into())
             .await?;
 
-        match message.status {
-            None => delivered(message),
-            Some(status) if status == StatusCode::OK => delivered(message),
-            // A pull request that found nothing is answered with a status
-            // instead of a message.
-            Some(status) if status == StatusCode::NOT_FOUND || status == StatusCode::TIMEOUT => {
-                Ok(None)
+        match classify_pull(message.status) {
+            PullReply::Message => delivered(message),
+            PullReply::Empty => Ok(None),
+            PullReply::Refused(status) => {
+                anyhow::bail!("the broker refused the pull request: {status:?}")
             }
-            Some(status) => anyhow::bail!("the broker refused the pull request: {status:?}"),
         }
     }
 
@@ -267,8 +264,40 @@ fn delivered(message: async_nats::Message) -> anyhow::Result<Option<Delivery>> {
     }))
 }
 
+/// What a pull reply carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PullReply {
+    /// A real delivery.
+    Message,
+    /// An empty answer: the broker had nothing for this request.
+    Empty,
+    /// The broker refused the request itself.
+    Refused(StatusCode),
+}
+
+/// Classifies the status a pull reply carries.
+///
+/// A pull that found nothing comes back as a status instead of a message, and
+/// an open request is also kept alive with idle heartbeats. Treating a
+/// heartbeat as a refusal would fail an idle round, so every "nothing yet"
+/// status is read as an empty answer.
+fn classify_pull(status: Option<StatusCode>) -> PullReply {
+    match status {
+        None => PullReply::Message,
+        Some(status) if status == StatusCode::OK => PullReply::Message,
+        Some(status)
+            if status == StatusCode::NOT_FOUND
+                || status == StatusCode::TIMEOUT
+                || status == StatusCode::IDLE_HEARTBEAT =>
+        {
+            PullReply::Empty
+        }
+        Some(status) => PullReply::Refused(status),
+    }
+}
+
 /// What one round of consumption did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ConsumerReport {
     /// Deliveries that applied their effect for the first time.
     pub handled: usize,
@@ -276,6 +305,8 @@ pub struct ConsumerReport {
     pub duplicates: usize,
     /// Deliveries that could not be handled; the broker redelivers them.
     pub failed: usize,
+    /// The error behind `failed`, so a report is diagnosable on its own.
+    pub last_error: Option<String>,
 }
 
 /// Handles up to `max_messages` deliveries.
@@ -296,6 +327,7 @@ pub async fn consume_batch(
             Ok(None) => break,
             Err(error) => {
                 report.failed += 1;
+                report.last_error = Some(format!("{error:#}"));
                 tracing::error!(
                     %error,
                     "outbox event could not be handled; it stays pending for redelivery"
@@ -333,6 +365,35 @@ pub async fn run_consumer_until_shutdown(
                     );
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PullReply, classify_pull};
+    use async_nats::StatusCode;
+
+    /// An idle round must never look like a refusal: a pull that found nothing
+    /// comes back as a status, and the broker keeps a waiting request alive
+    /// with idle heartbeats.
+    #[test]
+    fn empty_pull_replies_are_not_refusals() {
+        for status in [
+            StatusCode::NOT_FOUND,
+            StatusCode::TIMEOUT,
+            StatusCode::IDLE_HEARTBEAT,
+        ] {
+            assert_eq!(classify_pull(Some(status)), PullReply::Empty, "{status:?}");
+        }
+        assert_eq!(classify_pull(None), PullReply::Message);
+        assert_eq!(classify_pull(Some(StatusCode::OK)), PullReply::Message);
+        for status in [StatusCode::NO_RESPONDERS, StatusCode::REQUEST_TERMINATED] {
+            assert_eq!(
+                classify_pull(Some(status)),
+                PullReply::Refused(status),
+                "{status:?}"
+            );
         }
     }
 }
