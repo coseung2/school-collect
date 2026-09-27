@@ -14,6 +14,7 @@ import { AssignmentPage } from "./pages/AssignmentPage";
 import { AssignmentsPage } from "./pages/AssignmentsPage";
 import { CreateSchoolCard, SignInView } from "./pages/AuthViews";
 import { clearAuthSession, loadAuthSession, saveAuthSession } from "./session";
+import { clearLocalDrafts } from "./drafts";
 import { AutomationPage } from "./pages/AutomationPage";
 import { CollectDetailPage } from "./pages/CollectDetailPage";
 import { CollectsPage } from "./pages/CollectsPage";
@@ -89,6 +90,7 @@ export default function App() {
   const [signInOpen, setSignInOpen] = useState(false);
 
   const signOut = useCallback(() => {
+    const signingOutUser = session?.user.id;
     setToken(null);
     setSession(null);
     setActiveTenantId(null);
@@ -96,11 +98,15 @@ export default function App() {
     setSignInOpen(false);
     // 저장된 세션을 지워 다음 실행에서 토큰이 남지 않게 합니다.
     void clearAuthSession();
+    // 공용 컴퓨터에 초안을 남기지 않습니다.
+    if (signingOutUser) {
+      void clearLocalDrafts(signingOutUser);
+    }
     // 로그인 없이 쓸 수 있는 화면에 머무르고, 멤버십이 필요한 화면에서만 홈으로 돌아갑니다.
     if (routeNeedsMembership(parseHash(window.location.hash))) {
       navigate({ page: "overview" });
     }
-  }, []);
+  }, [session?.user.id]);
 
   /**
    * Restores the session saved in the OS credential store.
@@ -372,6 +378,7 @@ export default function App() {
             role={activeTenant.role}
             tenantId={activeTenant.tenantId}
             token={token}
+            userId={session?.user.id ?? ""}
           />
         ) : null}
         {route.page === "members" ? (

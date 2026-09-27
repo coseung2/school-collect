@@ -11,6 +11,7 @@ use tauri::Manager;
 use url::Url;
 
 mod bridge;
+mod drafts;
 
 pub(crate) const AUTOMATION_RECIPES_FILE: &str = "automation-recipes.tsv";
 const AUTOMATION_RECIPES_QUARANTINE_FILE: &str = "automation-recipes.invalid.tsv";
@@ -1179,6 +1180,64 @@ fn clear_auth_session() -> Result<(), String> {
     }
 }
 
+/// Local draft database in the app data directory.
+fn drafts_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let directory = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("초안 저장 경로를 확인하지 못했습니다: {error}"))?;
+    Ok(directory.join(drafts::DRAFTS_FILE))
+}
+
+#[tauri::command]
+fn save_local_draft(
+    app_handle: tauri::AppHandle,
+    draft: drafts::LocalDraft,
+) -> Result<drafts::LocalDraft, String> {
+    let path = drafts_path(&app_handle)?;
+    drafts::save_draft(&path, &draft, now_millis())
+}
+
+#[tauri::command]
+fn list_local_drafts(
+    app_handle: tauri::AppHandle,
+    tenant_id: String,
+    user_id: String,
+) -> Result<Vec<drafts::LocalDraft>, String> {
+    let path = drafts_path(&app_handle)?;
+    drafts::list_drafts(&path, tenant_id.trim(), user_id.trim())
+}
+
+#[tauri::command]
+fn delete_local_draft(
+    app_handle: tauri::AppHandle,
+    tenant_id: String,
+    user_id: String,
+    collect_id: String,
+) -> Result<(), String> {
+    let path = drafts_path(&app_handle)?;
+    drafts::delete_draft(&path, tenant_id.trim(), user_id.trim(), collect_id.trim())
+}
+
+/// One draft, used when a collect screen opens after a restart.
+#[tauri::command]
+fn load_local_draft(
+    app_handle: tauri::AppHandle,
+    tenant_id: String,
+    user_id: String,
+    collect_id: String,
+) -> Result<Option<drafts::LocalDraft>, String> {
+    let path = drafts_path(&app_handle)?;
+    drafts::find_draft(&path, tenant_id.trim(), user_id.trim(), collect_id.trim())
+}
+
+/// Signing out clears the drafts of that user so a shared computer keeps no work.
+#[tauri::command]
+fn clear_local_drafts(app_handle: tauri::AppHandle, user_id: String) -> Result<usize, String> {
+    let path = drafts_path(&app_handle)?;
+    drafts::clear_user_drafts(&path, user_id.trim())
+}
+
 #[tauri::command]
 fn app_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
@@ -1226,7 +1285,12 @@ pub fn run() {
             set_automation_watch_paused,
             save_auth_session,
             load_auth_session,
-            clear_auth_session
+            clear_auth_session,
+            save_local_draft,
+            list_local_drafts,
+            load_local_draft,
+            delete_local_draft,
+            clear_local_drafts
         ])
         .run(tauri::generate_context!())
         .expect("failed to run School Collect");
