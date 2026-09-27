@@ -12,6 +12,8 @@ use url::Url;
 
 mod bridge;
 mod drafts;
+#[allow(dead_code)] // Wired into the login flow once the redirect allowlist is approved.
+mod pkce;
 
 pub(crate) const AUTOMATION_RECIPES_FILE: &str = "automation-recipes.tsv";
 const AUTOMATION_RECIPES_QUARANTINE_FILE: &str = "automation-recipes.invalid.tsv";
