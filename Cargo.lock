@@ -3722,7 +3722,13 @@ dependencies = [
 name = "school-collect-application"
 version = "0.2.0"
 dependencies = [
+ "axum",
+ "chrono",
+ "hex",
+ "hmac",
+ "reqwest 0.12.28",
  "school-collect-domain",
+ "sha2",
  "tokio",
 ]
 

@@ -5,5 +5,15 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+# R2 adapter: all versions already resolved in Cargo.lock through other crates.
+chrono = { workspace = true }
+hex = { workspace = true }
+hmac = "0.12"
+reqwest = { workspace = true }
 school-collect-domain = { path = "../domain" }
+sha2 = { workspace = true }
 tokio = { workspace = true }
+
+[dev-dependencies]
+# A loopback S3 stand-in for the R2 adapter test; axum is already locked.
+axum = { workspace = true }

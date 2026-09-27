@@ -68,7 +68,12 @@ def secret_value(rule: str, matched: bytes) -> bytes | None:
 
 
 def is_allowed(rule: str, matched: bytes) -> bool:
-    return secret_value(rule, matched) in ALLOWED_SECRET_VALUES
+    value = secret_value(rule, matched)
+    # `${VAR}` or `${VAR:-}` only names where a value comes from at run time; an
+    # empty default carries no secret.
+    if value is not None and (value == b"" or re.fullmatch(rb"\$\{[A-Z0-9_]+\}", value)):
+        return True
+    return value in ALLOWED_SECRET_VALUES
 
 
 def sensitive_path(name: str) -> str | None:

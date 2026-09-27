@@ -3,10 +3,10 @@
 //! Both dependencies are required: missing configuration must fail startup
 //! rather than silently drop events.
 
-use std::{env, path::PathBuf, sync::Arc, time::Duration};
+use std::{env, sync::Arc, time::Duration};
 
 use anyhow::Context;
-use school_collect_application::storage::{FileStorage, ObjectStorage};
+use school_collect_application::storage::{ObjectStorage, configured_storage};
 use school_collect_worker::{
     RelayConfig, nats::NatsPublisher, run_sweep_until_shutdown, run_until_shutdown,
 };
@@ -48,12 +48,15 @@ async fn main() -> anyhow::Result<()> {
     // The retention sweep needs to reach the same object storage the API writes
     // to. Without that configuration the relay still runs; attachments simply
     // keep their rows until an operator points the worker at the store.
-    let storage: Option<Arc<dyn ObjectStorage>> = match env::var("APP_ATTACHMENT_DIR") {
-        Ok(value) if !value.trim().is_empty() => {
-            Some(Arc::new(FileStorage::new(PathBuf::from(value))))
+    let storage: Option<Arc<dyn ObjectStorage>> = match configured_storage()
+        .map_err(|error| anyhow::anyhow!("attachment storage: {error}"))?
+    {
+        Some((storage, kind)) => {
+            tracing::info!(storage = kind, "attachment retention sweep enabled");
+            Some(storage)
         }
-        _ => {
-            tracing::info!("APP_ATTACHMENT_DIR is not set; the attachment retention sweep is off");
+        None => {
+            tracing::info!("no attachment storage is set; the attachment retention sweep is off");
             None
         }
     };

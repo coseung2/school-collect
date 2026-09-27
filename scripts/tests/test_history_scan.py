@@ -33,12 +33,19 @@ class HistoryScanTests(unittest.TestCase):
             b"DATABASE_URL: postgres://school_collect:school_collect_ci@127.0.0.1:5432/x",
             b"postgres://school_collect:${POSTGRES_PASSWORD:-school_collect_local_only}@postgres:5432/x",
             b'"postgres://unused:unused@127.0.0.1:1/absent"',
+            b"R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}",
+            b"R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY}",
         ):
             self.assertEqual(self.rules_for(data), [], data)
 
     def test_a_value_that_only_contains_a_placeholder_is_reported(self):
         self.assertEqual(
             self.rules_for(b"APP_API_KEY=synthetic_school_collect_ci_suffix_987654321"),
+            ["generic-assigned-secret"],
+        )
+        # A real value hidden as the default of an env reference is still reported.
+        self.assertEqual(
+            self.rules_for(b"R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-real_value_1234567890}"),
             ["generic-assigned-secret"],
         )
         self.assertEqual(
