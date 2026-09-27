@@ -217,6 +217,154 @@ export function automationPageCommand(command) {
     };
   }
 
+  const IDENTITY_HEADER_WORDS = [
+    "학년도",
+    "학년",
+    "학급",
+    "반",
+    "번호",
+    "번",
+    "순번",
+    "학번",
+    "이름",
+    "성명",
+    "no",
+    "name",
+  ];
+  const DATE_HEADER_PATTERN = /^[0-9]{1,2}([.\-/][0-9]{1,2})?\.?$/;
+
+  function headerTextOf(cell) {
+    return ((cell && cell.textContent) || "").replace(/\s+/g, " ").trim();
+  }
+
+  function editorsIn(cell) {
+    if (!cell) {
+      return [];
+    }
+    return Array.from(cell.querySelectorAll("input, select, textarea")).filter((element) => {
+      const type = (element.type || "").toLowerCase();
+      return !element.disabled && type !== "hidden";
+    });
+  }
+
+  function analyzeTableElement(table) {
+    const rows = Array.from(table.querySelectorAll("tr"));
+    if (rows.length < 2) {
+      return { ok: false, reason: "table_too_small" };
+    }
+
+    let headerRowIndex = -1;
+    for (let index = 0; index < rows.length; index += 1) {
+      if (rows[index].querySelectorAll("th").length >= 2) {
+        headerRowIndex = index;
+        break;
+      }
+    }
+    if (headerRowIndex === -1) {
+      return { ok: false, reason: "header_row_missing" };
+    }
+
+    const headers = Array.from(rows[headerRowIndex].children).map(headerTextOf);
+
+    const identityColumns = [];
+    for (let index = 0; index < headers.length; index += 1) {
+      const text = headers[index].toLowerCase();
+      if (!text) {
+        continue;
+      }
+      const matched = IDENTITY_HEADER_WORDS.some(
+        (word) => text === word || text.indexOf(word) === 0,
+      );
+      if (!matched) {
+        break;
+      }
+      identityColumns.push(index);
+    }
+    if (identityColumns.length === 0) {
+      return { ok: false, reason: "identity_columns_missing" };
+    }
+
+    const dateColumns = [];
+    for (let index = 0; index < headers.length; index += 1) {
+      if (identityColumns.indexOf(index) !== -1) {
+        continue;
+      }
+      if (DATE_HEADER_PATTERN.test(headers[index])) {
+        dateColumns.push(index);
+      }
+    }
+    if (dateColumns.length === 0) {
+      return { ok: false, reason: "date_columns_missing" };
+    }
+
+    const dataRows = [];
+    let missingEditors = 0;
+    for (let index = headerRowIndex + 1; index < rows.length; index += 1) {
+      const cells = Array.from(rows[index].children);
+      const identities = identityColumns.map((column) => headerTextOf(cells[column]));
+      if (identities.every((value) => !value)) {
+        continue;
+      }
+      const editors = dateColumns.map((column) => editorsIn(cells[column]));
+      missingEditors += editors.filter((list) => list.length !== 1).length;
+      dataRows.push({ rowIndex: index, cells, identities, editors });
+    }
+    if (dataRows.length === 0) {
+      return { ok: false, reason: "rows_missing" };
+    }
+
+    return {
+      ok: true,
+      headers,
+      identityColumns,
+      dateColumns,
+      dataRows,
+      missingEditors,
+      identityHeaders: identityColumns.map((column) => headers[column]),
+      dateLabels: dateColumns.map((column) => headers[column]),
+    };
+  }
+
+  /**
+   * 저장된 머리글로 지금 표의 열을 다시 찾습니다. 같은 머리글이 두 번 나오거나
+   * 없는 머리글이 있으면 중단합니다.
+   */
+  function matchStoredColumns(analysis, stored) {
+    function uniqueIndex(label) {
+      const matches = analysis.headers
+        .map((header, index) => (header === label ? index : -1))
+        .filter((index) => index !== -1);
+      return matches.length === 1 ? matches[0] : -1;
+    }
+
+    const identityColumns = (stored.identityHeaders || []).map(uniqueIndex);
+    const dateColumns = (stored.dateLabels || []).map(uniqueIndex);
+    if (
+      identityColumns.length === 0 ||
+      dateColumns.length === 0 ||
+      identityColumns.some((index) => index === -1) ||
+      dateColumns.some((index) => index === -1)
+    ) {
+      return null;
+    }
+    return { identityColumns, dateColumns };
+  }
+
+  function rowsForColumns(analysis, columns) {
+    const rows = [];
+    let missingEditors = 0;
+    for (const row of analysis.dataRows) {
+      const identities = columns.identityColumns.map((column) => headerTextOf(row.cells[column]));
+      if (identities.every((value) => !value)) {
+        continue;
+      }
+      const editors = columns.dateColumns.map((column) => editorsIn(row.cells[column]));
+      missingEditors += editors.filter((list) => list.length !== 1).length;
+      rows.push({ identities, editors });
+    }
+    return { rows, missingEditors };
+  }
+
   function pickElement() {
     return new Promise((resolve) => {
       let current = null;
@@ -264,11 +412,7 @@ export function automationPageCommand(command) {
         event.stopPropagation();
         const element = current;
         cleanup();
-        resolve({
-          ok: true,
-          element: describeElement(element),
-          candidates: candidateLocators(element),
-        });
+        resolve(element);
       }
 
       function onKey(event) {
@@ -277,7 +421,7 @@ export function automationPageCommand(command) {
         }
         event.preventDefault();
         cleanup();
-        resolve({ ok: false, reason: "cancelled" });
+        resolve(null);
       }
 
       window.addEventListener("mousemove", onMove, true);
@@ -287,7 +431,43 @@ export function automationPageCommand(command) {
   }
 
   if (command.op === "pick") {
-    return pickElement();
+    return pickElement().then((element) =>
+      element
+        ? {
+            ok: true,
+            element: describeElement(element),
+            candidates: candidateLocators(element),
+          }
+        : { ok: false, reason: "cancelled" },
+    );
+  }
+
+  if (command.op === "pick-table") {
+    return pickElement().then((element) => {
+      if (!element) {
+        return { ok: false, reason: "cancelled" };
+      }
+      const table = element.closest ? element.closest("table") : null;
+      if (!table) {
+        return { ok: false, reason: "table_missing" };
+      }
+      const analysis = analyzeTableElement(table);
+      if (analysis.ok !== true) {
+        return analysis;
+      }
+      return {
+        ok: true,
+        spec: {
+          locator: { kind: "css", value: cssPathFor(table) },
+          identityHeaders: analysis.identityHeaders,
+          dateLabels: analysis.dateLabels,
+        },
+        headers: analysis.headers,
+        rows: analysis.dataRows.map((row) => row.identities),
+        totalCells: analysis.dataRows.length * analysis.dateColumns.length,
+        missingEditors: analysis.missingEditors,
+      };
+    });
   }
 
   if (command.op === "preview") {
@@ -350,6 +530,117 @@ export function automationPageCommand(command) {
       result.verified = written && result.readBack === desired;
     }
 
+    return { ok: true, url: location.href, title: document.title, results };
+  }
+
+  if (command.op === "preview-table" || command.op === "fill-table") {
+    const stored = command.table || {};
+    const locator = stored.locator || {};
+    const tables = resolveAll(locator.kind, locator.value);
+    if (tables.length !== 1) {
+      return { ok: false, reason: "table_not_unique", tableCount: tables.length };
+    }
+
+    const analysis = analyzeTableElement(tables[0]);
+    if (analysis.ok !== true) {
+      return analysis;
+    }
+    const columns = matchStoredColumns(analysis, stored);
+    if (!columns) {
+      return { ok: false, reason: "columns_changed" };
+    }
+
+    const { rows, missingEditors } = rowsForColumns(analysis, columns);
+    if (rows.length === 0) {
+      return { ok: false, reason: "rows_missing" };
+    }
+
+    const keys = rows.map((row) => row.identities.join("\u0000"));
+    const duplicateKeys = keys.filter((key, index) => keys.indexOf(key) !== index);
+    if (duplicateKeys.length > 0) {
+      return { ok: false, reason: "duplicate_rows", duplicates: duplicateKeys.slice(0, 5) };
+    }
+
+    const dateLabels = stored.dateLabels || [];
+    const preview = {
+      ok: true,
+      url: location.href,
+      title: document.title,
+      identityHeaders: stored.identityHeaders || [],
+      dateLabels,
+      missingEditors,
+      rows: rows.map((row, index) => ({
+        key: keys[index],
+        identities: row.identities,
+        values: row.editors.map((list) => (list.length === 1 ? readValue(list[0]) : null)),
+      })),
+    };
+
+    if (command.op === "preview-table") {
+      return preview;
+    }
+
+    const values =
+      command.values && typeof command.values === "object" ? command.values : {};
+    const unknownRows = Object.keys(values).filter((key) => keys.indexOf(key) === -1);
+    if (unknownRows.length > 0) {
+      return { ok: false, reason: "unknown_rows", unknownRows: unknownRows.slice(0, 5) };
+    }
+
+    // 먼저 입력 계획을 모두 세웁니다. 하나라도 쓸 수 없으면 아무것도 입력하지 않습니다.
+    const plan = [];
+    const issues = [];
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+      const rowValues = values[keys[rowIndex]];
+      if (!rowValues) {
+        continue;
+      }
+      for (let columnIndex = 0; columnIndex < rows[rowIndex].editors.length; columnIndex += 1) {
+        const label = dateLabels[columnIndex];
+        const desired = rowValues[label];
+        if (typeof desired !== "string") {
+          continue;
+        }
+        const editors = rows[rowIndex].editors[columnIndex];
+        const rowLabel = rows[rowIndex].identities.join(" ");
+        if (editors.length !== 1) {
+          issues.push({ row: rowLabel, date: label, reason: "locator_not_unique" });
+          continue;
+        }
+        if (!isWritable(editors[0])) {
+          issues.push({ row: rowLabel, date: label, reason: "unsupported_control" });
+          continue;
+        }
+        plan.push({
+          rowIndex,
+          columnIndex,
+          rowLabel,
+          date: label,
+          element: editors[0],
+          desired,
+          previousValue: readValue(editors[0]),
+        });
+      }
+    }
+    if (issues.length > 0) {
+      return { ok: false, reason: "cell_not_writable", issues, planned: plan.length };
+    }
+    if (plan.length === 0) {
+      return { ok: false, reason: "nothing_to_fill" };
+    }
+
+    const results = plan.map((item) => {
+      const written = writeValue(item.element, item.desired);
+      const readBack = readValue(item.element);
+      return {
+        row: item.rowLabel,
+        date: item.date,
+        previousValue: item.previousValue,
+        writtenValue: item.desired,
+        readBack,
+        verified: written && readBack === item.desired,
+      };
+    });
     return { ok: true, url: location.href, title: document.title, results };
   }
 

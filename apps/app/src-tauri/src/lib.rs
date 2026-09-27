@@ -19,6 +19,9 @@ const MAX_TARGET_URL_LEN: usize = 2048;
 const MAX_RECIPE_FIELDS: usize = 40;
 const MAX_FIELD_LABEL_LEN: usize = 80;
 const MAX_LOCATOR_VALUE_LEN: usize = 300;
+/// 표 입력 레시피가 가질 수 있는 행 식별 머리글과 날짜 열 수입니다.
+const MAX_TABLE_HEADERS: usize = 40;
+const MAX_TABLE_DATES: usize = 62;
 /// 한 사용자 계정이 보관할 수 있는 업무 버튼 수입니다.
 const MAX_RECIPES: usize = 100;
 /// 손상된 행을 보관하는 격리 파일의 상한입니다. 넘으면 복구를 멈추고 원본을 보존합니다.
@@ -29,6 +32,7 @@ const MAX_QUARANTINE_BYTES: usize = 512 * 1024;
 pub(crate) enum AutomationKind {
     Shortcut,
     Fill,
+    TableFill,
 }
 
 /// 화면 요소를 찾는 방법입니다.
@@ -62,6 +66,33 @@ pub(crate) struct AutomationField {
     pub(crate) locator: AutomationLocator,
 }
 
+/// 학생 × 날짜 행렬처럼 표를 채우는 레시피의 표 정보입니다.
+///
+/// 열 위치(인덱스)는 저장하지 않고 머리글 텍스트만 저장합니다. 화면이 바뀌어
+/// 열 순서가 달라져도 머리글로 다시 찾고, 못 찾으면 중단합니다.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AutomationTable {
+    /// 표 또는 표를 담은 컨테이너의 위치
+    pub(crate) locator: AutomationLocator,
+    /// 행을 식별하는 머리글(예: 학년, 반, 번호, 이름)
+    pub(crate) identity_headers: Vec<String>,
+    /// 값을 넣을 날짜 열 머리글(예: 3-2, 03.02)
+    pub(crate) date_labels: Vec<String>,
+}
+
+/// 저장 파일의 5번째 열에 들어가는 JSON입니다.
+///
+/// 이전 형식(필드 배열만 저장)도 계속 읽을 수 있도록 `decode_recipe`가 둘 다 받습니다.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AutomationPayload {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) fields: Vec<AutomationField>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) table: Option<AutomationTable>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AutomationRecipe {
@@ -72,6 +103,9 @@ pub(crate) struct AutomationRecipe {
     /// 자동입력 레시피가 채울 필드입니다. 바로가기는 비어 있습니다.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) fields: Vec<AutomationField>,
+    /// 표 입력 레시피의 표 정보입니다. 그 밖의 종류는 값을 갖지 않습니다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) table: Option<AutomationTable>,
 }
 
 fn validate_plain_field(value: &str) -> Result<(), String> {
@@ -194,6 +228,35 @@ fn validate_locator(locator: &AutomationLocator) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_header_text(value: &str, description: &str) -> Result<(), String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.len() > MAX_FIELD_LABEL_LEN {
+        return Err(format!("{description}은 1~80자로 입력하세요."));
+    }
+    validate_plain_field(trimmed)
+}
+
+fn validate_table(table: &AutomationTable) -> Result<(), String> {
+    validate_locator(&table.locator)?;
+
+    if table.identity_headers.is_empty() || table.identity_headers.len() > MAX_TABLE_HEADERS {
+        return Err(format!(
+            "행 식별 머리글은 1~{MAX_TABLE_HEADERS}개가 필요합니다."
+        ));
+    }
+    if table.date_labels.is_empty() || table.date_labels.len() > MAX_TABLE_DATES {
+        return Err(format!("날짜 열은 1~{MAX_TABLE_DATES}개가 필요합니다."));
+    }
+    for header in &table.identity_headers {
+        validate_header_text(header, "행 식별 머리글")?;
+    }
+    for label in &table.date_labels {
+        validate_header_text(label, "날짜 열 머리글")?;
+    }
+
+    Ok(())
+}
+
 pub(crate) fn validate_recipe(recipe: &AutomationRecipe) -> Result<(), String> {
     let id = recipe.id.trim();
     let name = recipe.name.trim();
@@ -211,24 +274,33 @@ pub(crate) fn validate_recipe(recipe: &AutomationRecipe) -> Result<(), String> {
 
     match recipe.kind {
         AutomationKind::Shortcut => {
-            if !recipe.fields.is_empty() {
+            if !recipe.fields.is_empty() || recipe.table.is_some() {
                 return Err("바로가기에는 입력 필드를 둘 수 없습니다.".to_string());
             }
         }
         AutomationKind::Fill => {
+            if recipe.table.is_some() {
+                return Err("자동입력 레시피에는 표 정보를 둘 수 없습니다.".to_string());
+            }
             if recipe.fields.is_empty() || recipe.fields.len() > MAX_RECIPE_FIELDS {
                 return Err(format!(
                     "자동입력 레시피는 필드 1~{MAX_RECIPE_FIELDS}개가 필요합니다."
                 ));
             }
             for field in &recipe.fields {
-                let label = field.label.trim();
-                if label.is_empty() || label.len() > MAX_FIELD_LABEL_LEN {
-                    return Err("필드 이름은 1~80자로 입력하세요.".to_string());
-                }
-                validate_plain_field(label)?;
+                validate_header_text(&field.label, "필드 이름")?;
                 validate_locator(&field.locator)?;
             }
+        }
+        AutomationKind::TableFill => {
+            if !recipe.fields.is_empty() {
+                return Err("표 입력 레시피에는 개별 필드를 둘 수 없습니다.".to_string());
+            }
+            let table = recipe
+                .table
+                .as_ref()
+                .ok_or_else(|| "표 입력 레시피에는 표 정보가 필요합니다.".to_string())?;
+            validate_table(table)?;
         }
     }
 
@@ -243,6 +315,15 @@ pub(crate) fn normalize_recipe(mut recipe: AutomationRecipe) -> Result<Automatio
     for field in &mut recipe.fields {
         field.label = field.label.trim().to_string();
         field.locator.value = field.locator.value.trim().to_string();
+    }
+    if let Some(table) = &mut recipe.table {
+        table.locator.value = table.locator.value.trim().to_string();
+        for header in &mut table.identity_headers {
+            *header = header.trim().to_string();
+        }
+        for label in &mut table.date_labels {
+            *label = label.trim().to_string();
+        }
     }
     validate_recipe(&recipe)?;
     Ok(recipe)
@@ -275,16 +356,21 @@ fn encode_recipe(recipe: &AutomationRecipe) -> Result<String, String> {
     let kind = match recipe.kind {
         AutomationKind::Shortcut => "shortcut",
         AutomationKind::Fill => "fill",
+        AutomationKind::TableFill => "table_fill",
     };
     let head = format!(
         "{}\t{kind}\t{}\t{}",
         recipe.id, recipe.name, recipe.target_url
     );
-    if recipe.fields.is_empty() {
+    if recipe.fields.is_empty() && recipe.table.is_none() {
         return Ok(head);
     }
 
-    let payload = serde_json::to_string(&recipe.fields)
+    let payload = AutomationPayload {
+        fields: recipe.fields.clone(),
+        table: recipe.table.clone(),
+    };
+    let payload = serde_json::to_string(&payload)
         .map_err(|error| format!("자동화 설정을 저장하지 못했습니다: {error}"))?;
     Ok(format!("{head}\t{payload}"))
 }
@@ -305,12 +391,22 @@ fn decode_recipe(line: &str) -> Result<AutomationRecipe, String> {
     let kind = match kind {
         "shortcut" => AutomationKind::Shortcut,
         "fill" => AutomationKind::Fill,
+        "table_fill" => AutomationKind::TableFill,
         _ => return Err("자동화 설정 형식이 올바르지 않습니다.".to_string()),
     };
-    let fields = if payload.is_empty() {
-        Vec::new()
+    let payload = if payload.is_empty() {
+        AutomationPayload::default()
     } else {
-        serde_json::from_str(payload)
+        // 이전 형식은 필드 배열만 저장했습니다.
+        serde_json::from_str::<AutomationPayload>(payload)
+            .or_else(|_| {
+                serde_json::from_str::<Vec<AutomationField>>(payload).map(|fields| {
+                    AutomationPayload {
+                        fields,
+                        table: None,
+                    }
+                })
+            })
             .map_err(|_| "자동화 설정의 필드 형식이 올바르지 않습니다.".to_string())?
     };
 
@@ -319,7 +415,8 @@ fn decode_recipe(line: &str) -> Result<AutomationRecipe, String> {
         kind,
         name: name.to_string(),
         target_url: target_url.to_string(),
-        fields,
+        fields: payload.fields,
+        table: payload.table,
     };
     validate_recipe(&recipe)?;
     Ok(recipe)
@@ -686,6 +783,7 @@ mod tests {
             target_url: "https://example.invalid/draft".to_string(),
             kind: AutomationKind::Shortcut,
             fields: Vec::new(),
+            table: None,
         };
         let decoded = decode_recipe(&encode_recipe(&recipe).unwrap()).unwrap();
         assert_eq!(decoded, recipe);
@@ -708,7 +806,91 @@ mod tests {
             target_url: "https://example.invalid/list".to_string(),
             kind: AutomationKind::Fill,
             fields,
+            table: None,
         }
+    }
+
+    fn table_recipe(id: &str, name: &str) -> AutomationRecipe {
+        AutomationRecipe {
+            id: id.to_string(),
+            name: name.to_string(),
+            target_url: "https://example.invalid/attendance".to_string(),
+            kind: AutomationKind::TableFill,
+            fields: Vec::new(),
+            table: Some(AutomationTable {
+                locator: AutomationLocator {
+                    kind: LocatorKind::Css,
+                    value: "#attendance".to_string(),
+                },
+                identity_headers: vec!["학년".to_string(), "반".to_string(), "이름".to_string()],
+                date_labels: vec!["3-2".to_string(), "3-3".to_string()],
+            }),
+        }
+    }
+
+    #[test]
+    fn table_recipe_round_trip_keeps_headers() {
+        let recipe = table_recipe("recipe-table", "출결 입력");
+
+        let decoded = decode_recipe(&encode_recipe(&recipe).unwrap()).unwrap();
+
+        assert_eq!(decoded, recipe);
+        assert_eq!(
+            decoded.table.as_ref().unwrap().date_labels,
+            vec!["3-2".to_string(), "3-3".to_string()]
+        );
+    }
+
+    #[test]
+    fn decodes_the_earlier_field_array_payload() {
+        let line = "recipe-1\tfill\t기안 작성\thttps://example.invalid/list\t\
+                    [{\"label\":\"제목\",\"locator\":{\"kind\":\"id\",\"value\":\"title\"}}]";
+
+        let decoded = decode_recipe(line).unwrap();
+
+        assert_eq!(decoded.kind, AutomationKind::Fill);
+        assert_eq!(decoded.fields.len(), 1);
+        assert!(decoded.table.is_none());
+    }
+
+    #[test]
+    fn rejects_table_recipes_without_table_or_with_fields() {
+        let mut missing = table_recipe("recipe-table", "출결 입력");
+        missing.table = None;
+        assert!(validate_recipe(&missing).is_err());
+
+        let mut with_fields = table_recipe("recipe-table", "출결 입력");
+        with_fields.fields = vec![fill_field("제목", LocatorKind::Id, "title")];
+        assert!(validate_recipe(&with_fields).is_err());
+
+        let mut shortcut = shortcut_recipe("recipe-1", "기안", "https://example.invalid/draft");
+        shortcut.table = table_recipe("recipe-table", "출결 입력").table;
+        assert!(validate_recipe(&shortcut).is_err());
+
+        let mut fill = fill_recipe(
+            "recipe-fill",
+            "기안 작성",
+            vec![fill_field("제목", LocatorKind::Id, "title")],
+        );
+        fill.table = table_recipe("recipe-table", "출결 입력").table;
+        assert!(validate_recipe(&fill).is_err());
+    }
+
+    #[test]
+    fn rejects_table_recipes_beyond_header_limits() {
+        let mut recipe = table_recipe("recipe-table", "출결 입력");
+        let table = recipe.table.as_mut().unwrap();
+        table.identity_headers = vec!["이름".to_string(); MAX_TABLE_HEADERS + 1];
+        assert!(validate_recipe(&recipe).is_err());
+
+        let mut recipe = table_recipe("recipe-table", "출결 입력");
+        let table = recipe.table.as_mut().unwrap();
+        table.date_labels = vec!["3-2".to_string(); MAX_TABLE_DATES + 1];
+        assert!(validate_recipe(&recipe).is_err());
+
+        let mut recipe = table_recipe("recipe-table", "출결 입력");
+        recipe.table.as_mut().unwrap().identity_headers = vec!["  ".to_string()];
+        assert!(validate_recipe(&recipe).is_err());
     }
 
     #[test]
@@ -877,6 +1059,7 @@ mod tests {
             target_url: target_url.to_string(),
             kind: AutomationKind::Shortcut,
             fields: Vec::new(),
+            table: None,
         }
     }
 

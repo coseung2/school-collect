@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export type AutomationKind = "shortcut" | "fill";
+export type AutomationKind = "shortcut" | "fill" | "table_fill";
 
 /** 화면 요소를 찾는 방법입니다. native 검증과 같은 값을 씁니다. */
 export type LocatorKind = "id" | "name" | "label" | "css";
@@ -15,6 +15,13 @@ export interface AutomationField {
   locator: AutomationLocator;
 }
 
+/** 학생 × 날짜 행렬처럼 표를 채우는 레시피의 표 정보입니다. */
+export interface AutomationTable {
+  locator: AutomationLocator;
+  identityHeaders: string[];
+  dateLabels: string[];
+}
+
 export interface AutomationRecipe {
   id: string;
   name: string;
@@ -22,6 +29,8 @@ export interface AutomationRecipe {
   kind: AutomationKind;
   /** 자동입력 레시피가 채울 필드입니다. 바로가기는 값을 갖지 않습니다. */
   fields?: AutomationField[];
+  /** 표 입력 레시피의 표 정보입니다. 그 밖의 종류는 값을 갖지 않습니다. */
+  table?: AutomationTable;
 }
 
 export async function listAutomationRecipes(): Promise<AutomationRecipe[]> {
@@ -97,7 +106,10 @@ export function describeAutomationTarget(targetUrl: string): string {
 }
 
 export function automationKindLabel(kind: AutomationKind): string {
-  return kind === "fill" ? "자동입력" : "바로가기";
+  if (kind === "fill") {
+    return "자동입력";
+  }
+  return kind === "table_fill" ? "표 입력" : "바로가기";
 }
 
 /**
@@ -106,10 +118,19 @@ export function automationKindLabel(kind: AutomationKind): string {
  */
 export function describeAutomationRecipe(recipe: AutomationRecipe): string {
   const host = describeAutomationTarget(recipe.targetUrl);
-  if (recipe.kind !== "fill") {
-    return host;
+  if (recipe.kind === "fill") {
+    const fieldCount = recipe.fields?.length ?? 0;
+    return `필드 ${fieldCount}개 · ${host}`;
   }
+  if (recipe.kind === "table_fill") {
+    const identityCount = recipe.table?.identityHeaders?.length ?? 0;
+    const dateCount = recipe.table?.dateLabels?.length ?? 0;
+    return `식별 ${identityCount}열 · 날짜 ${dateCount}개 · ${host}`;
+  }
+  return host;
+}
 
-  const fieldCount = recipe.fields?.length ?? 0;
-  return `필드 ${fieldCount}개 · ${host}`;
+/** 표·자동입력 레시피는 페이지를 열어 확장에서 실행합니다. */
+export function automationRunsInExtension(kind: AutomationKind): boolean {
+  return kind !== "shortcut";
 }

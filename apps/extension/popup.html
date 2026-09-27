@@ -79,6 +79,31 @@
     </div>
     <ul id="fill-results" class="fields"></ul>
 
+    <hr />
+
+    <h2>표 입력 레시피</h2>
+    <div class="row">
+      <button id="pick-table" type="button" class="secondary">표 등록(셀 클릭)</button>
+    </div>
+    <p id="table-picked" class="hint"></p>
+    <label for="table-name">레시피 이름</label>
+    <input id="table-name" type="text" maxlength="80" placeholder="예: 출결 입력" />
+    <div class="row">
+      <button id="save-table-recipe" type="button">표 레시피 저장</button>
+    </div>
+
+    <label for="table-select">저장된 표 레시피</label>
+    <select id="table-select"></select>
+    <div class="row">
+      <button id="table-preview" type="button" class="secondary">표 미리보기</button>
+    </div>
+    <label for="table-values">행렬 값(탭으로 구분)</label>
+    <textarea id="table-values" rows="6" spellcheck="false"></textarea>
+    <div class="row">
+      <button id="table-fill" type="button">표 입력 실행</button>
+    </div>
+    <ul id="table-results" class="fields"></ul>
+
     <p id="status" role="status"></p>
     <script type="module" src="popup.js"></script>
   </body>
