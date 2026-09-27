@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <title>School Collect 업무 자동화</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <h1>School Collect</h1>
+    <p class="hint">
+      현재 탭을 School Collect의 업무 버튼으로 등록합니다. 페이지 내용, 쿠키,
+      로그인 정보는 보내지 않습니다.
+    </p>
+
+    <label for="token">연결 토큰</label>
+    <input
+      id="token"
+      type="password"
+      autocomplete="off"
+      placeholder="앱의 업무 자동화 화면에서 복사"
+    />
+    <div class="row">
+      <button id="save" type="button">토큰 저장</button>
+      <button id="check" type="button" class="secondary">연결 확인</button>
+    </div>
+
+    <hr />
+
+    <label for="name">버튼 이름</label>
+    <input
+      id="name"
+      type="text"
+      maxlength="80"
+      placeholder="비우면 탭 제목을 씁니다"
+    />
+    <div class="row">
+      <button id="register" type="button">현재 화면 등록</button>
+    </div>
+
+    <p id="status" role="status"></p>
+    <script src="popup.js"></script>
+  </body>
+</html>
