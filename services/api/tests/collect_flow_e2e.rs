@@ -1375,3 +1375,550 @@ async fn membership_invitation_end_to_end() {
         panic!("membership invitation end-to-end verification failed: {message}");
     }
 }
+
+/// One school, four roles, one scenario: the admin and the coordinator manage a
+/// collect, the contributor answers it, and the viewer only reads. It runs
+/// against the real provider and database, and skips silently when the
+/// integration environment is not configured.
+#[tokio::test]
+async fn role_sweep_end_to_end() {
+    let (Some(database_url), Some(supabase_url), Some(anon_key), Some(service_role)) = (
+        env_value("DATABASE_URL"),
+        env_value("SUPABASE_URL"),
+        env_value("SUPABASE_ANON_KEY"),
+        env_value("SUPABASE_SERVICE_ROLE_KEY"),
+    ) else {
+        eprintln!("role_sweep_e2e skipped: integration environment variables are not set");
+        return;
+    };
+
+    let issuer = Url::parse(&format!("{supabase_url}/auth/v1")).expect("issuer url");
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .after_connect(|connection, _meta| {
+            Box::pin(async move {
+                sqlx::query("SET search_path TO school_collect,public")
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&database_url)
+        .await
+        .expect("connect");
+    school_collect_db::MIGRATOR
+        .run(&pool)
+        .await
+        .expect("migrate");
+
+    let client = reqwest::Client::builder().build().expect("http client");
+    let run_id = Uuid::now_v7().simple().to_string();
+    let password = format!("It3st-{run_id}!");
+    let roles = ["admin", "coordinator", "contributor", "viewer"];
+
+    // Each role gets its own identity so the sweep exercises four real tokens.
+    let mut identities: Vec<TestIdentity> = Vec::new();
+    let mut emails: Vec<String> = Vec::new();
+    for role in roles {
+        let email = format!("role-{role}-{run_id}@example.test");
+        let supabase_user_id =
+            create_supabase_user(&client, &supabase_url, &service_role, &email, &password).await;
+        let access_token = sign_in(&client, &supabase_url, &anon_key, &email, &password).await;
+        identities.push(TestIdentity {
+            supabase_user_id,
+            access_token,
+        });
+        emails.push(email);
+    }
+
+    let app = router(
+        AppState { pool: pool.clone() },
+        HeaderValue::from_static("http://127.0.0.1:1420"),
+        AuthState::oidc(
+            OidcVerifier::new(OidcConfig {
+                issuer_url: issuer.clone(),
+                audience: "authenticated".to_owned(),
+                jwks_url: None,
+            })
+            .expect("verifier"),
+        ),
+    );
+
+    let mut tenant_ids: Vec<Uuid> = Vec::new();
+    let mut local_user_ids: Vec<Uuid> = Vec::new();
+    let result: Result<(), String> = async {
+        let admin = &identities[0];
+        let coordinator = &identities[1];
+        let contributor = &identities[2];
+        let viewer = &identities[3];
+
+        // Every identity is exchanged for a local user row before it acts.
+        for identity in &identities {
+            let (status, session) = call(
+                &app,
+                "GET",
+                "/v1/session",
+                Some(&identity.access_token),
+                None,
+                None,
+            )
+            .await;
+            if status != StatusCode::OK {
+                return Err(format!("session failed: {status} {session}"));
+            }
+            let user_id = Uuid::parse_str(session["user"]["id"].as_str().unwrap_or_default())
+                .map_err(|_| "session did not return a user id".to_owned())?;
+            local_user_ids.push(user_id);
+        }
+
+        let (status, tenant) = call(
+            &app,
+            "POST",
+            "/v1/tenants",
+            Some(&admin.access_token),
+            None,
+            Some(json!({ "name": format!("role-sweep-{run_id}") })),
+        )
+        .await;
+        if status != StatusCode::CREATED {
+            return Err(format!("tenant creation failed: {status} {tenant}"));
+        }
+        let tenant_id = tenant["tenantId"].as_str().unwrap_or_default().to_owned();
+        tenant_ids.push(Uuid::parse_str(&tenant_id).map_err(|_| "tenant id".to_owned())?);
+
+        // The creator is the admin; the other three join with the role they act
+        // under, exactly as a school hands out invitations.
+        for (index, role) in [(1usize, "coordinator"), (2, "contributor"), (3, "viewer")] {
+            let (status, created) = call(
+                &app,
+                "POST",
+                "/v1/invitations",
+                Some(&admin.access_token),
+                Some(&tenant_id),
+                Some(json!({ "email": emails[index], "role": role })),
+            )
+            .await;
+            if status != StatusCode::CREATED {
+                return Err(format!("{role} invitation failed: {status} {created}"));
+            }
+            if created["invitation"]["role"] != role {
+                return Err(format!("the invitation role is wrong: {created}"));
+            }
+            let code = created["code"].as_str().unwrap_or_default().to_owned();
+            let (status, accepted) = call(
+                &app,
+                "POST",
+                "/v1/invitations/accept",
+                Some(&identities[index].access_token),
+                None,
+                Some(json!({ "code": code })),
+            )
+            .await;
+            if status != StatusCode::OK {
+                return Err(format!("{role} acceptance failed: {status} {accepted}"));
+            }
+        }
+
+        // All four roles are visible on one member list.
+        let (status, members) = call(
+            &app,
+            "GET",
+            "/v1/members",
+            Some(&admin.access_token),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        if status != StatusCode::OK {
+            return Err(format!("member list failed: {status} {members}"));
+        }
+        let rows = members["members"].as_array().cloned().unwrap_or_default();
+        for role in roles {
+            if !rows.iter().any(|row| row["role"] == role) {
+                return Err(format!("the member list is missing {role}: {members}"));
+            }
+        }
+        if rows.len() != 4 {
+            return Err(format!(
+                "the school must have exactly four members: {members}"
+            ));
+        }
+
+        // One published collect that every member owes.
+        let (status, collect) = call(
+            &app,
+            "POST",
+            "/v1/collects",
+            Some(&admin.access_token),
+            Some(&tenant_id),
+            Some(json!({
+                "title": format!("role-sweep-{run_id}"),
+                "description": "역할 4종 검증",
+                "items": [{ "key": "note", "label": "내용", "required": true }],
+                "assigneeUserIds": [],
+            })),
+        )
+        .await;
+        if status != StatusCode::CREATED {
+            return Err(format!("collect creation failed: {status} {collect}"));
+        }
+        let collect_id = collect["id"].as_str().unwrap_or_default().to_owned();
+        let (status, published) = call(
+            &app,
+            "POST",
+            &format!("/v1/collects/{collect_id}/publish"),
+            Some(&admin.access_token),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        if status != StatusCode::OK {
+            return Err(format!("publish failed: {status} {published}"));
+        }
+
+        // The viewer may read the collect and their own assignment list...
+        let (status, _) = call(
+            &app,
+            "GET",
+            "/v1/collects",
+            Some(&viewer.access_token),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        if status != StatusCode::OK {
+            return Err(format!("a viewer could not list collects: {status}"));
+        }
+        let (status, detail) = call(
+            &app,
+            "GET",
+            &format!("/v1/collects/{collect_id}"),
+            Some(&viewer.access_token),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        if status != StatusCode::OK {
+            return Err(format!(
+                "a viewer could not read the detail: {status} {detail}"
+            ));
+        }
+        let (status, assignments) = call(
+            &app,
+            "GET",
+            "/v1/assignments",
+            Some(&viewer.access_token),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        if status != StatusCode::OK {
+            return Err(format!(
+                "a viewer could not list assignments: {status} {assignments}"
+            ));
+        }
+
+        // ...but cannot answer, manage, or read other people's answers.
+        let (status, refused) = call(
+            &app,
+            "PUT",
+            &format!("/v1/collects/{collect_id}/submission"),
+            Some(&viewer.access_token),
+            Some(&tenant_id),
+            Some(json!({ "expectedVersion": 0, "payload": { "note": "viewer" } })),
+        )
+        .await;
+        if status != StatusCode::FORBIDDEN {
+            return Err(format!(
+                "a viewer was allowed to save an answer: {status} {refused}"
+            ));
+        }
+        let (status, refused) = call(
+            &app,
+            "GET",
+            &format!("/v1/collects/{collect_id}/export"),
+            Some(&viewer.access_token),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        if status != StatusCode::FORBIDDEN {
+            return Err(format!(
+                "a viewer was allowed to export: {status} {refused}"
+            ));
+        }
+        let (status, refused) = call(
+            &app,
+            "GET",
+            &format!("/v1/collects/{collect_id}/status"),
+            Some(&viewer.access_token),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        if status != StatusCode::FORBIDDEN {
+            return Err(format!(
+                "a viewer was allowed to read the progress board: {status} {refused}"
+            ));
+        }
+        let version = detail["version"].as_i64().unwrap_or_default();
+        let (status, refused) = call(
+            &app,
+            "PUT",
+            &format!("/v1/collects/{collect_id}/items"),
+            Some(&viewer.access_token),
+            Some(&tenant_id),
+            Some(json!({
+                "expectedVersion": version,
+                "items": [{ "key": "note", "label": "내용", "required": true }],
+            })),
+        )
+        .await;
+        if status != StatusCode::FORBIDDEN {
+            return Err(format!(
+                "a viewer was allowed to edit items: {status} {refused}"
+            ));
+        }
+
+        // The contributor answers and submits, but cannot manage the collect.
+        let (status, saved) = call(
+            &app,
+            "PUT",
+            &format!("/v1/collects/{collect_id}/submission"),
+            Some(&contributor.access_token),
+            Some(&tenant_id),
+            Some(json!({ "expectedVersion": 0, "payload": { "note": "역할 검증" } })),
+        )
+        .await;
+        if status != StatusCode::OK {
+            return Err(format!("the contributor could not save: {status} {saved}"));
+        }
+        let (status, submitted) = call(
+            &app,
+            "POST",
+            &format!("/v1/collects/{collect_id}/submission/submit"),
+            Some(&contributor.access_token),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        if status != StatusCode::OK {
+            return Err(format!(
+                "the contributor could not submit: {status} {submitted}"
+            ));
+        }
+        let (status, refused) = call(
+            &app,
+            "GET",
+            &format!("/v1/collects/{collect_id}/export"),
+            Some(&contributor.access_token),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        if status != StatusCode::FORBIDDEN {
+            return Err(format!(
+                "a contributor was allowed to export answers: {status} {refused}"
+            ));
+        }
+        let (status, refused) = call(
+            &app,
+            "PUT",
+            &format!("/v1/collects/{collect_id}/items"),
+            Some(&contributor.access_token),
+            Some(&tenant_id),
+            Some(json!({
+                "expectedVersion": version,
+                "items": [{ "key": "note", "label": "내용", "required": true }],
+            })),
+        )
+        .await;
+        if status != StatusCode::FORBIDDEN {
+            return Err(format!(
+                "a contributor was allowed to edit items: {status} {refused}"
+            ));
+        }
+
+        // The coordinator manages the same collect: edit the items, read the
+        // board, then export every assigned answer.
+        let (status, detail) = call(
+            &app,
+            "GET",
+            &format!("/v1/collects/{collect_id}"),
+            Some(&coordinator.access_token),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        if status != StatusCode::OK {
+            return Err(format!("the coordinator could not read: {status} {detail}"));
+        }
+        let version = detail["version"].as_i64().unwrap_or_default();
+        let (status, updated) = call(
+            &app,
+            "PUT",
+            &format!("/v1/collects/{collect_id}/items"),
+            Some(&coordinator.access_token),
+            Some(&tenant_id),
+            Some(json!({
+                "expectedVersion": version,
+                "items": [
+                    { "key": "note", "label": "내용", "required": true },
+                    { "key": "memo", "label": "비고", "required": false },
+                ],
+            })),
+        )
+        .await;
+        if status != StatusCode::OK {
+            return Err(format!(
+                "the coordinator could not edit items: {status} {updated}"
+            ));
+        }
+        // A viewer is never a target, so the collect owes three answers.
+        let version = updated["version"].as_i64().unwrap_or_default();
+        let (status, refused) = call(
+            &app,
+            "PUT",
+            &format!("/v1/collects/{collect_id}/assignments"),
+            Some(&coordinator.access_token),
+            Some(&tenant_id),
+            Some(json!({
+                "expectedVersion": version,
+                "assigneeUserIds": [local_user_ids[3].to_string()],
+            })),
+        )
+        .await;
+        if status != StatusCode::CONFLICT || refused["code"] != "target_not_assignable" {
+            return Err(format!(
+                "a viewer was accepted as a target: {status} {refused}"
+            ));
+        }
+        let (status, board) = call(
+            &app,
+            "GET",
+            &format!("/v1/collects/{collect_id}/status"),
+            Some(&coordinator.access_token),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        if status != StatusCode::OK
+            || board["assigned"].as_i64() != Some(3)
+            || board["submitted"].as_i64() != Some(1)
+        {
+            return Err(format!(
+                "the coordinator board was wrong (one of three submitted): {status} {board}"
+            ));
+        }
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/collects/{collect_id}/export"))
+                    .header(
+                        header::AUTHORIZATION,
+                        format!("Bearer {}", coordinator.access_token),
+                    )
+                    .header("x-tenant-id", &tenant_id)
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("router");
+        if response.status() != StatusCode::OK {
+            return Err(format!(
+                "the coordinator export failed: {}",
+                response.status()
+            ));
+        }
+        let bytes = axum::body::to_bytes(response.into_body(), 1_000_000)
+            .await
+            .expect("csv body");
+        let csv = String::from_utf8(bytes.to_vec()).expect("utf8 csv");
+        let name_of = |index: usize| {
+            emails[index]
+                .split('@')
+                .next()
+                .expect("email local part")
+                .to_owned()
+        };
+        if csv.lines().count() != 4 {
+            return Err(format!(
+                "every target must appear once (header plus three rows): {csv}"
+            ));
+        }
+        if !csv.contains(&name_of(2)) {
+            return Err(format!("the contributor row is missing: {csv}"));
+        }
+        if csv.contains(&name_of(3)) {
+            return Err(format!("a viewer must not appear as a target: {csv}"));
+        }
+        if !csv.contains("역할 검증") {
+            return Err(format!("the submitted value is missing: {csv}"));
+        }
+        if !csv.contains("비고") {
+            return Err(format!("the added item label is missing: {csv}"));
+        }
+
+        // The admin sees the same board and can export too.
+        let (status, board) = call(
+            &app,
+            "GET",
+            &format!("/v1/collects/{collect_id}/status"),
+            Some(&admin.access_token),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        if status != StatusCode::OK || board["submitted"].as_i64() != Some(1) {
+            return Err(format!("the admin board was wrong: {status} {board}"));
+        }
+        let (status, _) = call(
+            &app,
+            "GET",
+            &format!("/v1/collects/{collect_id}/export"),
+            Some(&admin.access_token),
+            Some(&tenant_id),
+            None,
+        )
+        .await;
+        if status != StatusCode::OK {
+            return Err(format!("the admin export failed: {status}"));
+        }
+
+        Ok(())
+    }
+    .await;
+
+    // Always remove what the test created, including identity-provider records.
+    for identity in &identities {
+        delete_supabase_user(
+            &client,
+            &supabase_url,
+            &service_role,
+            &identity.supabase_user_id,
+        )
+        .await;
+    }
+    cleanup(&pool, &tenant_ids, &local_user_ids).await;
+
+    // The sweep must leave nothing behind, including on failure.
+    let leftover: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM school_collect.tenants WHERE id = ANY($1))
+              + (SELECT count(*) FROM school_collect.memberships WHERE tenant_id = ANY($1))
+              + (SELECT count(*) FROM school_collect.users WHERE id = ANY($2))",
+    )
+    .bind(&tenant_ids)
+    .bind(&local_user_ids)
+    .fetch_one(&pool)
+    .await
+    .expect("leftover count");
+    eprintln!("role sweep leftover rows: {leftover}");
+    assert_eq!(leftover, 0, "the role sweep left rows behind");
+
+    if let Err(message) = result {
+        panic!("role sweep end-to-end verification failed: {message}");
+    }
+}
