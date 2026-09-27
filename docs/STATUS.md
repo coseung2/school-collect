@@ -105,6 +105,7 @@ PR #24/#25는 모두 develop에 병합됐습니다(`f573bfb`, `11a0af0`). 병합
 - 검토가 "저장소 안에서 선행 가능"으로 분류한 나머지도 처리했습니다: S-05 로그인 화면 연결(시스템 브라우저 PKCE, native `start_browser_login`·`cancel_browser_login`, 취소·만료·실패 안내, 가짜 provider 앱 경로 테스트), C-03 runtime/migrator 입력 분리(`MIGRATION_DATABASE_URL`)와 역할 검사(`scripts/runtime_role_check.sh`, CI `postgres`).
 - 실제 Tauri 창(WebView2 CDP) 확인: 슬롯만 연 상태의 다운로드 409, 미완료 행 표시와 지우기, 제출 잠금과 안내 문구, 지운 뒤 제출 가능, 실제 업로드 뒤 `받기` 행과 제출 가능, 640px 가로 넘침 없음.
 - 검증: `cargo test --workspace --locked` 156개, 실제 개발 DB `crates/db/tests/attachments.rs` 8개·worker sweep 1개·relay 6개, 실제 provider + PostgreSQL E2E 5개, foundation 34개, repository guard 0건, `@example.test` 계정과 검증 학교·행 잔여 0.
+- PR #77(`a92965e`)로 develop에 통합했습니다. 병합 전 CI 7개가 성공했고(`container` 검사가 migrator에 `MIGRATION_DATABASE_URL`을 넘기도록 한 번 고쳤습니다), `postgres` 작업의 런타임 역할 검사가 실제 PostgreSQL에서 통과했습니다.
 
 ## 단계 상태
 
