@@ -1189,11 +1189,44 @@ fn drafts_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(directory.join(drafts::DRAFTS_FILE))
 }
 
+/// 저장된 세션의 사용자와 요청한 사용자가 같은지 판정합니다.
+///
+/// 렌더러는 신뢰 경계 밖이므로, 초안 명령은 지금 저장된 세션의 사용자에
+/// 대해서만 동작해야 합니다.
+#[cfg(any(windows, test))]
+fn session_user_matches(stored: Option<&StoredAuthSession>, requested: &str) -> Result<(), String> {
+    let requested = requested.trim();
+    if requested.is_empty() {
+        return Err("초안 사용자 식별자가 올바르지 않습니다.".to_string());
+    }
+    let Some(session) = stored else {
+        return Err("로그인 세션이 없어 이 컴퓨터의 초안을 사용할 수 없습니다.".to_string());
+    };
+    if session.user_id.trim() != requested {
+        return Err("지금 로그인한 사용자의 초안만 사용할 수 있습니다.".to_string());
+    }
+    Ok(())
+}
+
+/// 저장된 세션과 대조합니다. 다른 플랫폼에는 아직 세션 저장소가 없습니다.
+#[cfg(windows)]
+fn require_session_user(requested: &str) -> Result<(), String> {
+    let stored = load_auth_session()?;
+    session_user_matches(stored.as_ref(), requested)
+}
+
+/// 세션 저장소가 없는 플랫폼에서는 대조할 기준이 없어 지금은 통과시킵니다.
+#[cfg(not(windows))]
+fn require_session_user(_requested: &str) -> Result<(), String> {
+    Ok(())
+}
+
 #[tauri::command]
 fn save_local_draft(
     app_handle: tauri::AppHandle,
     draft: drafts::LocalDraft,
 ) -> Result<drafts::LocalDraft, String> {
+    require_session_user(&draft.user_id)?;
     let path = drafts_path(&app_handle)?;
     drafts::save_draft(&path, &draft, now_millis())
 }
@@ -1204,6 +1237,7 @@ fn list_local_drafts(
     tenant_id: String,
     user_id: String,
 ) -> Result<Vec<drafts::LocalDraft>, String> {
+    require_session_user(&user_id)?;
     let path = drafts_path(&app_handle)?;
     drafts::list_drafts(&path, tenant_id.trim(), user_id.trim())
 }
@@ -1215,6 +1249,7 @@ fn delete_local_draft(
     user_id: String,
     collect_id: String,
 ) -> Result<(), String> {
+    require_session_user(&user_id)?;
     let path = drafts_path(&app_handle)?;
     drafts::delete_draft(&path, tenant_id.trim(), user_id.trim(), collect_id.trim())
 }
@@ -1227,6 +1262,7 @@ fn load_local_draft(
     user_id: String,
     collect_id: String,
 ) -> Result<Option<drafts::LocalDraft>, String> {
+    require_session_user(&user_id)?;
     let path = drafts_path(&app_handle)?;
     drafts::find_draft(&path, tenant_id.trim(), user_id.trim(), collect_id.trim())
 }
@@ -1234,6 +1270,7 @@ fn load_local_draft(
 /// Signing out clears the drafts of that user so a shared computer keeps no work.
 #[tauri::command]
 fn clear_local_drafts(app_handle: tauri::AppHandle, user_id: String) -> Result<usize, String> {
+    require_session_user(&user_id)?;
     let path = drafts_path(&app_handle)?;
     drafts::clear_user_drafts(&path, user_id.trim())
 }
@@ -1434,6 +1471,26 @@ mod tests {
         let encoded = serde_json::to_string(&session).expect("encode");
         let decoded: StoredAuthSession = serde_json::from_str(&encoded).expect("decode");
         assert_eq!(decoded, session);
+    }
+
+    #[test]
+    fn drafts_are_bound_to_the_stored_session_user() {
+        let session = StoredAuthSession {
+            access_token: "a".repeat(64),
+            refresh_token: None,
+            user_id: "user-1".to_string(),
+            email: None,
+            expires_at_ms: None,
+        };
+
+        assert!(session_user_matches(Some(&session), "user-1").is_ok());
+        assert!(session_user_matches(Some(&session), "  user-1  ").is_ok());
+
+        // A renderer that asks for another user, an empty id, or with no stored
+        // session must be refused before it reaches the local draft table.
+        assert!(session_user_matches(Some(&session), "user-2").is_err());
+        assert!(session_user_matches(Some(&session), "  ").is_err());
+        assert!(session_user_matches(None, "user-1").is_err());
     }
 
     #[test]
