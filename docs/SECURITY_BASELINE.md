@@ -37,6 +37,20 @@ PR #10에서 `.env.example` 값, 과거 local CLI state, `tsconfig.tsbuildinfo`�
 
 추적 파일 분류·삭제(기존 2·3번)는 완료되었습니다. history rewrite는 아직 실행 완료로 기록하지 않습니다.
 
+### full-history 스캔 결과 (2026-09-27, 2번 선행)
+
+`python scripts/history_scan.py`가 모든 ref에서 닿는 커밋의 blob을 훑어 credential 형태와 민감 경로를 찾습니다. 규칙·경로·처음/마지막 커밋만 출력하고 값은 출력하지 않습니다. 패턴 검사라 비밀이 없다는 증명은 아닙니다.
+
+155개 커밋 기준 결과입니다. 현재 HEAD에는 해당 항목이 없습니다(개발 Docker·CI·단위 테스트용 고정 placeholder는 허용 목록으로 제외).
+
+| 분류 | 경로 | 들어 있던 커밋 범위 | 조치 |
+| --- | --- | --- | --- |
+| credential 형태 | `.env.example`(JWT 형태 1, 비밀 값 대입 1, 비밀번호 포함 DB URL 1) | `69434a2`(2026-05-28) ~ `9ac77a8`(2026-06-09) | 외부 시스템에서 폐기·회전 확인(1번), rewrite 대상 |
+| CLI 연결 상태 | `supabase/.temp/*` 9개(project ref·pooler URL 등) | `69434a2` 이후 과거 revision | rewrite 대상, 연결 대상 프로젝트 확인 |
+| 업무자료 | `_agent_작업` 아래 73개 경로 | `69434a2` ~ `4cadf7e` | rewrite 대상(실제 업무자료) |
+
+rewrite 범위 후보는 위 세 묶음입니다. rewrite 실행, force update, 외부 credential 폐기는 소유자의 별도 승인이 필요하며 이 스캔으로 대신하지 않습니다.
+
 ## Production/test data 원칙
 
 production migration과 repository에 demo school/user/task/submission seed를 상시 두지 않습니다.
