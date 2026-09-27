@@ -109,7 +109,8 @@ School Collect (Tauri)
 - 웹: `pnpm --filter @school-collect/app typecheck`·`build` 통과. foundation `python -m unittest discover -s scripts/tests -v`(24개)와 `python scripts/check_repository.py` 통과.
 - 실제 소켓 스모크(`curl`): 상태 200, 바로가기 생성 201과 `automation-recipes.tsv` 기록, 자격증명 포함 URL 400, 토큰 없음 401, 다른 origin 403. 스모크로 만든 레시피는 삭제했습니다.
 - 실제 Tauri 창: `업무 자동화` 화면에 연결 카드가 포트 43110·토큰·확장 ID로 렌더링되고, 브리지가 만든 버튼이 새로고침 후 "내 업무 버튼"에 나타나는 것을 확인했습니다.
-- 아직 검증하지 않은 것: 실제 Chrome/Edge에 확장을 로드해 팝업으로 등록하는 전체 흐름. 브리지 실패는 앱 시작을 막지 않고 로그만 남깁니다.
+- 실제 브라우저(Edge 154): 임시 프로필로 `--load-extension` 실행 후 확장 페이지가 `chrome-extension://dfobjphjganlegjomdgmaaphbjcgpoea/popup.html`로 열렸습니다. 즉 실제 브라우저가 계산한 확장 ID가 브리지 상수와 일치합니다. 이어서 토큰 저장 -> `연결됨 · school-collect-automation-bridge 0.2.0` -> `현재 화면 등록` -> `'p02-browser-check' 버튼을 등록했습니다.`까지 확인하고, 레시피 파일에 항목이 기록된 것을 대조한 뒤 원래 내용(0바이트)으로 되돌렸습니다. 검증 스크립트는 `.local`(비추적)에 둡니다.
+- 남은 한계: 위 검증은 팝업 페이지를 탭으로 열어 수행했고 등록 대상은 브리지 origin(`127.0.0.1:43110`) 페이지였습니다. 도구 모음 아이콘 클릭으로 여는 실제 팝업과 `activeTab` 부여 경로, 실제 업무 사이트 주소 등록은 아직 사람이 직접 확인하지 않았습니다. 또한 현재 Chrome 153은 자동화용 `--load-extension`을 무시해서(확장이 로드되지 않음) 검증은 Edge로 수행했습니다.
 
 ## 3단계: 결정론적 자동입력 레시피
 

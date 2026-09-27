@@ -162,7 +162,8 @@ Stage 3 미검증 항목:
 - 브리지는 `127.0.0.1:43110`에만 열리고 토큰(`automation-bridge.token`)과 고정 확장 ID origin(`dfobjphjganlegjomdgmaaphbjcgpoea`)을 함께 확인합니다. 제공하는 것은 상태 확인과 바로가기 생성뿐이며 URL 열기·DOM 접근·임의 JavaScript 실행은 없습니다.
 - 확장 권한은 `activeTab`, `storage`, `http://127.0.0.1:43110/*`뿐이고, 등록 값은 현재 탭의 제목과 주소입니다. `scripts/tests/test_extension_contract.py`가 공개 키에서 확장 ID를 다시 계산해 브리지 상수와 대조합니다.
 - 검증: Rust fmt/clippy/테스트(워크스페이스 46개), 앱 typecheck/build, foundation 24개, repository guard, 실제 소켓 스모크(200/201/400/401/403), 실제 Tauri 창에서 연결 카드와 브리지 생성 버튼 표시.
-- 아직 아님: 실제 Chrome/Edge에서 확장을 로드해 팝업으로 등록하는 흐름, develop 통합. 상세는 [AUTOMATION_DESIGN.md](AUTOMATION_DESIGN.md)의 2단계 절에 있습니다.
+- 검증(실제 브라우저, Edge 154): 임시 프로필에 확장을 로드해 실제 ID가 `dfobjphjganlegjomdgmaaphbjcgpoea`로 열리는 것, 토큰 저장·연결 확인·현재 화면 등록으로 레시피가 기록되는 것을 확인하고 검증 레시피는 되돌렸습니다.
+- 아직 아님: 도구 모음 아이콘 클릭 팝업과 `activeTab` 부여 경로, 실제 업무 사이트 주소 등록, develop 통합. 상세는 [AUTOMATION_DESIGN.md](AUTOMATION_DESIGN.md)의 2단계 절에 있습니다.
 
 ## 배포 기반
 

@@ -60,7 +60,8 @@
 검증한 것과 아직 아닌 것:
 
 - 통과: Rust 단위·통합 테스트(워크스페이스 46개), clippy `-D warnings`, 앱 typecheck/build, foundation 24개, repository guard. 실제 소켓 스모크에서 상태 200, 등록 201과 파일 저장, 자격증명 포함 URL 400, 토큰 없음 401, 다른 origin 403을 확인했습니다. 실제 Tauri 창에서 연결 카드 렌더링과 브리지로 만든 버튼이 목록에 나타나는 것도 확인했습니다.
-- 아직 아님: 실제 Chrome/Edge에서 확장을 로드해 팝업으로 등록하는 흐름은 검증하지 않았습니다. 고정 ID와 매니페스트 권한은 `scripts/tests/test_extension_contract.py`가 공개 키에서 ID를 다시 계산해 브리지 상수와 대조합니다.
+- 통과(실제 브라우저, Edge 154): 확장이 `chrome-extension://dfobjphjganlegjomdgmaaphbjcgpoea/popup.html`로 로드됐고, 토큰 저장 -> 연결 확인 -> 현재 화면 등록까지 성공해 레시피 파일에 기록된 뒤 원래 내용으로 되돌렸습니다. 고정 ID와 매니페스트 권한은 `scripts/tests/test_extension_contract.py`가 공개 키에서 ID를 다시 계산해 브리지 상수와 대조합니다.
+- 아직 아님: 도구 모음 아이콘 클릭으로 여는 실제 팝업·`activeTab` 부여 경로와 실제 업무 사이트 주소 등록은 사람이 직접 확인하지 않았습니다. 검증은 팝업 페이지를 탭으로 열어 수행했고 대상은 브리지 origin 페이지였습니다.
 
 ## 확장·실행 원칙
 
