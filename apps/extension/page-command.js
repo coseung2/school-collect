@@ -104,6 +104,21 @@ export function automationPageCommand(command) {
     return true;
   }
 
+  /**
+   * 다시 읽은 값이 의도한 값과 같은지 봅니다. select는 표시 이름으로 고르면
+   * 값이 option value로 바뀌므로 표시 이름도 같은 것으로 인정합니다.
+   */
+  function valueMatches(element, desired) {
+    if (readValue(element) === desired) {
+      return true;
+    }
+    if (tagOf(element) === "select") {
+      const option = element.options ? element.options[element.selectedIndex] : null;
+      return Boolean(option) && (option.textContent || "").trim() === desired;
+    }
+    return false;
+  }
+
   function labelTextFor(element) {
     if (element.labels && element.labels.length === 1) {
       const text = (element.labels[0].textContent || "").trim();
@@ -352,6 +367,185 @@ export function automationPageCommand(command) {
     };
   }
 
+  const SUGGESTION_LIMIT = 6;
+  const SUGGESTION_FIELD_LIMIT = 40;
+
+  /** Locators the recipe format accepts, in the order we prefer them. */
+  function uniqueLocatorFor(element) {
+    const candidates = candidateLocators(element).filter(
+      (candidate) => candidate.matchCount === 1,
+    );
+    for (const kind of ["id", "name", "label", "css"]) {
+      const found = candidates.find((candidate) => candidate.kind === kind);
+      if (found) {
+        return { kind: found.kind, value: found.value };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 실행기가 값을 쓸 수 있는 컨트롤인지 확인합니다. 값은 읽지 않고 위치만
+   * 봅니다. 비밀번호·파일·버튼류는 isWritable이 이미 제외합니다.
+   */
+  function isSuggestableControl(element) {
+    return (
+      isFormControl(element) && !element.disabled && !element.readOnly && isWritable(element)
+    );
+  }
+
+  /** 표·양식의 기본 이름입니다. 값이 아니라 화면 구조(이름표)에서 옵니다. */
+  function suggestionName(element, fallback) {
+    const text = (
+      element.getAttribute("aria-label") ||
+      (element.querySelector("legend, caption")?.textContent ?? "").trim() ||
+      element.id ||
+      document.title ||
+      fallback
+    ).trim();
+    return (text || fallback).slice(0, 80);
+  }
+
+  /**
+   * 저장하면 바로 실행할 수 있는 자동입력 레시피만 제안합니다. 값은 읽지 않고
+   * 위치만 확인하며, 비밀번호 칸이 있는 로그인 양식은 건너뜁니다.
+   */
+  function suggestFillRecipes() {
+    const suggestions = [];
+    document.querySelectorAll("form").forEach((form, index) => {
+      if (form.querySelector('input[type="password"]')) {
+        return;
+      }
+      const controls = Array.from(form.querySelectorAll("input, select, textarea")).filter(
+        isSuggestableControl,
+      );
+      const fields = [];
+      for (const control of controls) {
+        if (fields.length >= SUGGESTION_FIELD_LIMIT) {
+          return;
+        }
+        const locator = uniqueLocatorFor(control);
+        if (!locator) {
+          continue;
+        }
+        const label = (
+          labelTextFor(control) ||
+          control.getAttribute("name") ||
+          control.id ||
+          `필드 ${fields.length + 1}`
+        )
+          .trim()
+          .slice(0, 80);
+        fields.push({ label, locator });
+      }
+      if (fields.length === 0) {
+        return;
+      }
+      suggestions.push({
+        kind: "fill",
+        name: suggestionName(form, `양식 ${index + 1}`),
+        summary: `필드 ${fields.length}개`,
+        payload: { fields },
+      });
+    });
+    return suggestions;
+  }
+
+  /**
+   * 표 레시피는 저장한 머리글로 열을 다시 찾습니다. 지금 표에서 그 규칙이
+   * 그대로 성립하고 모든 칸에 입력 컨트롤이 하나씩 있을 때만 제안합니다.
+   */
+  function suggestTableRecipes() {
+    const suggestions = [];
+    document.querySelectorAll("table").forEach((table) => {
+      const analysis = analyzeTableElement(table);
+      if (
+        analysis.ok !== true ||
+        analysis.dataRows.length < 2 ||
+        analysis.missingEditors > 0
+      ) {
+        return;
+      }
+      const locator = cssPathFor(table);
+      if (resolveAll("css", locator).length !== 1) {
+        return;
+      }
+      const payload = {
+        table: {
+          locator: { kind: "css", value: locator },
+          identityHeaders: analysis.identityHeaders,
+          dateLabels: analysis.dateLabels,
+        },
+      };
+      const columns = matchStoredColumns(analysis, payload.table);
+      if (!columns) {
+        return;
+      }
+      const { rows, missingEditors } = rowsForColumns(analysis, columns);
+      if (rows.length !== analysis.dataRows.length || missingEditors > 0) {
+        return;
+      }
+      const keys = rows.map((row) => row.identities.join("\u0000"));
+      if (new Set(keys).size !== keys.length) {
+        return;
+      }
+      suggestions.push({
+        kind: "table_fill",
+        name: suggestionName(table, "표"),
+        summary: `행 ${rows.length}개 · 날짜 ${payload.table.dateLabels.length}개`,
+        payload,
+      });
+    });
+    return suggestions;
+  }
+
+  /**
+   * 감시 레시피는 목록 위치와 행 안 식별자 위치만 저장합니다. 번호·접수·결재
+   * 같은 식별자 열에서 값이 행마다 하나씩, 중복 없이 읽힐 때만 제안합니다.
+   * 학생 이름·사유 같은 본문 열은 식별자로 제안하지 않습니다.
+   */
+  function suggestWatchRecipes() {
+    const suggestions = [];
+    document.querySelectorAll("table").forEach((table) => {
+      const found = headerRowOf(table);
+      if (found.ok !== true) {
+        return;
+      }
+      const locator = cssPathFor(table);
+      if (resolveAll("css", locator).length !== 1) {
+        return;
+      }
+      const dataRows = found.rows.length - found.headerRowIndex - 1;
+      if (dataRows < 3) {
+        return;
+      }
+      for (let index = 0; index < found.headers.length; index += 1) {
+        const header = found.headers[index].toLowerCase();
+        if (!WATCH_IDENTITY_WORDS.some((word) => header.indexOf(word) !== -1)) {
+          continue;
+        }
+        const payload = {
+          watch: {
+            list: { kind: "css", value: `${locator} > tbody > tr` },
+            identity: { kind: "css", value: `td:nth-of-type(${index + 1})` },
+          },
+        };
+        const evaluated = evaluateWatch(payload.watch);
+        if (evaluated.ok !== true || evaluated.rowCount < 3) {
+          continue;
+        }
+        suggestions.push({
+          kind: "watch",
+          name: suggestionName(table, "목록"),
+          summary: `행 ${evaluated.rowCount}개 · 식별 ${found.headers[index]}`,
+          payload,
+        });
+        return;
+      }
+    });
+    return suggestions;
+  }
+
   const IDENTITY_HEADER_WORDS = [
     "학년도",
     "학년",
@@ -367,6 +561,19 @@ export function automationPageCommand(command) {
     "name",
   ];
   const DATE_HEADER_PATTERN = /^[0-9]{1,2}([.\-/][0-9]{1,2})?\.?$/;
+  const WATCH_IDENTITY_WORDS = [
+    "번호",
+    "학번",
+    "순번",
+    "연번",
+    "접수",
+    "신청",
+    "문서",
+    "결재",
+    "코드",
+    "no",
+    "id",
+  ];
 
   function headerTextOf(cell) {
     return ((cell && cell.textContent) || "").replace(/\s+/g, " ").trim();
@@ -382,24 +589,34 @@ export function automationPageCommand(command) {
     });
   }
 
-  function analyzeTableElement(table) {
+  /** 머리글 행(th 2개 이상)을 찾습니다. 값은 읽지 않습니다. */
+  function headerRowOf(table) {
     const rows = Array.from(table.querySelectorAll("tr"));
     if (rows.length < 2) {
       return { ok: false, reason: "table_too_small" };
     }
-
-    let headerRowIndex = -1;
     for (let index = 0; index < rows.length; index += 1) {
       if (rows[index].querySelectorAll("th").length >= 2) {
-        headerRowIndex = index;
-        break;
+        return {
+          ok: true,
+          rows,
+          headerRowIndex: index,
+          headers: Array.from(rows[index].children).map(headerTextOf),
+        };
       }
     }
-    if (headerRowIndex === -1) {
-      return { ok: false, reason: "header_row_missing" };
-    }
+    return { ok: false, reason: "header_row_missing" };
+  }
 
-    const headers = Array.from(rows[headerRowIndex].children).map(headerTextOf);
+  /**
+   * 표의 뼈대(머리글 행과 행 식별 열)만 읽습니다. 값은 읽지 않습니다.
+   */
+  function analyzeTableStructure(table) {
+    const found = headerRowOf(table);
+    if (found.ok !== true) {
+      return found;
+    }
+    const { rows, headerRowIndex, headers } = found;
 
     const identityColumns = [];
     for (let index = 0; index < headers.length; index += 1) {
@@ -418,6 +635,26 @@ export function automationPageCommand(command) {
     if (identityColumns.length === 0) {
       return { ok: false, reason: "identity_columns_missing" };
     }
+
+    return {
+      ok: true,
+      headers,
+      headerRowIndex,
+      rows,
+      identityColumns,
+    };
+  }
+
+  /**
+   * Table shape for a fill recipe: the structure plus the date columns and the
+   * editor cell of every data row.
+   */
+  function analyzeTableElement(table) {
+    const structure = analyzeTableStructure(table);
+    if (structure.ok !== true) {
+      return structure;
+    }
+    const { headers, headerRowIndex, rows, identityColumns } = structure;
 
     const dateColumns = [];
     for (let index = 0; index < headers.length; index += 1) {
@@ -636,6 +873,24 @@ export function automationPageCommand(command) {
     });
   }
 
+  /**
+   * 규칙 기반 실행기가 그대로 실행할 수 있는 레시피만 골라 제안합니다.
+   * 페이지 내용(값)은 읽지 않고, 저장·전송도 사용자가 확인한 뒤에만 합니다.
+   */
+  if (command.op === "suggest-recipes") {
+    const suggestions = [
+      ...suggestFillRecipes(),
+      ...suggestTableRecipes(),
+      ...suggestWatchRecipes(),
+    ]
+      .slice(0, SUGGESTION_LIMIT)
+      .map((suggestion) => ({
+        ...suggestion,
+        key: suggestion.kind + "\u0000" + JSON.stringify(suggestion.payload),
+      }));
+    return { ok: true, url: location.href, title: document.title, suggestions };
+  }
+
   if (command.op === "watch-scan") {
     const evaluated = evaluateWatch(command.watch);
     if (evaluated.ok !== true) {
@@ -707,7 +962,7 @@ export function automationPageCommand(command) {
       const result = results[item.index];
       result.writtenValue = desired;
       result.readBack = readValue(item.element);
-      result.verified = written && result.readBack === desired;
+      result.verified = written && valueMatches(item.element, desired);
     }
 
     return { ok: true, url: location.href, title: document.title, results };
@@ -818,7 +1073,7 @@ export function automationPageCommand(command) {
         previousValue: item.previousValue,
         writtenValue: item.desired,
         readBack,
-        verified: written && readBack === item.desired,
+        verified: written && valueMatches(item.element, item.desired),
       };
     });
     return { ok: true, url: location.href, title: document.title, results };

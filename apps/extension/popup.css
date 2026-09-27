@@ -174,3 +174,29 @@ button.link {
 .value-row span {
   font-weight: 600;
 }
+
+.fields li.suggestion {
+  display: block;
+  padding: 10px 0;
+}
+
+.suggestion-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.suggestion-head .hint {
+  margin: 0;
+}
+
+.badge {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #e8eefb;
+  color: #1f5fbf;
+  font-size: 11px;
+  font-weight: 600;
+}
