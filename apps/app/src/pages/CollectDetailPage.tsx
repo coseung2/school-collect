@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   Button,
   Card,
+  Checkbox,
   EmptyState,
   FormField,
   ListRow,
@@ -555,27 +556,24 @@ export function CollectDetailPage({
                   const selectable = member.role !== "viewer";
                   return (
                     <li key={member.userId}>
-                      <label className="app-check">
-                        <input
-                          checked={targetDrafts.includes(member.userId)}
-                          disabled={!selectable}
-                          onChange={(event) =>
-                            setTargetDrafts((current) => {
-                              if (!current) {
-                                return current;
-                              }
-                              return event.target.checked
-                                ? [...current, member.userId]
-                                : current.filter((id) => id !== member.userId);
-                            })
-                          }
-                          type="checkbox"
-                        />
-                        <span>{member.displayName ?? member.userId}</span>
-                      </label>
-                      <span className="app-check__meta">
-                        {selectable ? roleOf(member.role) : `${roleOf(member.role)} · 대상 아님`}
-                      </span>
+                      <Checkbox
+                        checked={targetDrafts.includes(member.userId)}
+                        disabled={!selectable}
+                        label={member.displayName ?? member.userId}
+                        meta={
+                          selectable ? roleOf(member.role) : `${roleOf(member.role)} · 대상 아님`
+                        }
+                        onChange={(event) =>
+                          setTargetDrafts((current) => {
+                            if (!current) {
+                              return current;
+                            }
+                            return event.target.checked
+                              ? [...current, member.userId]
+                              : current.filter((id) => id !== member.userId);
+                          })
+                        }
+                      />
                     </li>
                   );
                 })}

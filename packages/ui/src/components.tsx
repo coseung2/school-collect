@@ -3,9 +3,11 @@ import {
   useId,
   type ButtonHTMLAttributes,
   type HTMLAttributes,
+  type InputHTMLAttributes,
   type KeyboardEvent,
   type LiHTMLAttributes,
   type ReactNode,
+  type SelectHTMLAttributes,
   type SVGProps,
 } from "react";
 
@@ -465,6 +467,77 @@ export function FormField({
     </div>
   );
 }
+
+export interface SelectOption {
+  value: string;
+  label: string;
+  disabled?: boolean;
+}
+
+export interface SelectProps
+  extends Omit<SelectHTMLAttributes<HTMLSelectElement>, "children"> {
+  options: SelectOption[];
+  invalid?: boolean;
+}
+
+/**
+ * Native `<select>` with design-system styling. Keeps platform keyboard and
+ * screen-reader behaviour; pair with `FormField` for the visible label.
+ */
+export const Select = forwardRef<HTMLSelectElement, SelectProps>(
+  function Select({ className, invalid = false, options, ...props }, ref) {
+    return (
+      <span className={cx("sc-select", className)}>
+        <select
+          aria-invalid={invalid || undefined}
+          className="sc-select__control"
+          ref={ref}
+          {...props}
+        >
+          {options.map((option) => (
+            <option
+              disabled={option.disabled}
+              key={option.value}
+              value={option.value}
+            >
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <Icon className="sc-select__chevron" name="chevron-down" size={16} />
+      </span>
+    );
+  },
+);
+
+export interface CheckboxProps
+  extends Omit<InputHTMLAttributes<HTMLInputElement>, "type" | "children"> {
+  label: ReactNode;
+  meta?: ReactNode;
+}
+
+/**
+ * Native checkbox wrapped in its label so the whole row is the hit target
+ * (at least 36px tall, 44px on coarse pointers).
+ */
+export const Checkbox = forwardRef<HTMLInputElement, CheckboxProps>(
+  function Checkbox({ className, label, meta, ...props }, ref) {
+    return (
+      <label className={cx("sc-checkbox", className)}>
+        <input
+          className="sc-checkbox__control"
+          ref={ref}
+          type="checkbox"
+          {...props}
+        />
+        <span className="sc-checkbox__label">
+          {label}
+          {meta ? <span className="sc-checkbox__meta">{meta}</span> : null}
+        </span>
+      </label>
+    );
+  },
+);
 
 export interface NavigationItem {
   id: string;

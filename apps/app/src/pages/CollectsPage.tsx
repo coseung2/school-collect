@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react
 import {
   Button,
   Card,
+  Checkbox,
   EmptyState,
   FormField,
   ListRow,
@@ -314,26 +315,19 @@ export function CollectsPage({
               <ul className="app-check-list">
                 {members.map((member) => (
                   <li key={member.userId}>
-                    <label className="app-check">
-                      <input
-                        checked={selected.includes(member.userId)}
-                        onChange={(event) => {
-                          const checked = event.target.checked;
-                          setSelected((current) =>
-                            checked
-                              ? [...current, member.userId]
-                              : current.filter((id) => id !== member.userId),
-                          );
-                        }}
-                        type="checkbox"
-                      />
-                      <span>
-                        {member.displayName ?? member.userId}
-                        <span className="app-check__meta">
-                          {roleOf(member.role)}
-                        </span>
-                      </span>
-                    </label>
+                    <Checkbox
+                      checked={selected.includes(member.userId)}
+                      label={member.displayName ?? member.userId}
+                      meta={roleOf(member.role)}
+                      onChange={(event) => {
+                        const checked = event.target.checked;
+                        setSelected((current) =>
+                          checked
+                            ? [...current, member.userId]
+                            : current.filter((id) => id !== member.userId),
+                        );
+                      }}
+                    />
                   </li>
                 ))}
               </ul>
