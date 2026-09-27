@@ -18,7 +18,7 @@ School Collect는 학교의 반복 행정업무를 수합·검증·자동화하�
 | Code Design System / AppShell | Stage 5 완료 |
 | Rust/Axum API | 실행 기반 CI 검증 완료 |
 | PostgreSQL 18 | migration + readiness CI 검증 완료 |
-| 인증/권한 | Supabase Auth 토큰 검증·membership RBAC 기본 흐름 통합 |
+| 인증/권한 | Supabase Auth 토큰 검증·membership RBAC 기본 흐름 통합 + 키 회전·장애·역할·요청 ID 부정 테스트와 `/metrics` |
 | 학교업무 | 수합 기본 흐름과 항목·대상·현황·구성원 초대 통합 |
 | 개인기능 | 로컬 바로가기·개인 화면·브라우저 확장·로컬 브리지·자동입력 레시피 엔진·학생 × 날짜 표 입력·새 항목 감시 통합 |
 | 보안 정리 | 추적 파일 정리 완료. Git history 정리는 별도 판단 |
