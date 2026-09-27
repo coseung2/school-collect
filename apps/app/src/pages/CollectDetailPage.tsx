@@ -3,6 +3,7 @@ import {
   Button,
   Card,
   EmptyState,
+  FormField,
   ListRow,
   ListSurface,
   LoadingState,
@@ -13,9 +14,14 @@ import {
   closeCollect,
   fetchCollect,
   fetchCollectStatus,
+  listMembers,
   publishCollect,
+  updateCollectAssignments,
+  updateCollectItems,
   type CollectDetail,
+  type CollectItemInput,
   type CollectStatus,
+  type Member,
 } from "../api";
 import {
   canManage,
@@ -48,6 +54,11 @@ export function CollectDetailPage({
   const [statusError, setStatusError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [itemDrafts, setItemDrafts] = useState<CollectItemInput[] | null>(null);
+  const [members, setMembers] = useState<Member[] | null>(null);
+  const [targetDrafts, setTargetDrafts] = useState<string[] | null>(null);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [editNotice, setEditNotice] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -119,6 +130,7 @@ export function CollectDetailPage({
 
   const canPublish = detail.status === "draft";
   const canClose = detail.status === "published";
+  const editable = detail.status !== "closed";
   const hasItems = detail.items.length > 0;
   const submitted = (status?.rows ?? []).filter(
     (row) => row.submissionStatus === "submitted",
@@ -137,6 +149,105 @@ export function CollectDetailPage({
     } catch (caught) {
       setError(caught);
       setNotice(null);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** 항목 편집은 현재 목록을 초안으로 복사해 시작합니다. */
+  function startItemEdit() {
+    setItemDrafts(
+      detail
+        ? detail.items
+            .slice()
+            .sort((left, right) => left.position - right.position)
+            .map((item) => ({
+              key: item.key,
+              label: item.label,
+              required: item.required,
+            }))
+        : [],
+    );
+    setEditError(null);
+    setEditNotice(null);
+  }
+
+  async function saveItems() {
+    if (!detail || !itemDrafts) {
+      return;
+    }
+    const keys = itemDrafts.map((item) => item.key.trim());
+    if (itemDrafts.some((item) => item.label.trim() === "")) {
+      setEditError("항목 이름을 입력하세요.");
+      return;
+    }
+    if (keys.some((key) => !/^[a-z][a-z0-9_]*$/.test(key))) {
+      setEditError(
+        "항목 키는 영문 소문자로 시작하고 소문자·숫자·밑줄만 쓸 수 있습니다(예: note).",
+      );
+      return;
+    }
+    if (new Set(keys).size !== keys.length) {
+      setEditError("항목 키는 서로 달라야 합니다.");
+      return;
+    }
+    setBusy(true);
+    setEditError(null);
+    setEditNotice(null);
+    try {
+      const next = await updateCollectItems(
+        token,
+        tenantId,
+        detail.id,
+        detail.version,
+        itemDrafts,
+      );
+      setDetail(next);
+      setItemDrafts(null);
+      setEditNotice("항목을 저장했습니다.");
+      setNotice("항목을 저장했습니다.");
+    } catch (caught) {
+      setEditError(messageOf(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** 대상 편집은 구성원 목록과 현재 배정을 함께 불러와 시작합니다. */
+  async function startTargetEdit() {
+    setEditError(null);
+    setEditNotice(null);
+    try {
+      const loaded = members ?? (await listMembers(token, tenantId)).members;
+      setMembers(loaded);
+      setTargetDrafts((status?.rows ?? []).map((row) => row.userId));
+    } catch (caught) {
+      setEditError(messageOf(caught));
+    }
+  }
+
+  async function saveTargets() {
+    if (!detail || !targetDrafts) {
+      return;
+    }
+    setBusy(true);
+    setEditError(null);
+    setEditNotice(null);
+    try {
+      const next = await updateCollectAssignments(
+        token,
+        tenantId,
+        detail.id,
+        detail.version,
+        targetDrafts,
+      );
+      setDetail(next);
+      setTargetDrafts(null);
+      setStatus(await fetchCollectStatus(token, tenantId, detail.id));
+      setEditNotice("대상을 저장했습니다.");
+      setNotice("대상을 저장했습니다.");
+    } catch (caught) {
+      setEditError(messageOf(caught));
     } finally {
       setBusy(false);
     }
@@ -217,6 +328,11 @@ export function CollectDetailPage({
       <section className="app-section">
         <div className="app-section-heading">
           <h2>항목</h2>
+          {editable && !itemDrafts ? (
+            <Button onClick={startItemEdit} size="small" variant="secondary">
+              항목 편집
+            </Button>
+          ) : null}
         </div>
         {detail.items.length === 0 ? (
           <EmptyState
@@ -237,15 +353,223 @@ export function CollectDetailPage({
               ))}
           </ListSurface>
         )}
+        {itemDrafts ? (
+          <Card>
+            <div className="app-section-heading">
+              <h3>항목 편집</h3>
+              <p className="app-card-description">
+                이름과 필수 여부를 바꾸고 항목을 더할 수 있습니다. 답변이 있는 항목은 서버가
+                삭제를 거부합니다.
+              </p>
+            </div>
+            <ul className="app-item-editor">
+              {itemDrafts.map((item, index) => (
+                <li className="app-item-editor__row" key={`${item.key}-${index}`}>
+                  <FormField htmlFor={`edit-item-label-${index}`} label={`항목 ${index + 1}`}>
+                    <input
+                      id={`edit-item-label-${index}`}
+                      onChange={(event) =>
+                        setItemDrafts((current) =>
+                          current
+                            ? current.map((entry, position) =>
+                                position === index
+                                  ? { ...entry, label: event.target.value }
+                                  : entry,
+                              )
+                            : current,
+                        )
+                      }
+                      value={item.label}
+                    />
+                  </FormField>
+                  <FormField
+                    hint={
+                      detail.items.some((existing) => existing.key === item.key)
+                        ? "기존 항목의 키는 바꿀 수 없습니다."
+                        : "예: note"
+                    }
+                    htmlFor={`edit-item-key-${index}`}
+                    label="키"
+                  >
+                    <input
+                      disabled={detail.items.some((existing) => existing.key === item.key)}
+                      id={`edit-item-key-${index}`}
+                      onChange={(event) =>
+                        setItemDrafts((current) =>
+                          current
+                            ? current.map((entry, position) =>
+                                position === index
+                                  ? { ...entry, key: event.target.value }
+                                  : entry,
+                              )
+                            : current,
+                        )
+                      }
+                      value={item.key}
+                    />
+                  </FormField>
+                  <label className="app-check">
+                    <input
+                      checked={item.required}
+                      onChange={(event) =>
+                        setItemDrafts((current) =>
+                          current
+                            ? current.map((entry, position) =>
+                                position === index
+                                  ? { ...entry, required: event.target.checked }
+                                  : entry,
+                              )
+                            : current,
+                        )
+                      }
+                      type="checkbox"
+                    />
+                    필수
+                  </label>
+                  <Button
+                    onClick={() =>
+                      setItemDrafts((current) =>
+                        current ? current.filter((_, position) => position !== index) : current,
+                      )
+                    }
+                    size="small"
+                    type="button"
+                    variant="quiet"
+                  >
+                    삭제
+                  </Button>
+                </li>
+              ))}
+            </ul>
+            {editError ? (
+              <p className="app-form__error" role="alert">
+                {editError}
+              </p>
+            ) : null}
+            {editNotice ? <p className="app-form__notice">{editNotice}</p> : null}
+            <div className="app-row-actions">
+              <Button
+                onClick={() =>
+                  setItemDrafts((current) => [
+                    ...(current ?? []),
+                    { key: "", label: "", required: false },
+                  ])
+                }
+                size="small"
+                type="button"
+                variant="secondary"
+              >
+                항목 추가
+              </Button>
+              <Button disabled={busy} loading={busy} onClick={() => void saveItems()} size="small">
+                항목 저장
+              </Button>
+              <Button
+                onClick={() => {
+                  setItemDrafts(null);
+                  setEditError(null);
+                  setEditNotice(null);
+                }}
+                size="small"
+                type="button"
+                variant="quiet"
+              >
+                취소
+              </Button>
+            </div>
+          </Card>
+        ) : null}
       </section>
 
       <section className="app-section">
         <div className="app-section-heading">
           <h2>제출 현황</h2>
-          <Status tone="info">
-            {status?.submitted ?? 0}/{status?.assigned ?? 0}
-          </Status>
+          <div className="app-row-actions">
+            {editable && !targetDrafts ? (
+              <Button onClick={() => void startTargetEdit()} size="small" variant="secondary">
+                대상 편집
+              </Button>
+            ) : null}
+            <Status tone="info">
+              {status?.submitted ?? 0}/{status?.assigned ?? 0}
+            </Status>
+          </div>
         </div>
+        {targetDrafts ? (
+          <Card>
+            <div className="app-section-heading">
+              <h3>대상 편집</h3>
+              <p className="app-card-description">
+                제출할 구성원을 고릅니다. 이미 작성한 구성원은 서버가 제외를 거부하고, viewer는
+                대상이 될 수 없습니다.
+              </p>
+            </div>
+            {members === null ? (
+              <LoadingState description="구성원을 불러오고 있습니다." title="불러오는 중" />
+            ) : members.length === 0 ? (
+              <EmptyState description="이 학교에는 아직 구성원이 없습니다." title="구성원 없음" />
+            ) : (
+              <ul className="app-check-list">
+                {members.map((member) => {
+                  const selectable = member.role !== "viewer";
+                  return (
+                    <li key={member.userId}>
+                      <label className="app-check">
+                        <input
+                          checked={targetDrafts.includes(member.userId)}
+                          disabled={!selectable}
+                          onChange={(event) =>
+                            setTargetDrafts((current) => {
+                              if (!current) {
+                                return current;
+                              }
+                              return event.target.checked
+                                ? [...current, member.userId]
+                                : current.filter((id) => id !== member.userId);
+                            })
+                          }
+                          type="checkbox"
+                        />
+                        <span>{member.displayName ?? member.userId}</span>
+                      </label>
+                      <span className="app-check__meta">
+                        {selectable ? roleOf(member.role) : `${roleOf(member.role)} · 대상 아님`}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+            {editError ? (
+              <p className="app-form__error" role="alert">
+                {editError}
+              </p>
+            ) : null}
+            {editNotice ? <p className="app-form__notice">{editNotice}</p> : null}
+            <div className="app-row-actions">
+              <Button
+                disabled={busy}
+                loading={busy}
+                onClick={() => void saveTargets()}
+                size="small"
+              >
+                대상 저장
+              </Button>
+              <Button
+                onClick={() => {
+                  setTargetDrafts(null);
+                  setEditError(null);
+                  setEditNotice(null);
+                }}
+                size="small"
+                type="button"
+                variant="quiet"
+              >
+                취소
+              </Button>
+            </div>
+          </Card>
+        ) : null}
         {!status ? (
           statusError ? (
             <RequestFailure

@@ -17,11 +17,12 @@ use school_collect_contracts::{
     CreateInvitationRequest, CreateInvitationResponse, CreateTenantRequest, InvitationDto,
     InvitationListResponse, MemberDto, MemberListResponse, MembershipDto, PrincipalResponse,
     SaveSubmissionRequest, ServiceStatus, SessionResponse, SubmissionDto, TenantListResponse,
-    UserDto, VersionConflictResponse,
+    UpdateCollectAssignmentsRequest, UpdateCollectItemsRequest, UserDto, VersionConflictResponse,
 };
 use school_collect_db::{
     AcceptInvitationOutcome, CollectRecord, CreateInvitationOutcome, InvitationRecord,
-    NewCollectItem, SaveDraftOutcome, SubmitOutcome, TransitionOutcome, UserRecord,
+    NewCollectItem, SaveDraftOutcome, SubmitOutcome, TransitionOutcome, UpdateAssignmentsOutcome,
+    UpdateItemsOutcome, UserRecord,
 };
 use school_collect_domain::MembershipRole;
 use school_collect_observability::Metrics;
@@ -146,6 +147,11 @@ pub fn router(state: AppState, cors_origin: HeaderValue, auth_state: AuthState) 
         .route("/v1/assignments", get(list_assignments))
         .route("/v1/collects/{collect_id}/publish", post(publish_collect))
         .route("/v1/collects/{collect_id}/close", post(close_collect))
+        .route("/v1/collects/{collect_id}/items", put(update_collect_items))
+        .route(
+            "/v1/collects/{collect_id}/assignments",
+            put(update_collect_assignments),
+        )
         .route("/v1/collects/{collect_id}/submission", put(save_submission))
         .route(
             "/v1/collects/{collect_id}/submission/submit",
@@ -1025,48 +1031,10 @@ async fn create_collect(
         },
     };
 
-    if body.items.len() > 50 {
-        return failure(
-            &headers,
-            StatusCode::BAD_REQUEST,
-            "too_many_items",
-            "a collect can define at most 50 items",
-        );
-    }
-    let mut items: Vec<NewCollectItem> = Vec::with_capacity(body.items.len());
-    for item in &body.items {
-        let key = item.key.trim();
-        if !is_valid_item_key(key) {
-            return failure(
-                &headers,
-                StatusCode::BAD_REQUEST,
-                "invalid_item_key",
-                "item keys must match ^[a-z][a-z0-9_]*$",
-            );
-        }
-        let label = item.label.trim();
-        if label.is_empty() || label.chars().count() > 120 {
-            return failure(
-                &headers,
-                StatusCode::BAD_REQUEST,
-                "invalid_item_label",
-                "item labels must be between 1 and 120 characters",
-            );
-        }
-        if items.iter().any(|existing| existing.key == key) {
-            return failure(
-                &headers,
-                StatusCode::BAD_REQUEST,
-                "duplicate_item_key",
-                "item keys must be unique within a collect",
-            );
-        }
-        items.push(NewCollectItem {
-            key: key.to_owned(),
-            label: label.to_owned(),
-            required: item.required,
-        });
-    }
+    let items = match collect_items_from(&headers, &body.items) {
+        Ok(items) => items,
+        Err(response) => return response,
+    };
 
     let mut assignees: Vec<Uuid> = Vec::with_capacity(body.assignee_user_ids.len());
     for raw in &body.assignee_user_ids {
@@ -1141,24 +1109,35 @@ async fn collect_detail(
         );
     };
 
+    collect_detail_response(&state, &headers, tenant_id, collect_id, user.id).await
+}
+
+/// Builds the collect detail payload for an already authorized caller.
+async fn collect_detail_response(
+    state: &AppState,
+    headers: &HeaderMap,
+    tenant_id: Uuid,
+    collect_id: Uuid,
+    user_id: Uuid,
+) -> Response {
     let record = match school_collect_db::get_collect(&state.pool, tenant_id, collect_id).await {
         Ok(Some(record)) => record,
         Ok(None) => {
             return failure(
-                &headers,
+                headers,
                 StatusCode::NOT_FOUND,
                 "not_found",
                 "the collect was not found in this school",
             );
         }
-        Err(_) => return storage_failure(&headers),
+        Err(_) => return storage_failure(headers),
     };
 
     let submission = match school_collect_db::get_submission(
         &state.pool,
         tenant_id,
         collect_id,
-        user.id,
+        user_id,
     )
     .await
     {
@@ -1169,7 +1148,7 @@ async fn collect_detail(
             submitted_at: record.submitted_at.map(timestamp),
             updated_at: timestamp(record.updated_at),
         }),
-        Err(_) => return storage_failure(&headers),
+        Err(_) => return storage_failure(headers),
     };
 
     let items =
@@ -1183,13 +1162,13 @@ async fn collect_detail(
                     position: row.position,
                 })
                 .collect(),
-            Err(_) => return storage_failure(&headers),
+            Err(_) => return storage_failure(headers),
         };
 
     let progress =
         match school_collect_db::collect_progress(&state.pool, tenant_id, collect_id).await {
             Ok(value) => value,
-            Err(_) => return storage_failure(&headers),
+            Err(_) => return storage_failure(headers),
         };
 
     Json(CollectDetailResponse {
@@ -1452,6 +1431,235 @@ async fn close_collect(
     .await
 }
 
+/// Shared validation for the item list of a collect.
+#[allow(clippy::result_large_err)] // the error is the HTTP response we return
+fn collect_items_from(
+    headers: &HeaderMap,
+    input: &[school_collect_contracts::CollectItemInput],
+) -> Result<Vec<NewCollectItem>, Response> {
+    if input.len() > 50 {
+        return Err(failure(
+            headers,
+            StatusCode::BAD_REQUEST,
+            "too_many_items",
+            "a collect can define at most 50 items",
+        ));
+    }
+
+    let mut items: Vec<NewCollectItem> = Vec::with_capacity(input.len());
+    for item in input {
+        let key = item.key.trim();
+        if !is_valid_item_key(key) {
+            return Err(failure(
+                headers,
+                StatusCode::BAD_REQUEST,
+                "invalid_item_key",
+                "item keys must match ^[a-z][a-z0-9_]*$",
+            ));
+        }
+        let label = item.label.trim();
+        if label.is_empty() || label.chars().count() > 120 {
+            return Err(failure(
+                headers,
+                StatusCode::BAD_REQUEST,
+                "invalid_item_label",
+                "item labels must be between 1 and 120 characters",
+            ));
+        }
+        if items.iter().any(|existing| existing.key == key) {
+            return Err(failure(
+                headers,
+                StatusCode::BAD_REQUEST,
+                "duplicate_item_key",
+                "item keys must be unique within a collect",
+            ));
+        }
+        items.push(NewCollectItem {
+            key: key.to_owned(),
+            label: label.to_owned(),
+            required: item.required,
+        });
+    }
+
+    Ok(items)
+}
+
+#[utoipa::path(
+    put,
+    path = "/v1/collects/{collect_id}/items",
+    params(("collect_id" = String, Path, description = "Collect identifier")),
+    responses(
+        (status = 200, description = "Items updated", body = CollectDetailResponse),
+        (status = 409, description = "Version conflict or an answered item cannot be removed")
+    )
+)]
+async fn update_collect_items(
+    State(state): State<Arc<AppState>>,
+    Extension(principal): Extension<VerifiedPrincipal>,
+    headers: HeaderMap,
+    Path(collect_id): Path<String>,
+    Json(body): Json<UpdateCollectItemsRequest>,
+) -> Response {
+    let user = match current_user(&state, &principal, &headers).await {
+        Ok(user) => user,
+        Err(response) => return *response,
+    };
+    let (tenant_id, _) = match authorize(&state, &headers, &user, Capability::Manage).await {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let Ok(collect_id) = Uuid::parse_str(&collect_id) else {
+        return failure(
+            &headers,
+            StatusCode::BAD_REQUEST,
+            "invalid_id",
+            "the collect identifier is not valid",
+        );
+    };
+    let items = match collect_items_from(&headers, &body.items) {
+        Ok(items) => items,
+        Err(response) => return response,
+    };
+
+    match school_collect_db::update_collect_items(
+        &state.pool,
+        tenant_id,
+        collect_id,
+        user.id,
+        body.expected_version,
+        &items,
+    )
+    .await
+    {
+        Ok(UpdateItemsOutcome::Updated(_)) => {
+            collect_detail_response(&state, &headers, tenant_id, collect_id, user.id).await
+        }
+        Ok(UpdateItemsOutcome::VersionConflict { current_version }) => {
+            conflict_response(&headers, current_version)
+        }
+        Ok(UpdateItemsOutcome::RemovalBlocked { key }) => failure(
+            &headers,
+            StatusCode::CONFLICT,
+            "item_has_answers",
+            format!("item {key} already has answers and cannot be removed"),
+        ),
+        Ok(UpdateItemsOutcome::NotEditable { status }) => failure(
+            &headers,
+            StatusCode::CONFLICT,
+            "collect_not_editable",
+            format!("a collect in state {status} cannot be edited"),
+        ),
+        Ok(UpdateItemsOutcome::NotFound) => failure(
+            &headers,
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "the collect was not found in this school",
+        ),
+        Err(_) => storage_failure(&headers),
+    }
+}
+
+#[utoipa::path(
+    put,
+    path = "/v1/collects/{collect_id}/assignments",
+    params(("collect_id" = String, Path, description = "Collect identifier")),
+    responses(
+        (status = 200, description = "Targets updated", body = CollectDetailResponse),
+        (status = 409, description = "Version conflict or an answered target cannot be removed")
+    )
+)]
+async fn update_collect_assignments(
+    State(state): State<Arc<AppState>>,
+    Extension(principal): Extension<VerifiedPrincipal>,
+    headers: HeaderMap,
+    Path(collect_id): Path<String>,
+    Json(body): Json<UpdateCollectAssignmentsRequest>,
+) -> Response {
+    let user = match current_user(&state, &principal, &headers).await {
+        Ok(user) => user,
+        Err(response) => return *response,
+    };
+    let (tenant_id, _) = match authorize(&state, &headers, &user, Capability::Manage).await {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let Ok(collect_id) = Uuid::parse_str(&collect_id) else {
+        return failure(
+            &headers,
+            StatusCode::BAD_REQUEST,
+            "invalid_id",
+            "the collect identifier is not valid",
+        );
+    };
+    if body.assignee_user_ids.len() > 200 {
+        return failure(
+            &headers,
+            StatusCode::BAD_REQUEST,
+            "too_many_assignees",
+            "a collect can target at most 200 members",
+        );
+    }
+
+    let mut assignees = Vec::with_capacity(body.assignee_user_ids.len());
+    for raw in &body.assignee_user_ids {
+        let Ok(user_id) = Uuid::parse_str(raw.trim()) else {
+            return failure(
+                &headers,
+                StatusCode::BAD_REQUEST,
+                "invalid_assignee",
+                "assignee ids must be UUIDs",
+            );
+        };
+        if assignees.contains(&user_id) {
+            continue;
+        }
+        assignees.push(user_id);
+    }
+
+    match school_collect_db::update_collect_assignments(
+        &state.pool,
+        tenant_id,
+        collect_id,
+        user.id,
+        body.expected_version,
+        &assignees,
+    )
+    .await
+    {
+        Ok(UpdateAssignmentsOutcome::Updated(_)) => {
+            collect_detail_response(&state, &headers, tenant_id, collect_id, user.id).await
+        }
+        Ok(UpdateAssignmentsOutcome::VersionConflict { current_version }) => {
+            conflict_response(&headers, current_version)
+        }
+        Ok(UpdateAssignmentsOutcome::NotAssignable { user_id }) => failure(
+            &headers,
+            StatusCode::CONFLICT,
+            "target_not_assignable",
+            format!("{user_id} is not a member who can submit in this school"),
+        ),
+        Ok(UpdateAssignmentsOutcome::RemovalBlocked { user_id }) => failure(
+            &headers,
+            StatusCode::CONFLICT,
+            "target_has_answers",
+            format!("{user_id} already saved work and cannot be removed"),
+        ),
+        Ok(UpdateAssignmentsOutcome::NotEditable { status }) => failure(
+            &headers,
+            StatusCode::CONFLICT,
+            "collect_not_editable",
+            format!("a collect in state {status} cannot be edited"),
+        ),
+        Ok(UpdateAssignmentsOutcome::NotFound) => failure(
+            &headers,
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "the collect was not found in this school",
+        ),
+        Err(_) => storage_failure(&headers),
+    }
+}
+
 #[utoipa::path(
     put,
     path = "/v1/collects/{collect_id}/submission",
@@ -1522,6 +1730,12 @@ async fn save_submission(
             "collect_not_open",
             format!("a collect in state {status} does not accept submissions"),
         ),
+        Ok(SaveDraftOutcome::NotAssigned) => failure(
+            &headers,
+            StatusCode::FORBIDDEN,
+            "not_assigned",
+            "this collect does not target you, so there is nothing to fill in",
+        ),
         Err(_) => storage_failure(&headers),
     }
 }
@@ -1584,6 +1798,12 @@ async fn submit_submission(
             StatusCode::CONFLICT,
             "collect_not_open",
             format!("a collect in state {status} does not accept submissions"),
+        ),
+        Ok(SubmitOutcome::NotAssigned) => failure(
+            &headers,
+            StatusCode::FORBIDDEN,
+            "not_assigned",
+            "this collect does not target you, so there is nothing to send",
         ),
         Err(_) => storage_failure(&headers),
     }

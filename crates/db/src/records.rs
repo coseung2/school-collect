@@ -115,9 +115,15 @@ pub struct NewCollectItem {
 #[derive(Debug)]
 pub enum SaveDraftOutcome {
     Saved(SubmissionRecord),
-    VersionConflict { current_version: i64 },
+    VersionConflict {
+        current_version: i64,
+    },
     AlreadySubmitted,
-    CollectNotOpen { status: String },
+    CollectNotOpen {
+        status: String,
+    },
+    /// A member who is not a target of this collect does not owe an answer.
+    NotAssigned,
 }
 
 #[derive(Debug)]
@@ -125,7 +131,11 @@ pub enum SubmitOutcome {
     Submitted(SubmissionRecord),
     AlreadySubmitted,
     NothingToSubmit,
-    CollectNotOpen { status: String },
+    CollectNotOpen {
+        status: String,
+    },
+    /// A member who is not a target of this collect does not owe an answer.
+    NotAssigned,
 }
 
 /// Links the verified identity to a local user row.
@@ -368,6 +378,282 @@ pub enum TransitionOutcome {
     NotFound,
 }
 
+/// Result of reshaping a collect's item list.
+#[derive(Debug)]
+pub enum UpdateItemsOutcome {
+    Updated(CollectRecord),
+    NotFound,
+    NotEditable {
+        status: String,
+    },
+    VersionConflict {
+        current_version: i64,
+    },
+    /// An item that already holds an answer cannot be removed.
+    RemovalBlocked {
+        key: String,
+    },
+}
+
+/// Result of reshaping a collect's target list.
+#[derive(Debug)]
+pub enum UpdateAssignmentsOutcome {
+    Updated(CollectRecord),
+    NotFound,
+    NotEditable {
+        status: String,
+    },
+    VersionConflict {
+        current_version: i64,
+    },
+    /// The target list may only contain members whose role can submit.
+    NotAssignable {
+        user_id: Uuid,
+    },
+    /// A target that already saved work cannot be removed.
+    RemovalBlocked {
+        user_id: Uuid,
+    },
+}
+
+/// Replaces the item list while the collect is still editable.
+///
+/// Labels and required flags may change while published so a coordinator can
+/// fix wording, and new items may be added. An item is only removed when no
+/// submission holds a value for its key, which keeps saved answers addressable.
+pub async fn update_collect_items(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    collect_id: Uuid,
+    actor: Uuid,
+    expected_version: i64,
+    items: &[NewCollectItem],
+) -> anyhow::Result<UpdateItemsOutcome> {
+    let mut tx = pool.begin().await?;
+
+    let current = sqlx::query_as::<_, CollectRecord>(
+        "SELECT id, tenant_id, title, description, status, due_at, version, updated_at
+         FROM school_collect.collects
+         WHERE tenant_id = $1 AND id = $2
+         FOR UPDATE",
+    )
+    .bind(tenant_id)
+    .bind(collect_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some(current) = current else {
+        tx.rollback().await?;
+        return Ok(UpdateItemsOutcome::NotFound);
+    };
+    if current.status == "closed" {
+        tx.rollback().await?;
+        return Ok(UpdateItemsOutcome::NotEditable {
+            status: current.status,
+        });
+    }
+    if current.version != expected_version {
+        tx.rollback().await?;
+        return Ok(UpdateItemsOutcome::VersionConflict {
+            current_version: current.version,
+        });
+    }
+
+    let existing_keys = sqlx::query_scalar::<_, String>(
+        "SELECT item_key FROM school_collect.collect_items WHERE collect_id = $1 ORDER BY position",
+    )
+    .bind(collect_id)
+    .fetch_all(&mut *tx)
+    .await?;
+
+    for key in &existing_keys {
+        if items.iter().any(|item| &item.key == key) {
+            continue;
+        }
+        let answered = sqlx::query_scalar::<_, i32>(
+            "SELECT 1 FROM school_collect.collect_submissions
+             WHERE collect_id = $1 AND coalesce(payload ->> $2, '') <> ''
+             LIMIT 1",
+        )
+        .bind(collect_id)
+        .bind(key)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if answered.is_some() {
+            tx.rollback().await?;
+            return Ok(UpdateItemsOutcome::RemovalBlocked { key: key.clone() });
+        }
+    }
+
+    // Positions are unique per collect, so the list is rewritten in order.
+    sqlx::query("DELETE FROM school_collect.collect_items WHERE collect_id = $1")
+        .bind(collect_id)
+        .execute(&mut *tx)
+        .await?;
+    for (position, item) in items.iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO school_collect.collect_items
+               (id, collect_id, item_key, label, required, position)
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(Uuid::now_v7())
+        .bind(collect_id)
+        .bind(&item.key)
+        .bind(&item.label)
+        .bind(item.required)
+        .bind(position as i32)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    let updated = bump_collect_version(&mut tx, tenant_id, collect_id).await?;
+    insert_audit(
+        &mut tx,
+        tenant_id,
+        Some(actor),
+        "collect.items_updated",
+        "collect",
+        Some(collect_id),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(UpdateItemsOutcome::Updated(updated))
+}
+
+/// Replaces the target list while the collect is still editable.
+pub async fn update_collect_assignments(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    collect_id: Uuid,
+    actor: Uuid,
+    expected_version: i64,
+    assignee_ids: &[Uuid],
+) -> anyhow::Result<UpdateAssignmentsOutcome> {
+    let mut tx = pool.begin().await?;
+
+    let current = sqlx::query_as::<_, CollectRecord>(
+        "SELECT id, tenant_id, title, description, status, due_at, version, updated_at
+         FROM school_collect.collects
+         WHERE tenant_id = $1 AND id = $2
+         FOR UPDATE",
+    )
+    .bind(tenant_id)
+    .bind(collect_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some(current) = current else {
+        tx.rollback().await?;
+        return Ok(UpdateAssignmentsOutcome::NotFound);
+    };
+    if current.status == "closed" {
+        tx.rollback().await?;
+        return Ok(UpdateAssignmentsOutcome::NotEditable {
+            status: current.status,
+        });
+    }
+    if current.version != expected_version {
+        tx.rollback().await?;
+        return Ok(UpdateAssignmentsOutcome::VersionConflict {
+            current_version: current.version,
+        });
+    }
+
+    // Targets are resolved against memberships, so a client cannot assign work
+    // to a foreign user or to a role that cannot submit.
+    let existing_ids = sqlx::query_scalar::<_, Uuid>(
+        "SELECT user_id FROM school_collect.collect_assignments WHERE collect_id = $1",
+    )
+    .bind(collect_id)
+    .fetch_all(&mut *tx)
+    .await?;
+
+    for user_id in assignee_ids {
+        let member = sqlx::query_scalar::<_, i32>(
+            "SELECT 1 FROM school_collect.memberships
+             WHERE tenant_id = $1 AND user_id = $2 AND role <> 'viewer'",
+        )
+        .bind(tenant_id)
+        .bind(user_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if member.is_none() {
+            tx.rollback().await?;
+            return Ok(UpdateAssignmentsOutcome::NotAssignable { user_id: *user_id });
+        }
+    }
+
+    for user_id in &existing_ids {
+        if assignee_ids.contains(user_id) {
+            continue;
+        }
+        let answered = sqlx::query_scalar::<_, i32>(
+            "SELECT 1 FROM school_collect.collect_submissions
+             WHERE collect_id = $1 AND user_id = $2
+               AND (status = 'submitted' OR payload <> '{}'::jsonb)
+             LIMIT 1",
+        )
+        .bind(collect_id)
+        .bind(user_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if answered.is_some() {
+            tx.rollback().await?;
+            return Ok(UpdateAssignmentsOutcome::RemovalBlocked { user_id: *user_id });
+        }
+    }
+
+    sqlx::query("DELETE FROM school_collect.collect_assignments WHERE collect_id = $1")
+        .bind(collect_id)
+        .execute(&mut *tx)
+        .await?;
+    for user_id in assignee_ids {
+        sqlx::query(
+            "INSERT INTO school_collect.collect_assignments
+               (collect_id, user_id, tenant_id, status)
+             VALUES ($1, $2, $3, 'assigned')
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(collect_id)
+        .bind(user_id)
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    let updated = bump_collect_version(&mut tx, tenant_id, collect_id).await?;
+    insert_audit(
+        &mut tx,
+        tenant_id,
+        Some(actor),
+        "collect.assignments_updated",
+        "collect",
+        Some(collect_id),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(UpdateAssignmentsOutcome::Updated(updated))
+}
+
+/// Bumps the optimistic version of a collect inside an open transaction.
+async fn bump_collect_version(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tenant_id: Uuid,
+    collect_id: Uuid,
+) -> anyhow::Result<CollectRecord> {
+    let updated = sqlx::query_as::<_, CollectRecord>(
+        "UPDATE school_collect.collects
+         SET version = version + 1, updated_at = now()
+         WHERE tenant_id = $1 AND id = $2
+         RETURNING id, tenant_id, title, description, status, due_at, version, updated_at",
+    )
+    .bind(tenant_id)
+    .bind(collect_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(updated)
+}
+
 /// Applies an allowed status change and bumps the optimistic version.
 ///
 /// The allowed source states are passed in so the domain rules stay with the
@@ -490,6 +776,21 @@ pub async fn save_draft(
         return Ok(SaveDraftOutcome::CollectNotOpen { status });
     }
 
+    // Assignment decides who owes an answer. A member removed from the target
+    // list cannot create or edit a submission.
+    let assigned = sqlx::query_scalar::<_, i32>(
+        "SELECT 1 FROM school_collect.collect_assignments
+         WHERE collect_id = $1 AND user_id = $2",
+    )
+    .bind(collect_id)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if assigned.is_none() {
+        tx.rollback().await?;
+        return Ok(SaveDraftOutcome::NotAssigned);
+    }
+
     let existing = sqlx::query_as::<_, SubmissionRecord>(
         "SELECT id, collect_id, user_id, status, payload, version, submitted_at, updated_at
          FROM school_collect.collect_submissions
@@ -596,6 +897,19 @@ pub async fn submit(
     if status != "published" {
         tx.rollback().await?;
         return Ok(SubmitOutcome::CollectNotOpen { status });
+    }
+
+    let assigned = sqlx::query_scalar::<_, i32>(
+        "SELECT 1 FROM school_collect.collect_assignments
+         WHERE collect_id = $1 AND user_id = $2",
+    )
+    .bind(collect_id)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if assigned.is_none() {
+        tx.rollback().await?;
+        return Ok(SubmitOutcome::NotAssigned);
     }
 
     let existing = sqlx::query_as::<_, SubmissionRecord>(
