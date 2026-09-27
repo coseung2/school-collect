@@ -1,9 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashSet,
     fs,
     io::Write,
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::Manager;
 use url::Url;
@@ -22,6 +24,14 @@ const MAX_LOCATOR_VALUE_LEN: usize = 300;
 /// 표 입력 레시피가 가질 수 있는 행 식별 머리글과 날짜 열 수입니다.
 const MAX_TABLE_HEADERS: usize = 40;
 const MAX_TABLE_DATES: usize = 62;
+/// 감시 레시피가 보관할 수 있는 식별자 수와 한 식별자의 길이입니다.
+const MAX_WATCH_IDENTIFIERS: usize = 500;
+const MAX_WATCH_IDENTIFIER_LEN: usize = 120;
+/// 감시 상태(마지막으로 본 식별자와 확인 시각)를 보관하는 파일입니다.
+pub(crate) const AUTOMATION_WATCH_STATE_FILE: &str = "automation-watch-state.json";
+const AUTOMATION_WATCH_STATE_QUARANTINE_FILE: &str = "automation-watch-state.invalid.json";
+/// 감시 상태 파일 상한입니다. 넘으면 새 스캔 결과를 저장하지 않습니다.
+const MAX_WATCH_STATE_BYTES: usize = 512 * 1024;
 /// 한 사용자 계정이 보관할 수 있는 업무 버튼 수입니다.
 const MAX_RECIPES: usize = 100;
 /// 손상된 행을 보관하는 격리 파일의 상한입니다. 넘으면 복구를 멈추고 원본을 보존합니다.
@@ -33,6 +43,7 @@ pub(crate) enum AutomationKind {
     Shortcut,
     Fill,
     TableFill,
+    Watch,
 }
 
 /// 화면 요소를 찾는 방법입니다.
@@ -81,6 +92,18 @@ pub(crate) struct AutomationTable {
     pub(crate) date_labels: Vec<String>,
 }
 
+/// 새 항목을 찾을 목록의 행 위치와, 행 안에서 식별자를 읽을 위치입니다.
+///
+/// 감시는 목록 전체를 저장하지 않고 식별자 집합만 비교합니다.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AutomationWatch {
+    /// 목록의 각 행 위치(예: `#list > tbody > tr`). css만 허용합니다.
+    pub(crate) list: AutomationLocator,
+    /// 행 안에서 식별자를 읽을 요소 위치(예: `td:nth-child(1)`).
+    pub(crate) identity: AutomationLocator,
+}
+
 /// 저장 파일의 5번째 열에 들어가는 JSON입니다.
 ///
 /// 이전 형식(필드 배열만 저장)도 계속 읽을 수 있도록 `decode_recipe`가 둘 다 받습니다.
@@ -91,6 +114,8 @@ pub(crate) struct AutomationPayload {
     pub(crate) fields: Vec<AutomationField>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) table: Option<AutomationTable>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) watch: Option<AutomationWatch>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -106,6 +131,9 @@ pub(crate) struct AutomationRecipe {
     /// 표 입력 레시피의 표 정보입니다. 그 밖의 종류는 값을 갖지 않습니다.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) table: Option<AutomationTable>,
+    /// 감시 레시피의 목록·식별자 위치입니다. 그 밖의 종류는 값을 갖지 않습니다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) watch: Option<AutomationWatch>,
 }
 
 fn validate_plain_field(value: &str) -> Result<(), String> {
@@ -257,6 +285,16 @@ fn validate_table(table: &AutomationTable) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_watch(watch: &AutomationWatch) -> Result<(), String> {
+    if watch.list.kind != LocatorKind::Css {
+        return Err("감시할 목록 위치는 css 선택자여야 합니다.".to_string());
+    }
+    validate_locator(&watch.list)?;
+    validate_locator(&watch.identity)?;
+
+    Ok(())
+}
+
 pub(crate) fn validate_recipe(recipe: &AutomationRecipe) -> Result<(), String> {
     let id = recipe.id.trim();
     let name = recipe.name.trim();
@@ -274,13 +312,16 @@ pub(crate) fn validate_recipe(recipe: &AutomationRecipe) -> Result<(), String> {
 
     match recipe.kind {
         AutomationKind::Shortcut => {
-            if !recipe.fields.is_empty() || recipe.table.is_some() {
+            if !recipe.fields.is_empty() || recipe.table.is_some() || recipe.watch.is_some() {
                 return Err("바로가기에는 입력 필드를 둘 수 없습니다.".to_string());
             }
         }
         AutomationKind::Fill => {
             if recipe.table.is_some() {
                 return Err("자동입력 레시피에는 표 정보를 둘 수 없습니다.".to_string());
+            }
+            if recipe.watch.is_some() {
+                return Err("자동입력 레시피에는 감시 정보를 둘 수 없습니다.".to_string());
             }
             if recipe.fields.is_empty() || recipe.fields.len() > MAX_RECIPE_FIELDS {
                 return Err(format!(
@@ -296,11 +337,27 @@ pub(crate) fn validate_recipe(recipe: &AutomationRecipe) -> Result<(), String> {
             if !recipe.fields.is_empty() {
                 return Err("표 입력 레시피에는 개별 필드를 둘 수 없습니다.".to_string());
             }
+            if recipe.watch.is_some() {
+                return Err("표 입력 레시피에는 감시 정보를 둘 수 없습니다.".to_string());
+            }
             let table = recipe
                 .table
                 .as_ref()
                 .ok_or_else(|| "표 입력 레시피에는 표 정보가 필요합니다.".to_string())?;
             validate_table(table)?;
+        }
+        AutomationKind::Watch => {
+            if !recipe.fields.is_empty() {
+                return Err("감시 레시피에는 입력 필드를 둘 수 없습니다.".to_string());
+            }
+            if recipe.table.is_some() {
+                return Err("감시 레시피에는 표 정보를 둘 수 없습니다.".to_string());
+            }
+            let watch = recipe
+                .watch
+                .as_ref()
+                .ok_or_else(|| "감시 레시피에는 목록 위치가 필요합니다.".to_string())?;
+            validate_watch(watch)?;
         }
     }
 
@@ -324,6 +381,10 @@ pub(crate) fn normalize_recipe(mut recipe: AutomationRecipe) -> Result<Automatio
         for label in &mut table.date_labels {
             *label = label.trim().to_string();
         }
+    }
+    if let Some(watch) = &mut recipe.watch {
+        watch.list.value = watch.list.value.trim().to_string();
+        watch.identity.value = watch.identity.value.trim().to_string();
     }
     validate_recipe(&recipe)?;
     Ok(recipe)
@@ -357,18 +418,20 @@ fn encode_recipe(recipe: &AutomationRecipe) -> Result<String, String> {
         AutomationKind::Shortcut => "shortcut",
         AutomationKind::Fill => "fill",
         AutomationKind::TableFill => "table_fill",
+        AutomationKind::Watch => "watch",
     };
     let head = format!(
         "{}\t{kind}\t{}\t{}",
         recipe.id, recipe.name, recipe.target_url
     );
-    if recipe.fields.is_empty() && recipe.table.is_none() {
+    if recipe.fields.is_empty() && recipe.table.is_none() && recipe.watch.is_none() {
         return Ok(head);
     }
 
     let payload = AutomationPayload {
         fields: recipe.fields.clone(),
         table: recipe.table.clone(),
+        watch: recipe.watch.clone(),
     };
     let payload = serde_json::to_string(&payload)
         .map_err(|error| format!("자동화 설정을 저장하지 못했습니다: {error}"))?;
@@ -392,6 +455,7 @@ fn decode_recipe(line: &str) -> Result<AutomationRecipe, String> {
         "shortcut" => AutomationKind::Shortcut,
         "fill" => AutomationKind::Fill,
         "table_fill" => AutomationKind::TableFill,
+        "watch" => AutomationKind::Watch,
         _ => return Err("자동화 설정 형식이 올바르지 않습니다.".to_string()),
     };
     let payload = if payload.is_empty() {
@@ -404,6 +468,7 @@ fn decode_recipe(line: &str) -> Result<AutomationRecipe, String> {
                     AutomationPayload {
                         fields,
                         table: None,
+                        watch: None,
                     }
                 })
             })
@@ -417,6 +482,7 @@ fn decode_recipe(line: &str) -> Result<AutomationRecipe, String> {
         target_url: target_url.to_string(),
         fields: payload.fields,
         table: payload.table,
+        watch: payload.watch,
     };
     validate_recipe(&recipe)?;
     Ok(recipe)
@@ -602,6 +668,244 @@ fn restrict_file_permissions(path: &Path) {
 #[cfg(not(unix))]
 fn restrict_file_permissions(_path: &Path) {}
 
+/// 감시 레시피별로 마지막으로 본 식별자와 확인 시각만 보관합니다.
+///
+/// 학생 이름·신청 사유 같은 본문은 저장하지 않습니다.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WatchStateEntry {
+    pub(crate) recipe_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) identifiers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) checked_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) paused: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) new_identifiers: Vec<String>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WatchScanOutcome {
+    pub(crate) recipe_id: String,
+    pub(crate) paused: bool,
+    pub(crate) total: usize,
+    pub(crate) new_identifiers: Vec<String>,
+    pub(crate) checked_at_ms: u64,
+}
+
+pub(crate) fn automation_watch_state_path(
+    app_handle: &tauri::AppHandle,
+) -> Result<PathBuf, String> {
+    Ok(automation_config_dir(app_handle)?.join(AUTOMATION_WATCH_STATE_FILE))
+}
+
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or_default()
+}
+
+/// 감시 상태는 비교용 파생 데이터입니다. 형식이 깨졌으면 격리해 보관하고
+/// 빈 상태로 다시 시작합니다(다음 스캔에서 한 번 다시 알릴 수 있습니다).
+pub(crate) fn read_watch_state(path: &Path) -> Result<Vec<WatchStateEntry>, String> {
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("감시 상태를 읽지 못했습니다: {error}")),
+    };
+    if content.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    if content.len() > MAX_WATCH_STATE_BYTES {
+        return Err("감시 상태 파일이 너무 큽니다. 파일을 정리한 뒤 다시 시도하세요.".to_string());
+    }
+
+    match serde_json::from_str::<Vec<WatchStateEntry>>(&content) {
+        Ok(entries) => Ok(entries),
+        Err(error) => {
+            eprintln!("감시 상태 형식이 올바르지 않아 격리합니다: {error}");
+            if let Some(directory) = path.parent() {
+                let quarantine = directory.join(AUTOMATION_WATCH_STATE_QUARANTINE_FILE);
+                let _ = fs::rename(path, &quarantine);
+            }
+            Ok(Vec::new())
+        }
+    }
+}
+
+fn write_watch_state(path: &Path, entries: &[WatchStateEntry]) -> Result<(), String> {
+    let content = if entries.is_empty() {
+        String::new()
+    } else {
+        let mut content = serde_json::to_string_pretty(entries)
+            .map_err(|error| format!("감시 상태를 저장하지 못했습니다: {error}"))?;
+        content.push('\n');
+        content
+    };
+
+    if content.len() > MAX_WATCH_STATE_BYTES {
+        return Err("감시 상태가 너무 커져 저장하지 않았습니다.".to_string());
+    }
+    write_file_atomically(path, &content)
+}
+
+/// 식별자 목록을 다듬고 중복을 제거합니다. 값 자체는 저장 전에 검증합니다.
+fn normalize_identifiers(values: Vec<String>) -> Result<Vec<String>, String> {
+    if values.len() > MAX_WATCH_IDENTIFIERS {
+        return Err(format!(
+            "한 번에 저장할 수 있는 식별자는 {MAX_WATCH_IDENTIFIERS}개까지입니다."
+        ));
+    }
+
+    let mut seen = HashSet::new();
+    let mut normalized = Vec::new();
+    for value in values {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.chars().count() > MAX_WATCH_IDENTIFIER_LEN {
+            return Err("감시 식별자가 너무 깁니다.".to_string());
+        }
+        validate_plain_field(trimmed)?;
+        if seen.insert(trimmed.to_string()) {
+            normalized.push(trimmed.to_string());
+        }
+    }
+
+    Ok(normalized)
+}
+
+/// 스캔 결과를 저장하고 새로 생긴 식별자를 돌려줍니다.
+///
+/// 감시가 중지된 레시피는 상태를 바꾸지 않고 그대로 둡니다.
+pub(crate) fn record_watch_scan(
+    path: &Path,
+    recipe_id: &str,
+    identifiers: Vec<String>,
+) -> Result<WatchScanOutcome, String> {
+    let identifiers = normalize_identifiers(identifiers)?;
+    let mut entries = read_watch_state(path)?;
+    let index = entries
+        .iter()
+        .position(|entry| entry.recipe_id == recipe_id);
+    let mut entry = match index {
+        Some(index) => entries[index].clone(),
+        None => WatchStateEntry {
+            recipe_id: recipe_id.to_string(),
+            ..WatchStateEntry::default()
+        },
+    };
+
+    if entry.paused {
+        return Ok(WatchScanOutcome {
+            recipe_id: recipe_id.to_string(),
+            paused: true,
+            total: identifiers.len(),
+            new_identifiers: Vec::new(),
+            checked_at_ms: entry.checked_at_ms.unwrap_or_default(),
+        });
+    }
+
+    let previous: HashSet<&String> = entry.identifiers.iter().collect();
+    let new_identifiers: Vec<String> = identifiers
+        .iter()
+        .filter(|identifier| !previous.contains(identifier))
+        .cloned()
+        .collect();
+    let checked_at_ms = now_millis();
+
+    entry.identifiers = identifiers.clone();
+    entry.checked_at_ms = Some(checked_at_ms);
+    entry.new_identifiers = new_identifiers.clone();
+
+    match index {
+        Some(index) => entries[index] = entry,
+        None => entries.push(entry),
+    }
+    entries.sort_by(|left, right| left.recipe_id.cmp(&right.recipe_id));
+    write_watch_state(path, &entries)?;
+
+    Ok(WatchScanOutcome {
+        recipe_id: recipe_id.to_string(),
+        paused: false,
+        total: identifiers.len(),
+        new_identifiers,
+        checked_at_ms,
+    })
+}
+
+fn update_watch_entry(
+    path: &Path,
+    recipe_id: &str,
+    update: impl FnOnce(&mut WatchStateEntry),
+) -> Result<Vec<WatchStateEntry>, String> {
+    let mut entries = read_watch_state(path)?;
+    if let Some(entry) = entries
+        .iter_mut()
+        .find(|entry| entry.recipe_id == recipe_id)
+    {
+        update(entry);
+    }
+    write_watch_state(path, &entries)?;
+    Ok(entries)
+}
+
+/// 새 항목 알림을 확인 처리합니다. 이미 본 식별자는 다시 알리지 않습니다.
+fn acknowledge_watch(path: &Path, recipe_id: &str) -> Result<Vec<WatchStateEntry>, String> {
+    update_watch_entry(path, recipe_id, |entry| entry.new_identifiers.clear())
+}
+
+fn set_watch_paused(
+    path: &Path,
+    recipe_id: &str,
+    paused: bool,
+) -> Result<Vec<WatchStateEntry>, String> {
+    update_watch_entry(path, recipe_id, |entry| entry.paused = paused)
+}
+
+/// 레시피를 지우면 감시 상태도 함께 정리합니다.
+fn prune_watch_state(path: &Path, recipe_id: &str) -> Result<(), String> {
+    let mut entries = read_watch_state(path)?;
+    let before = entries.len();
+    entries.retain(|entry| entry.recipe_id != recipe_id);
+    if entries.len() == before {
+        return Ok(());
+    }
+    write_watch_state(path, &entries)
+}
+
+/// 감시 상태 명령이 공통으로 확인하는 레시피 식별자입니다.
+fn validate_recipe_id(recipe_id: &str) -> Result<String, String> {
+    let recipe_id = recipe_id.trim();
+    if recipe_id.is_empty() || recipe_id.len() > MAX_RECIPE_ID_LEN {
+        return Err("자동화 식별자가 올바르지 않습니다.".to_string());
+    }
+    validate_plain_field(recipe_id)?;
+    Ok(recipe_id.to_string())
+}
+
+/// 감시 레시피가 실제로 있을 때만 상태를 다룹니다.
+fn ensure_watch_recipe(path: &Path, recipe_id: &str) -> Result<(), String> {
+    let file = RecipeFile::read(path)?;
+    let recipe = file
+        .recipes
+        .iter()
+        .find(|recipe| recipe.id == recipe_id)
+        .ok_or_else(|| "등록된 감시 레시피를 찾지 못했습니다.".to_string())?;
+    if recipe.kind != AutomationKind::Watch {
+        return Err("감시 레시피가 아닙니다.".to_string());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn list_automation_recipes(app_handle: tauri::AppHandle) -> Result<Vec<AutomationRecipe>, String> {
     let path = automation_recipes_path(&app_handle)?;
@@ -639,7 +943,63 @@ fn delete_automation_recipe(
     validate_plain_field(recipe_id)?;
 
     let path = automation_recipes_path(&app_handle)?;
-    remove_automation_recipe(&path, recipe_id)
+    let recipes = remove_automation_recipe(&path, recipe_id)?;
+
+    // 레시피가 사라지면 감시 상태도 남기지 않습니다.
+    if let Ok(state_path) = automation_watch_state_path(&app_handle)
+        && let Err(error) = prune_watch_state(&state_path, recipe_id)
+    {
+        eprintln!("감시 상태를 정리하지 못했습니다: {error}");
+    }
+
+    Ok(recipes)
+}
+
+#[tauri::command]
+fn list_automation_watch_state(
+    app_handle: tauri::AppHandle,
+) -> Result<Vec<WatchStateEntry>, String> {
+    let path = automation_watch_state_path(&app_handle)?;
+    read_watch_state(&path)
+}
+
+/// 확장이 스캔한 식별자 목록을 받아 새 항목만 골라 알림 상태로 남깁니다.
+#[tauri::command]
+fn record_automation_watch_scan(
+    app_handle: tauri::AppHandle,
+    recipe_id: String,
+    identifiers: Vec<String>,
+) -> Result<WatchScanOutcome, String> {
+    let recipe_id = validate_recipe_id(&recipe_id)?;
+    let recipes_path = automation_recipes_path(&app_handle)?;
+    ensure_watch_recipe(&recipes_path, &recipe_id)?;
+
+    let state_path = automation_watch_state_path(&app_handle)?;
+    record_watch_scan(&state_path, &recipe_id, identifiers)
+}
+
+#[tauri::command]
+fn acknowledge_automation_watch(
+    app_handle: tauri::AppHandle,
+    recipe_id: String,
+) -> Result<Vec<WatchStateEntry>, String> {
+    let recipe_id = validate_recipe_id(&recipe_id)?;
+    let state_path = automation_watch_state_path(&app_handle)?;
+    acknowledge_watch(&state_path, &recipe_id)
+}
+
+#[tauri::command]
+fn set_automation_watch_paused(
+    app_handle: tauri::AppHandle,
+    recipe_id: String,
+    paused: bool,
+) -> Result<Vec<WatchStateEntry>, String> {
+    let recipe_id = validate_recipe_id(&recipe_id)?;
+    let recipes_path = automation_recipes_path(&app_handle)?;
+    ensure_watch_recipe(&recipes_path, &recipe_id)?;
+
+    let state_path = automation_watch_state_path(&app_handle)?;
+    set_watch_paused(&state_path, &recipe_id, paused)
 }
 
 /// 브라우저 열기는 사용자의 응답을 기다리지 않도록 분리 실행하고,
@@ -748,7 +1108,11 @@ pub fn run() {
             list_automation_recipes,
             save_automation_recipe,
             delete_automation_recipe,
-            open_automation_recipe
+            open_automation_recipe,
+            list_automation_watch_state,
+            record_automation_watch_scan,
+            acknowledge_automation_watch,
+            set_automation_watch_paused
         ])
         .run(tauri::generate_context!())
         .expect("failed to run School Collect");
@@ -784,6 +1148,7 @@ mod tests {
             kind: AutomationKind::Shortcut,
             fields: Vec::new(),
             table: None,
+            watch: None,
         };
         let decoded = decode_recipe(&encode_recipe(&recipe).unwrap()).unwrap();
         assert_eq!(decoded, recipe);
@@ -807,6 +1172,7 @@ mod tests {
             kind: AutomationKind::Fill,
             fields,
             table: None,
+            watch: None,
         }
     }
 
@@ -825,6 +1191,7 @@ mod tests {
                 identity_headers: vec!["학년".to_string(), "반".to_string(), "이름".to_string()],
                 date_labels: vec!["3-2".to_string(), "3-3".to_string()],
             }),
+            watch: None,
         }
     }
 
@@ -891,6 +1258,166 @@ mod tests {
         let mut recipe = table_recipe("recipe-table", "출결 입력");
         recipe.table.as_mut().unwrap().identity_headers = vec!["  ".to_string()];
         assert!(validate_recipe(&recipe).is_err());
+    }
+
+    fn watch_recipe(id: &str, name: &str) -> AutomationRecipe {
+        AutomationRecipe {
+            id: id.to_string(),
+            name: name.to_string(),
+            target_url: "https://example.invalid/experience".to_string(),
+            kind: AutomationKind::Watch,
+            fields: Vec::new(),
+            table: None,
+            watch: Some(AutomationWatch {
+                list: AutomationLocator {
+                    kind: LocatorKind::Css,
+                    value: "#applications > tbody > tr".to_string(),
+                },
+                identity: AutomationLocator {
+                    kind: LocatorKind::Css,
+                    value: "td:nth-child(1)".to_string(),
+                },
+            }),
+        }
+    }
+
+    #[test]
+    fn watch_recipe_round_trip_keeps_locators() {
+        let recipe = watch_recipe("recipe-watch", "체험학습 신청 감시");
+
+        let decoded = decode_recipe(&encode_recipe(&recipe).unwrap()).unwrap();
+
+        assert_eq!(decoded, recipe);
+        assert_eq!(decoded.kind, AutomationKind::Watch);
+        assert_eq!(
+            decoded.watch.as_ref().unwrap().list.value,
+            "#applications > tbody > tr"
+        );
+    }
+
+    #[test]
+    fn rejects_watch_recipes_with_other_payloads() {
+        let mut missing = watch_recipe("recipe-watch", "체험학습 신청 감시");
+        missing.watch = None;
+        assert!(validate_recipe(&missing).is_err());
+
+        let mut with_fields = watch_recipe("recipe-watch", "체험학습 신청 감시");
+        with_fields.fields = vec![fill_field("제목", LocatorKind::Id, "title")];
+        assert!(validate_recipe(&with_fields).is_err());
+
+        let mut with_table = watch_recipe("recipe-watch", "체험학습 신청 감시");
+        with_table.table = table_recipe("recipe-table", "출결 입력").table;
+        assert!(validate_recipe(&with_table).is_err());
+
+        // 목록 위치는 여러 행을 가리켜야 하므로 css만 받습니다.
+        let mut non_css_list = watch_recipe("recipe-watch", "체험학습 신청 감시");
+        non_css_list.watch.as_mut().unwrap().list = AutomationLocator {
+            kind: LocatorKind::Id,
+            value: "applications".to_string(),
+        };
+        assert!(validate_recipe(&non_css_list).is_err());
+
+        // 다른 종류에는 감시 정보를 둘 수 없습니다.
+        let mut shortcut = shortcut_recipe("recipe-1", "기안", "https://example.invalid/draft");
+        shortcut.watch = watch_recipe("recipe-watch", "감시").watch;
+        assert!(validate_recipe(&shortcut).is_err());
+
+        let mut table = table_recipe("recipe-table", "출결 입력");
+        table.watch = watch_recipe("recipe-watch", "감시").watch;
+        assert!(validate_recipe(&table).is_err());
+    }
+
+    #[test]
+    fn watch_scan_reports_only_new_identifiers() {
+        let directory = test_directory("watch-scan");
+        let path = directory.join(AUTOMATION_WATCH_STATE_FILE);
+
+        let first = record_watch_scan(
+            &path,
+            "recipe-watch",
+            vec!["2026-01".to_string(), "2026-02".to_string()],
+        )
+        .unwrap();
+        assert_eq!(first.new_identifiers, vec!["2026-01", "2026-02"]);
+        assert_eq!(first.total, 2);
+        assert!(first.checked_at_ms > 0);
+
+        // 같은 목록을 다시 보면 새 항목이 없어야 합니다.
+        let second = record_watch_scan(
+            &path,
+            "recipe-watch",
+            vec!["2026-02".to_string(), "2026-01".to_string()],
+        )
+        .unwrap();
+        assert!(second.new_identifiers.is_empty());
+
+        // 새 식별자만 알립니다. 중복 값은 한 번으로 정리합니다.
+        let third = record_watch_scan(
+            &path,
+            "recipe-watch",
+            vec![
+                "2026-01".to_string(),
+                "2026-02".to_string(),
+                "2026-03".to_string(),
+                "2026-03".to_string(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(third.new_identifiers, vec!["2026-03"]);
+        assert_eq!(third.total, 3);
+
+        // 확인 처리하면 새 항목 표시가 비워집니다.
+        let entries = acknowledge_watch(&path, "recipe-watch").unwrap();
+        assert!(entries[0].new_identifiers.is_empty());
+        assert_eq!(entries[0].identifiers.len(), 3);
+
+        fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn paused_watch_scan_keeps_previous_state() {
+        let directory = test_directory("watch-paused");
+        let path = directory.join(AUTOMATION_WATCH_STATE_FILE);
+
+        record_watch_scan(&path, "recipe-watch", vec!["2026-01".to_string()]).unwrap();
+        let entries = set_watch_paused(&path, "recipe-watch", true).unwrap();
+        assert!(entries[0].paused);
+        let checked_before = entries[0].checked_at_ms;
+
+        let paused = record_watch_scan(&path, "recipe-watch", vec!["2026-09".to_string()]).unwrap();
+        assert!(paused.paused);
+        assert!(paused.new_identifiers.is_empty());
+
+        let entries = read_watch_state(&path).unwrap();
+        assert_eq!(entries[0].identifiers, vec!["2026-01"]);
+        assert_eq!(entries[0].checked_at_ms, checked_before);
+
+        // 다시 켜면 그 사이에 생긴 항목을 새 항목으로 알립니다.
+        set_watch_paused(&path, "recipe-watch", false).unwrap();
+        let resumed =
+            record_watch_scan(&path, "recipe-watch", vec!["2026-09".to_string()]).unwrap();
+        assert_eq!(resumed.new_identifiers, vec!["2026-09"]);
+
+        fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn corrupt_watch_state_is_quarantined_and_reset() {
+        let directory = test_directory("watch-corrupt");
+        let path = directory.join(AUTOMATION_WATCH_STATE_FILE);
+        fs::write(&path, "{ not json").unwrap();
+
+        let entries = read_watch_state(&path).unwrap();
+
+        assert!(entries.is_empty());
+        assert!(!path.exists());
+        assert!(
+            directory
+                .join(AUTOMATION_WATCH_STATE_QUARANTINE_FILE)
+                .exists()
+        );
+
+        fs::remove_dir_all(&directory).unwrap();
     }
 
     #[test]
@@ -1060,6 +1587,7 @@ mod tests {
             kind: AutomationKind::Shortcut,
             fields: Vec::new(),
             table: None,
+            watch: None,
         }
     }
 

@@ -153,6 +153,141 @@ export function automationPageCommand(command) {
     return typeof id === "string" && /^[A-Za-z0-9_.:-]+$/.test(id) ? id : "";
   }
 
+  /** 클릭한 요소가 속한 목록 행입니다. 감시는 행 단위로 식별자를 읽습니다. */
+  function rowOf(element) {
+    if (!element || !element.closest) {
+      return null;
+    }
+    return element.closest("tr, li, [role='row']");
+  }
+
+  /**
+   * 행 안에서의 상대 위치를 만듭니다. 목록 위치(css)와 달리 행 안쪽만
+   * 가리키므로 저장 후에도 같은 열을 다시 찾을 수 있습니다.
+   */
+  function relativeSelector(element, row) {
+    if (!element || element === row) {
+      return null;
+    }
+    const id = safeIdValue(element.id);
+    if (id) {
+      return { kind: "id", value: id };
+    }
+    if (isFormControl(element) && typeof element.name === "string" && element.name.trim()) {
+      return { kind: "name", value: element.name.trim() };
+    }
+
+    const parts = [];
+    let node = element;
+    let depth = 0;
+    while (node && node !== row && depth < 6) {
+      const parent = node.parentElement;
+      if (!parent) {
+        return null;
+      }
+      const tag = tagOf(node);
+      const siblings = Array.from(parent.children).filter(
+        (child) => child.tagName === node.tagName,
+      );
+      parts.unshift(
+        siblings.length > 1 ? `${tag}:nth-of-type(${siblings.indexOf(node) + 1})` : tag,
+      );
+      node = parent;
+      depth += 1;
+    }
+    return parts.length > 0 ? { kind: "css", value: parts.join(" > ") } : null;
+  }
+
+  /** 저장된 상대 위치를 주어진 행 안에서 다시 찾습니다. */
+  function resolveWithin(root, kind, value) {
+    if (!root || typeof value !== "string" || !value.trim()) {
+      return [];
+    }
+    const text = value.trim();
+    if (kind === "id") {
+      const id = safeIdValue(text);
+      return id ? Array.from(root.querySelectorAll(`[id="${id}"]`)) : [];
+    }
+    if (kind === "name") {
+      return Array.from(root.querySelectorAll(`[name="${text}"]`));
+    }
+    if (kind === "label") {
+      return Array.from(root.querySelectorAll("input, select, textarea")).filter(
+        (control) => labelTextFor(control) === text,
+      );
+    }
+    if (kind === "css") {
+      try {
+        return Array.from(root.querySelectorAll(text));
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  }
+
+  function identifierTextOf(element) {
+    return readValue(element).replace(/\s+/g, " ").trim();
+  }
+
+  /** 로그인 화면으로 바뀌었는지 확인합니다. 감시 실패와 구분해 알리기 위한 것입니다. */
+  function loginFormPresent() {
+    return Boolean(document.querySelector('input[type="password"]'));
+  }
+
+  /**
+   * 감시 목록을 읽어 식별자만 모읍니다. 본문(이름·사유 등)은 읽지 않습니다.
+   * 행이 없거나 식별자를 하나로 특정하지 못하면 중단합니다.
+   */
+  function evaluateWatch(spec) {
+    const list = (spec && spec.list) || {};
+    const identity = (spec && spec.identity) || {};
+    const rows = resolveAll(list.kind, list.value);
+    if (rows.length === 0) {
+      return {
+        ok: false,
+        reason: loginFormPresent() ? "login_required" : "rows_missing",
+        rowCount: 0,
+      };
+    }
+
+    const identifiers = [];
+    let unreadable = 0;
+    for (const row of rows) {
+      const matches = resolveWithin(row, identity.kind, identity.value);
+      if (matches.length !== 1) {
+        unreadable += 1;
+        continue;
+      }
+      const text = identifierTextOf(matches[0]);
+      if (text) {
+        identifiers.push(text);
+      }
+    }
+    if (unreadable > 0) {
+      return { ok: false, reason: "identity_not_unique", rowCount: rows.length, unreadable };
+    }
+
+    const seen = {};
+    const duplicates = [];
+    for (const identifier of identifiers) {
+      if (seen[identifier]) {
+        duplicates.push(identifier);
+      }
+      seen[identifier] = true;
+    }
+    if (duplicates.length > 0) {
+      return {
+        ok: false,
+        reason: "duplicate_identifiers",
+        rowCount: rows.length,
+        duplicates: duplicates.slice(0, 5),
+      };
+    }
+
+    return { ok: true, identifiers, rowCount: rows.length };
+  }
+
   function cssPathFor(element) {
     const parts = [];
     let node = element;
@@ -468,6 +603,51 @@ export function automationPageCommand(command) {
         missingEditors: analysis.missingEditors,
       };
     });
+  }
+
+  if (command.op === "pick-watch") {
+    return pickElement().then((element) => {
+      if (!element) {
+        return { ok: false, reason: "cancelled" };
+      }
+      const row = rowOf(element);
+      if (!row || !row.parentElement) {
+        return { ok: false, reason: "row_missing" };
+      }
+      const identity = relativeSelector(element, row);
+      if (!identity) {
+        return { ok: false, reason: "identity_missing" };
+      }
+      const list = {
+        kind: "css",
+        value: `${cssPathFor(row.parentElement)} > ${tagOf(row)}`,
+      };
+
+      const evaluated = evaluateWatch({ list, identity });
+      if (evaluated.ok !== true) {
+        return evaluated;
+      }
+      return {
+        ok: true,
+        spec: { list, identity },
+        rowCount: evaluated.rowCount,
+        sample: evaluated.identifiers.slice(0, 3),
+      };
+    });
+  }
+
+  if (command.op === "watch-scan") {
+    const evaluated = evaluateWatch(command.watch);
+    if (evaluated.ok !== true) {
+      return evaluated;
+    }
+    return {
+      ok: true,
+      identifiers: evaluated.identifiers,
+      rowCount: evaluated.rowCount,
+      url: location.href,
+      title: document.title,
+    };
   }
 
   if (command.op === "preview") {

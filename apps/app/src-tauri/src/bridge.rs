@@ -22,9 +22,9 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use uuid::Uuid;
 
 use crate::{
-    AutomationField, AutomationKind, AutomationRecipe, AutomationTable, automation_config_dir,
-    automation_recipes_path, normalize_recipe, read_automation_recipes, upsert_automation_recipe,
-    write_file_atomically,
+    AutomationField, AutomationKind, AutomationRecipe, AutomationTable, AutomationWatch,
+    automation_config_dir, automation_recipes_path, automation_watch_state_path, normalize_recipe,
+    read_automation_recipes, record_watch_scan, upsert_automation_recipe, write_file_atomically,
 };
 
 /// Loopback port the desktop app listens on for the extension.
@@ -44,6 +44,7 @@ fn allowed_origin() -> String {
 pub struct BridgeState {
     pub token: Arc<String>,
     pub recipes_path: PathBuf,
+    pub watch_state_path: PathBuf,
 }
 
 #[derive(Serialize)]
@@ -104,6 +105,29 @@ pub struct TableRecipeResponse {
     pub date_labels: usize,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchRecipeRequest {
+    pub name: String,
+    pub url: String,
+    pub watch: AutomationWatch,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchRecipeResponse {
+    pub id: String,
+    pub name: String,
+    pub target_url: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchScanRequest {
+    pub recipe_id: String,
+    pub identifiers: Vec<String>,
+}
+
 fn json_error(status: StatusCode, code: &str, message: &str) -> Response {
     (
         status,
@@ -139,6 +163,8 @@ pub fn router(state: BridgeState) -> Router {
         .route("/v1/bridge/shortcuts", post(create_shortcut))
         .route("/v1/bridge/fill-recipes", post(create_fill_recipe))
         .route("/v1/bridge/table-recipes", post(create_table_recipe))
+        .route("/v1/bridge/watch-recipes", post(create_watch_recipe))
+        .route("/v1/bridge/watch-scans", post(record_watch_scan_route))
         .route("/v1/bridge/recipes", get(list_recipes))
         .route_layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
@@ -164,6 +190,7 @@ async fn create_shortcut(
         target_url: body.url,
         fields: Vec::new(),
         table: None,
+        watch: None,
     };
     let recipe = match normalize_recipe(recipe) {
         Ok(recipe) => recipe,
@@ -203,6 +230,7 @@ async fn create_fill_recipe(
         target_url: body.url,
         fields: body.fields,
         table: None,
+        watch: None,
     };
     let recipe = match normalize_recipe(recipe) {
         Ok(recipe) => recipe,
@@ -243,6 +271,7 @@ async fn create_table_recipe(
         target_url: body.url,
         fields: Vec::new(),
         table: Some(body.table),
+        watch: None,
     };
     let recipe = match normalize_recipe(recipe) {
         Ok(recipe) => recipe,
@@ -274,6 +303,83 @@ async fn create_table_recipe(
                 "storage_failed",
                 "the recipe could not be stored",
             )
+        }
+    }
+}
+
+/// 감시 레시피는 목록의 행 위치와 행 안 식별자 위치만 저장합니다.
+async fn create_watch_recipe(
+    State(state): State<BridgeState>,
+    Json(body): Json<WatchRecipeRequest>,
+) -> Response {
+    let recipe = AutomationRecipe {
+        id: Uuid::new_v4().to_string(),
+        kind: AutomationKind::Watch,
+        name: body.name,
+        target_url: body.url,
+        fields: Vec::new(),
+        table: None,
+        watch: Some(body.watch),
+    };
+    let recipe = match normalize_recipe(recipe) {
+        Ok(recipe) => recipe,
+        Err(message) => return json_error(StatusCode::BAD_REQUEST, "invalid_recipe", &message),
+    };
+
+    match upsert_automation_recipe(&state.recipes_path, recipe.clone()) {
+        Ok(_) => (
+            StatusCode::CREATED,
+            Json(WatchRecipeResponse {
+                id: recipe.id,
+                name: recipe.name,
+                target_url: recipe.target_url,
+            }),
+        )
+            .into_response(),
+        Err(error) => {
+            eprintln!("자동화 브리지가 감시 레시피를 저장하지 못했습니다: {error}");
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "storage_failed",
+                "the recipe could not be stored",
+            )
+        }
+    }
+}
+
+/// 확장이 읽은 식별자 목록을 받아 새 항목만 골라 상태로 남깁니다.
+async fn record_watch_scan_route(
+    State(state): State<BridgeState>,
+    Json(body): Json<WatchScanRequest>,
+) -> Response {
+    // 등록된 감시 레시피에 대해서만 상태를 남깁니다.
+    let recipes = match read_automation_recipes(&state.recipes_path) {
+        Ok(recipes) => recipes,
+        Err(message) => {
+            eprintln!("감시 스캔 전에 레시피를 읽지 못했습니다: {message}");
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "storage_failed",
+                "the recipes could not be read",
+            );
+        }
+    };
+    let known = recipes
+        .iter()
+        .any(|recipe| recipe.id == body.recipe_id && recipe.kind == AutomationKind::Watch);
+    if !known {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            "unknown_recipe",
+            "the watch recipe is not registered",
+        );
+    }
+
+    match record_watch_scan(&state.watch_state_path, &body.recipe_id, body.identifiers) {
+        Ok(outcome) => (StatusCode::OK, Json(outcome)).into_response(),
+        Err(message) => {
+            eprintln!("감시 스캔 결과를 저장하지 못했습니다: {message}");
+            json_error(StatusCode::BAD_REQUEST, "invalid_scan", &message)
         }
     }
 }
@@ -367,6 +473,7 @@ pub fn spawn(app: &tauri::AppHandle) -> Result<(), String> {
     let state = BridgeState {
         token: Arc::new(ensure_token(app)?),
         recipes_path: automation_recipes_path(app)?,
+        watch_state_path: automation_watch_state_path(app)?,
     };
     tauri::async_runtime::spawn(async move {
         let router = router(state);
@@ -412,6 +519,7 @@ mod tests {
         BridgeState {
             token: Arc::new(test_token()),
             recipes_path: directory.join(crate::AUTOMATION_RECIPES_FILE),
+            watch_state_path: directory.join(crate::AUTOMATION_WATCH_STATE_FILE),
         }
     }
 
@@ -797,6 +905,115 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn watch_recipes_endpoint_records_new_identifiers_once() {
+        let directory = test_directory("watch-create");
+        let app = router(state(&directory));
+        let payload = serde_json::json!({
+            "name": "체험학습 신청 감시",
+            "url": "https://example.invalid/experience",
+            "watch": {
+                "list": { "kind": "css", "value": "#applications > tbody > tr" },
+                "identity": { "kind": "css", "value": "td:nth-child(1)" }
+            }
+        });
+
+        let (status, body) = json_response(
+            app.clone(),
+            authorized_request("POST", "/v1/bridge/watch-recipes")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "body: {body}");
+        let recipe_id = body["id"].as_str().expect("created id").to_string();
+
+        let (status, body) = json_response(
+            app.clone(),
+            authorized_request("GET", "/v1/bridge/recipes")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body[0]["kind"], "watch");
+        assert_eq!(body[0]["watch"]["identity"]["value"], "td:nth-child(1)");
+
+        // 첫 스캔은 목록 전체를 새 항목으로 알립니다.
+        let scan = |identifiers: serde_json::Value| serde_json::json!({ "recipeId": recipe_id, "identifiers": identifiers });
+        let (status, body) = json_response(
+            app.clone(),
+            authorized_request("POST", "/v1/bridge/watch-scans")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    scan(serde_json::json!(["2026-01", "2026-02"])).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {body}");
+        assert_eq!(
+            body["newIdentifiers"],
+            serde_json::json!(["2026-01", "2026-02"])
+        );
+
+        // 같은 목록을 다시 보면 알림이 없습니다.
+        let (status, body) = json_response(
+            app.clone(),
+            authorized_request("POST", "/v1/bridge/watch-scans")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    scan(serde_json::json!(["2026-01", "2026-02"])).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["newIdentifiers"], serde_json::json!([]));
+
+        // 새 식별자만 알립니다.
+        let (status, body) = json_response(
+            app.clone(),
+            authorized_request("POST", "/v1/bridge/watch-scans")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    scan(serde_json::json!(["2026-01", "2026-03"])).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["newIdentifiers"], serde_json::json!(["2026-03"]));
+
+        // 등록되지 않은 레시피에는 상태를 남기지 않습니다.
+        let unknown = serde_json::json!({ "recipeId": "unknown", "identifiers": ["2026-04"] });
+        let response = app
+            .clone()
+            .oneshot(
+                authorized_request("POST", "/v1/bridge/watch-scans")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(unknown.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        // 탭·줄바꿈이 섞인 식별자는 거부합니다.
+        let (status, _) = json_response(
+            app,
+            authorized_request("POST", "/v1/bridge/watch-scans")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    scan(serde_json::json!(["bad\tvalue"])).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
     #[test]
