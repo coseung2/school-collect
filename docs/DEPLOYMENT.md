@@ -13,8 +13,11 @@ School Collect는 서버(API·migrator·worker)와 데스크톱 앱으로 나뉩
   스키마 적용 여부를 함께 확인합니다.
 - 마이그레이션: `school-collect-migrator`만 스키마를 변경합니다. API 기동의
   부수 효과로 스키마가 바뀌지 않습니다.
-- 데스크톱 앱: `pnpm --filter @school-collect/app tauri build`로 설치 파일을
-  만들고, `tauri dev`로 개발 실행합니다.
+- 데스크톱 앱: `pnpm --filter @school-collect/app tauri build --bundles nsis`로
+  Windows 설치 파일(`target/release/bundle/nsis/*_x64-setup.exe`, 현재 사용자
+  설치, 한국어·영어)을 만들고, `tauri dev`로 개발 실행합니다. CI
+  `tauri-windows-smoke` 작업이 매번 설치 파일을 만들고 버전·크기와 서명 상태를
+  기록합니다. 현재 설치 파일은 서명되지 않아 Windows SmartScreen 경고가 뜹니다.
 - 로컬 개발 스택: `infra/compose.dev.yml`이 개발자별 `postgres`(18), `nats`,
   일회성 `migrator`, `api`, `worker`를 정의합니다.
 - 백업/복구 drill: `scripts/backup_restore_drill.sh`가 `pg_dump` → 빈 DB
@@ -89,7 +92,10 @@ pnpm --filter @school-collect/app tauri dev  # 데스크톱 창
   실제 origin
 - **비밀값 주입**: 대상 호스트에서 Infisical Machine Identity를 쓸지 여부
 - **DB 역할 분리**: runtime 역할과 migration 역할 분리 및 최소 권한
-- **데스크톱 서명·업데이트**: 코드 서명 인증서와 업데이트 채널
+- **데스크톱 서명·업데이트**: 코드 서명 인증서와 업데이트 채널. 설치 파일 번들은
+  준비되어 있고, 인증서 구매와 업데이트 배포 위치(서명 키 포함)는 소유자 결정이
+  필요합니다. 결정 전에는 updater를 켜지 않습니다(검증 키 없이 켜면 업데이트를
+  신뢰할 수 없습니다).
 - **백업·복구**: 백업 주기와 실제 운영 DB 대상 복구 훈련(RPO/RTO 기록).
   저장소 쪽 drill 스크립트는 준비되어 있고, 운영 자원·일정은 소유자 결정이
   필요합니다.

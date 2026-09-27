@@ -290,6 +290,20 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Build native app without bundling
+      - name: Build the Windows installer (unsigned)
         working-directory: apps/app
-        run: pnpm tauri build --no-bundle
+        run: pnpm tauri build --bundles nsis
+      - name: Installer must exist and carry the configured version
+        shell: pwsh
+        run: |
+          $conf = Get-Content -Raw apps/app/src-tauri/tauri.conf.json | ConvertFrom-Json
+          $dir = "target/release/bundle/nsis"
+          $installers = @(Get-ChildItem -Path $dir -Filter "*_$($conf.version)_x64-setup.exe" -ErrorAction SilentlyContinue)
+          if ($installers.Count -ne 1) {
+            Get-ChildItem -Recurse target/release/bundle -ErrorAction SilentlyContinue | Select-Object FullName, Length
+            throw "expected exactly one NSIS installer for version $($conf.version) in $dir, found $($installers.Count)"
+          }
+          $installer = $installers[0]
+          if ($installer.Length -lt 1MB) { throw "installer is unexpectedly small: $($installer.Length) bytes" }
+          $signature = Get-AuthenticodeSignature -FilePath $installer.FullName
+          "installer=$($installer.Name) bytes=$($installer.Length) signature=$($signature.Status)"
