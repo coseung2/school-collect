@@ -443,6 +443,85 @@ textarea:focus-visible {
   color: var(--sc-color-danger);
 }
 
+/* Select: native control, custom chevron. Radius <= 8px, no shadow. */
+.sc-select {
+  position: relative;
+  display: inline-flex;
+  width: 100%;
+  align-items: center;
+}
+
+.sc-select__control {
+  width: 100%;
+  min-height: var(--sc-control-height);
+  border: 1px solid var(--sc-color-border-strong);
+  border-radius: var(--sc-radius-sm);
+  padding: 0 calc(var(--sc-space-3) + 20px) 0 var(--sc-space-3);
+  background: var(--sc-color-surface);
+  color: var(--sc-color-text);
+  font-size: 14px;
+  appearance: none;
+  cursor: pointer;
+}
+
+.sc-select__control:hover:not(:disabled) {
+  border-color: var(--sc-color-accent);
+}
+
+.sc-select__control:disabled {
+  background: var(--sc-color-surface-subtle);
+  color: var(--sc-color-text-subtle);
+  cursor: not-allowed;
+}
+
+.sc-select__control[aria-invalid="true"] {
+  border-color: var(--sc-color-danger);
+}
+
+.sc-select__chevron {
+  position: absolute;
+  right: var(--sc-space-3);
+  color: var(--sc-color-text-muted);
+  pointer-events: none;
+}
+
+/* Checkbox: the whole label row is the hit target. */
+.sc-checkbox {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  gap: var(--sc-space-2);
+  color: var(--sc-color-text);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.sc-checkbox__control {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  margin: 0;
+  accent-color: var(--sc-color-accent);
+  cursor: pointer;
+}
+
+.sc-checkbox:has(.sc-checkbox__control:disabled) {
+  color: var(--sc-color-text-subtle);
+  cursor: not-allowed;
+}
+
+.sc-checkbox__meta {
+  margin-left: var(--sc-space-2);
+  color: var(--sc-color-text-muted);
+  font-size: 12px;
+}
+
+@media (pointer: coarse) {
+  .sc-checkbox {
+    min-height: 44px;
+  }
+}
+
 .sc-shell {
   display: grid;
   min-height: 100vh;

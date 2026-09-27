@@ -8,6 +8,7 @@ import {
   ListSurface,
   LoadingState,
   PermissionState,
+  Select,
   Status,
 } from "@school-collect/ui";
 import {
@@ -178,17 +179,15 @@ export function MembersPage({
             />
           </FormField>
           <FormField htmlFor="invite-role" label="역할">
-            <select
+            <Select
               id="invite-role"
               onChange={(event) => setInviteRole(event.target.value)}
+              options={inviteRoles.map((value) => ({
+                value,
+                label: roleOf(value),
+              }))}
               value={inviteRole}
-            >
-              {inviteRoles.map((value) => (
-                <option key={value} value={value}>
-                  {roleOf(value)}
-                </option>
-              ))}
-            </select>
+            />
           </FormField>
           {formError ? (
             <p className="app-form__error" role="alert">

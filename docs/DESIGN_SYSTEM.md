@@ -91,16 +91,24 @@ Desktop:
 - List Surface
 - Tabs reference
 - flat Data Table reference
+- Select (코드 우선, 2026-09-27): native `<select>` + chevron, 높이 40px, radius 4px,
+  hover·disabled·invalid(`aria-invalid`) 상태. `FormField`와 짝지어 label을 연결합니다.
+- Checkbox (코드 우선, 2026-09-27): native checkbox를 label로 감싸 행 전체가 누름
+  영역(36px, coarse pointer 44px), 보조 설명(meta)·disabled 상태.
 
 후속 C-01/Design System 보강 대상:
-- Select
-- Checkbox
 - Radio
 - Switch
 - Dialog
 - Sheet
 - Toast
 - detailed hover/pressed/focus-visible/keyboard states
+
+Select·Checkbox는 기존 token(색·radius·control height·focus)만 써서 코드에 먼저
+추가했고, 제품 화면(구성원 초대 역할, 수합 대상 선택·대상 편집)의 기존 native 컨트롤을
+교체했습니다. Figma component로 옮기는 일은 Library 작업과 함께 남아 있습니다.
+Dialog·Sheet·Toast는 새 시각 규칙(오버레이·위치·지속 시간)이 필요해 Figma 승인 후
+추가합니다.
 
 ## States
 
