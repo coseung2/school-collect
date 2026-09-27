@@ -5,6 +5,7 @@ export type AppRoute =
   | { page: "assignments" }
   | { page: "assignment"; id: string }
   | { page: "members" }
+  | { page: "automation" }
   | { page: "settings" };
 
 /**
@@ -18,6 +19,7 @@ const membershipRoutes: Record<AppRoute["page"], boolean> = {
   assignments: true,
   assignment: true,
   members: true,
+  automation: false,
   settings: false,
 };
 
@@ -34,6 +36,9 @@ export function parseHash(hash: string): AppRoute {
   }
   if (path === "members") {
     return { page: "members" };
+  }
+  if (path === "automation") {
+    return { page: "automation" };
   }
   if (path === "settings") {
     return { page: "settings" };
@@ -66,6 +71,8 @@ export function hashFor(route: AppRoute): string {
       return `#assignments/${encodeURIComponent(route.id)}`;
     case "members":
       return "#members";
+    case "automation":
+      return "#automation";
     case "settings":
       return "#settings";
   }

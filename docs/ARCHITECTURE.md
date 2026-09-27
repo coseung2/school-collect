@@ -1,12 +1,21 @@
 # v2 목표 아키텍처
 
-상태: production target architecture. 실행 가능한 기반은 PR #11에서 CI 검증되었지만 아직 장기 브랜치에 통합되지 않았습니다.
+상태: production target architecture. 실행 기반(PR #11), Code DS/AppShell(PR #17), 인증·수합 기본 흐름(PR #19)은 develop에 통합됐습니다. 현재 구현과 미검증 범위는 [STATUS.md](STATUS.md)를 따릅니다.
 
 ## 원칙
 
 School Collect v2는 MVP 전용 임시 구조를 두지 않습니다. 작은 기능도 최종 trust boundary, tenancy, migration, observability, recovery 방향과 호환되도록 구현합니다.
 
-## 데이터 경로
+## 학교업무와 개인기능 경계
+
+- 학교업무: 학교 현황·수합·내 제출·구성원은 서버의 계정/membership/권한을 기준으로 합니다. offline 제출 초안도 사용자/학교 범위의 데이터입니다.
+- 개인기능: 개인 바로가기와 브라우저 레시피는 School Collect 로그인·학교 가입 없이 사용하는 로컬 도구입니다. 현재 기능 브랜치의 TSV 레시피는 OS 사용자 단위이며 학교 DB에 업로드하지 않습니다.
+- AppShell·Design System·기기 설정은 공유하되 학교 로그인/로그아웃·API 장애가 개인 화면을 막지 않는 것을 목표로 합니다. 이 경계는 일부 기능 브랜치에 구현됐으며 develop 통합 전입니다.
+- 개인 자동화에서 학교 데이터를 사용하려면 별도 API 권한·보존·정리 계약을 둡니다. 외부 업무 사이트의 브라우저 로그인 세션을 앱 서버로 복사하지 않습니다.
+
+작업 계획: [학교업무](SCHOOL_WORK_PLAN.md), [개인기능](PERSONAL_PLAN.md), [공통 기반](TEAM_BACKLOG.md).
+
+## 학교업무 데이터 경로 (목표)
 
 ```text
 Tauri (React UI + narrow native adapters)
@@ -18,12 +27,14 @@ Tauri (React UI + narrow native adapters)
        -> DB transactional outbox -> relay -> NATS JetStream
                                             -> worker -> R2 / PostgreSQL
 
-System browser -> ZITADEL (OIDC Authorization Code + PKCE)
+System browser -> Supabase Auth (external browser PKCE: planned)
 Local SQLite -> draft/cache/outbox -> API
 Server data remains authoritative
 ```
 
 클라이언트는 DB/R2/NATS 관리자 credential을 갖지 않습니다. Tauri의 Rust 코드도 신뢰 서버가 아닙니다.
+
+위 Cloudflare edge/R2/JetStream과 외부 브라우저 PKCE는 목표이며 연결 완료를 의미하지 않습니다. 현재 인증 방식은 ADR-0002의 Supabase 로그인과 API token 검증입니다. 개인기능의 목표 경로는 Tauri -> 로컬 레시피/제한된 브리지 -> 브라우저 확장 -> 현재 탭이며 확장·브리지는 후속 계획입니다.
 
 ## 저장소 구조
 
@@ -65,6 +76,8 @@ API는 modular monolith를 기준으로 합니다. worker와 migrator는 책임�
 
 v2 migration은 `migrations/v2/`만 실행합니다. legacy v1 migration과 섞지 않습니다.
 
+로컬/CI는 PostgreSQL 18입니다. ADR-0002의 외부 DB 실행 기록은 PostgreSQL 17 대상으로, 대상별 버전과 검증 근거를 구분합니다.
+
 - runtime DB role != migration role
 - runtime role은 schema owner/superuser/BYPASSRLS 금지
 - 이미 배포된 migration 수정 대신 forward-only migration
@@ -76,7 +89,7 @@ production migration에는 demo 업무 데이터를 넣지 않습니다. 테스�
 
 ## Authentication / authorization
 
-ZITADEL은 identity provider, School Collect 서버는 tenant membership/RBAC/resource policy authority입니다.
+[ADR-0002](ADR/0002-supabase-identity-and-database.md)에 따라 Supabase Auth가 identity provider이고 School Collect 서버가 tenant membership/RBAC/resource policy authority입니다. ZITADEL 선택은 대체됐습니다. 현재 로그인은 Supabase 인증 후 access token을 창 메모리에 보관하는 방식이며 외부 브라우저 PKCE·OS 보안 저장소는 후속입니다.
 
 검증 기준:
 - Authorization Code + PKCE

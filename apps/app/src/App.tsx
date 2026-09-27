@@ -13,6 +13,7 @@ import { canManage, messageOf, useOnline } from "./helpers";
 import { AssignmentPage } from "./pages/AssignmentPage";
 import { AssignmentsPage } from "./pages/AssignmentsPage";
 import { CreateSchoolCard, SignInView } from "./pages/AuthViews";
+import { AutomationPage } from "./pages/AutomationPage";
 import { CollectDetailPage } from "./pages/CollectDetailPage";
 import { CollectsPage } from "./pages/CollectsPage";
 import { MembersPage } from "./pages/MembersPage";
@@ -28,7 +29,15 @@ import {
 
 type NavPage = Extract<
   AppRoute,
-  { page: "overview" | "collects" | "assignments" | "members" | "settings" }
+  {
+    page:
+      | "overview"
+      | "collects"
+      | "assignments"
+      | "members"
+      | "automation"
+      | "settings";
+  }
 >["page"];
 
 const routeMeta: Record<
@@ -58,6 +67,10 @@ const routeMeta: Record<
   members: {
     title: "구성원",
     description: "이 학교의 구성원과 역할을 봅니다.",
+  },
+  automation: {
+    title: "업무 자동화",
+    description: "자주 쓰는 업무 화면을 사용자 정의 버튼으로 등록합니다.",
   },
   settings: {
     title: "설정",
@@ -160,6 +173,12 @@ export default function App() {
       });
     }
     items.push({
+      id: "automation",
+      icon: "sliders",
+      label: "업무 자동화",
+      group: "도구",
+    });
+    items.push({
       id: "settings",
       icon: "settings",
       label: "설정",
@@ -174,6 +193,8 @@ export default function App() {
 
   function localContent(): ReactNode {
     switch (route.page) {
+      case "automation":
+        return <AutomationPage />;
       case "settings":
         return (
           <SettingsPage

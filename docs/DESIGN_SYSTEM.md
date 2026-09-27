@@ -1,6 +1,6 @@
 # Figma Design System 계약
 
-상태: **제품 시안 승인 완료**. 코드 Design System 구현은 Stage 5에서 진행합니다.
+상태: **제품 시안 승인 완료**, 기본 코드 Design System/AppShell은 PR #17로 통합됐습니다. 후속 작업은 [TEAM_BACKLOG.md](TEAM_BACKLOG.md)의 C-01에서 관리합니다.
 
 ## Figma files
 
@@ -67,6 +67,17 @@ Desktop:
 
 광범위한 blue wash, blue table band, blue filter strip은 사용하지 않습니다.
 
+### 학교업무 / 개인기능 구분 계약
+
+2026-09-27 작업 계획 기준입니다. 아래는 후속 UI 반영 계약이며 이번 문서 변경으로 Figma나 앱 화면을 변경한 것은 아닙니다.
+
+- 학교 현황·자료수합·내 제출·구성원은 학교업무로 묶습니다. `내 제출`도 학교 membership이 필요합니다.
+- 개인 바로가기·자동입력·감시는 개인기능으로 묶고 School Collect 로그인 없이 접근할 수 있게 합니다. 학교 API 장애로 개인 화면 전체를 막지 않습니다.
+- 로그인 전에 학교 화면을 열면 Permission 상태에서 이유와 로그인 행동을 보여줍니다. 개인 화면으로 이동할 수 있어야 합니다.
+- 설정은 기기/개인 도구 설정과 학교 계정/연결 설정을 구분합니다. 학교 로그아웃이 개인 버튼을 지우지 않도록 표시합니다.
+- offline 상태는 영향을 받는 기능에 맞춰 표시합니다. 로컬 버튼 관리 가능 여부와 학교 제출/외부 사이트 연결 불가를 구분합니다.
+- 두 영역 모두 기존 sidebar·token·List Surface/Row·상태 컴포넌트를 공유합니다. Figma 후속과 코드 반영 시 이 계약을 함께 대조합니다.
+
 ## Components
 
 현재 Design System에서 정의/승인된 기준:
@@ -81,7 +92,7 @@ Desktop:
 - Tabs reference
 - flat Data Table reference
 
-후속 Stage 5/Design System 보강 대상:
+후속 C-01/Design System 보강 대상:
 - Select
 - Checkbox
 - Radio
@@ -132,7 +143,7 @@ Figma와 코드가 충돌할 경우 조용히 한쪽을 덮어쓰지 않고 차�
 
 ## Accessibility
 
-Stage 5에서 실제 코드와 함께 확인:
+각 UI 변경에서 실제 코드와 함께 확인:
 - keyboard navigation
 - focus-visible
 - semantic roles/name
@@ -145,11 +156,11 @@ Stage 5에서 실제 코드와 함께 확인:
 
 ## 승인과 남은 작업
 
-제품 시안은 승인되었습니다.
+제품 시안 승인과 기본 `packages/ui` token/component 및 AppShell 구현은 완료됐습니다.
 
 남은 것은 “다시 시안 만들기”가 아니라:
-- Figma variables -> repo token mapping
-- `packages/ui` 구현
+- Figma variables -> repo token mapping의 세부 대조와 누락 보강
+- 추가 component와 학교업무/개인기능 진입·설정·상태 구분
 - interaction/accessibility detail
 - Desktop/Mobile density mapping
 - Library publish/Code Connect 적용 여부
