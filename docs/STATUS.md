@@ -133,6 +133,8 @@ PR #24/#25는 모두 develop에 병합됐습니다(`f573bfb`, `11a0af0`). 병합
 - F4(P3) 상태 문구 불일치: `TEAM_BACKLOG.md` 표의 S-06 미구현 문구는 #81에서, `SCHOOL_WORK_PLAN.md`의 S-04 문장과 `V2_PLAN.md`의 OS 보안 저장소 문장은 이번 PR에서 실제 범위로 고쳤습니다. 이제 소비 worker는 구현으로, 제출 작성·검토 화면은 PR #70 완료로, 세션의 OS 보안 저장소는 S-05(PR #45·#46) 구현·검증으로 적힙니다.
 - 검증: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo test --workspace --locked`(163개). 실제 개발 DB `crates/db/tests/attachments.rs` 11개, worker sweep 1개·소비 worker 2개·relay 6개. 실제 provider + PostgreSQL E2E 5개(전체 흐름·초대·결과 내보내기·역할 4종·첨부). 실제 Tauri 창(WebView2 CDP, 가짜 provider)으로 로그인 화면 → native 명령 → loopback 콜백 → code 교환 → OS 자격 증명 저장소가 provider가 발급한 `sub`와 같은 사용자로 저장, 첨부 상태 기계와 목록 실패 복구를 확인했습니다. `@example.test` 계정·검증 학교·사용자 0.
 
+- PR #82(`e3bb4ff`)로 develop에 통합했습니다. 첫 CI 실행에서 `psql`이 `INSERT ... RETURNING` 결과 뒤에 명령 태그(`INSERT 0 1`)를 덧붙여 캡처한 id가 깨졌고, outer 문을 SELECT(데이터 변경 CTE)로 바꾸고 캡처 값이 단일 uuid인지 검사하도록 고쳐 다시 통과했습니다. 병합 후 CI 7개가 성공했고, `nats-outbox` 작업은 runtime 역할로 넣은 due 이벤트 1건(`0ad25b12-…`)이 relay → JetStream → 소비 commit → ACK와 `published_at` 기록까지 실제로 통과함을 확인했습니다. `postgres` 작업은 runtime 역할 API의 `/ready` 200과 drill(`migrations=10 tables=15`)을 확인했습니다.
+
 ## 단계 상태
 
 | 단계 | 상태 | 확인된 내용 | 남은 게이트 |
