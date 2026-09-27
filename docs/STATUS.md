@@ -19,14 +19,16 @@
 - S-06 outbox/worker는 PR #43(`e722bce`)로 develop에 통합했습니다. 병합 전 CI 7개(새 `nats-outbox` 포함)가 성공했고, 실제 개발 DB relay 테스트 6개와 JetStream 배달·중복 제거를 실제 브로커로 확인했습니다.
 - S-05 세션·오프라인 초안은 PR #45(`10d1c14`)와 PR #46(`93cebdc`)로 develop에 통합했습니다. 병합 전 CI 7개가 성공했고, 실제 Tauri 창에서 세션 저장·재시작 복구·로그아웃 정리와 오프라인 초안 저장·복구·동기화·정리를 확인했습니다. 외부 브라우저 PKCE는 남아 있습니다.
 - S-07 결과 내보내기 1차는 PR #48(`9860710`)로 develop에 통합했습니다. 병합 전 CI 7개가 성공했고, 실제 프로젝트 E2E에서 담당자 200(두 구성원 행·쉼표 값 인용·감사 1건)과 교사 403을 확인했습니다. 전체 흐름 검증과 화면 버튼은 남아 있습니다.
+- S-07 결과 내보내기 2차(화면 버튼·전체 흐름 검증)는 PR #50(`88b0a38`)으로 develop에 통합했습니다. 병합 전 CI 7개가 성공했고, 실제 Tauri 창에서 수합 상세의 `결과 CSV 내보내기`로 다운로드 폴더에 저장되는 것과 실제 프로젝트 E2E 3개(전체 흐름·초대·내보내기) 통과를 확인했습니다.
+- P-07 레시피 추천은 PR #51(`8704d95`)로 develop에 통합했습니다. `apps/extension`과 `scripts/tests`만 바꿔 변경 경로에 해당하는 `repository-checks`가 성공했고, 실제 Edge에서 자동입력·표 입력·감시 후보의 생성·저장·실행과 로그인 화면·화면 변경 중단 경로를 확인했습니다.
 - 학교 화면의 로그인 이후 흐름과 과거 native/API/DB·브라우저 검증, 외부 운영 설정은 이번에 재실행·재조회하지 않았습니다. CI 성공도 production 배포를 대신하지 않습니다.
 
 ## 학교업무 / 개인기능 상태
 
 | 영역 | 통합된 것 | 통합 전 구현 | 남은 우선 작업 |
 | --- | --- | --- | --- |
-| 학교업무 | PR #19·#24(`f573bfb`) + S-02(`9416c6c`) + S-03(`70dcbfe`) + S-06(`e722bce`) + S-05 세션·초안(`93cebdc`) + S-07 내보내기(`9860710`) | 없음 | S-05 외부 브라우저 PKCE, S-04 파일 첨부(C-03 저장소 설정 필요), S-07 전체 흐름 검증·화면 버튼 |
-| 개인기능 | PR #25 개인 화면(`11a0af0`) + PR #30 브리지·확장(`795dc26`) + PR #32·#33 자동입력 엔진(`5318a96`) + PR #35 표 입력(`09b3f88`) + PR #37 감시(`e5415dc`) 통합 | 없음 | P-05 앱 데이터 연결(데이터 원천·권한 계약 대기), P-07 선택 AI 보조 |
+| 학교업무 | PR #19·#24(`f573bfb`) + S-02(`9416c6c`) + S-03(`70dcbfe`) + S-06(`e722bce`) + S-05 세션·초안(`93cebdc`) + S-07 내보내기(`9860710`, `88b0a38`) | 없음 | S-05 외부 브라우저 PKCE, S-04 파일 첨부(C-03 저장소 설정 필요), S-07 역할 4종 단일 시나리오 검증 |
+| 개인기능 | PR #25 개인 화면(`11a0af0`) + PR #30 브리지·확장(`795dc26`) + PR #32·#33 자동입력 엔진(`5318a96`) + PR #35 표 입력(`09b3f88`) + PR #37 감시(`e5415dc`) + PR #51 레시피 추천(`8704d95`) 통합 | 없음 | P-05 앱 데이터 연결(데이터 원천·권한 계약 대기) |
 | 공통 기반 | PR #17 DS/AppShell, PR #20 Docker 스택, PR #24 병합에서 학교/개인 화면 경계 정리 | 없음 | C-01 설정·offline 세부, C-02~C-05 보안·운영·배포 |
 
 PR #24/#25는 모두 develop에 병합됐습니다(`f573bfb`, `11a0af0`). 병합 과정에서 학교 화면 구조는 PR #24 방식을 유지하고 개인기능은 `pages/AutomationPage.tsx`와 `#automation` 라우트로 분리했습니다.
@@ -41,7 +43,7 @@ PR #24/#25는 모두 develop에 병합됐습니다(`f573bfb`, `11a0af0`). 병합
 | 4. Figma | 시안 승인 | Design System/Product 핵심 UI 승인, Stage 5 기본 token/component mapping | interaction/accessibility detail, Library/Code Connect 후속 |
 | 5. Code DS/AppShell | 완료 (PR #17, `9697363`) | `packages/ui` token/component와 실제 Tauri AppShell, 상태·키보드·wide/narrow 검증 | Figma Library/Code Connect 후속 |
 | 6. Auth/Data/Ops | 구현 중 | Supabase Auth 실로그인 + ES256/JWKS 검증, user/membership provisioning, tenant RBAC, Collect 상태 전이와 version 충돌까지 실제 프로젝트·실제 DB에서 E2E 통과. C-02로 키 회전·장애·캐시, 네 역할, 요청 ID·redaction, `/metrics`와 풀 재사용 학교 격리를 보강 | R2/NATS/SQLite/backup, 환경 분리, 세션 영속화 |
-| 7. Collect | 구현 중 | PR #19 기본 흐름과 PR #24 항목·대상·제출 현황·내 배정·구성원 화면을 통합 | 구성원 초대(S-02), 항목/대상 편집, 첨부, offline, 결과 export 및 전체 통합 E2E |
+| 7. Collect | 구현 중 | PR #19 기본 흐름, PR #24 항목·대상·제출 현황·내 배정·구성원 화면, S-03 편집, S-07 결과 내보내기와 화면 버튼을 통합하고 실제 프로젝트 E2E 3개로 확인 | 첨부(S-04), offline 세부, 역할 4종 단일 시나리오 검증 |
 
 ## 확인된 원격 상태
 
