@@ -15,6 +15,11 @@ import {
   type CollectDetail,
 } from "../api";
 import {
+  deleteLocalDraft,
+  loadLocalDraft,
+  saveLocalDraft,
+} from "../drafts";
+import {
   canSubmit,
   formatDue,
   labelOf,
@@ -31,11 +36,13 @@ export function AssignmentPage({
   role,
   tenantId,
   token,
+  userId,
 }: {
   collectId: string;
   role: string;
   tenantId: string;
   token: string;
+  userId: string;
 }) {
   const online = useOnline();
   const [detail, setDetail] = useState<CollectDetail | null>(null);
@@ -44,6 +51,7 @@ export function AssignmentPage({
   const [notice, setNotice] = useState<string | null>(null);
   const [conflict, setConflict] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [pendingLocal, setPendingLocal] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -52,13 +60,24 @@ export function AssignmentPage({
       for (const item of value.items) {
         nextValues[item.key] = payloadText(value.submission?.payload, item.key);
       }
+      // 재시작 복구: 서버로 보내지 못한 로컬 초안이 있으면 그 내용을 보여 줍니다.
+      const local = await loadLocalDraft(tenantId, userId, collectId);
+      if (local) {
+        for (const item of value.items) {
+          const saved = local.payload?.[item.key];
+          if (typeof saved === "string") {
+            nextValues[item.key] = saved;
+          }
+        }
+      }
       setDetail(value);
       setValues(nextValues);
+      setPendingLocal(Boolean(local));
       setError(null);
     } catch (caught) {
       setError(caught);
     }
-  }, [collectId, tenantId, token]);
+  }, [collectId, tenantId, token, userId]);
 
   useEffect(() => {
     void load();
@@ -139,10 +158,21 @@ export function AssignmentPage({
   }
 
   async function onSave() {
-    await persist(
-      () => saveDraft(token, tenantId, collectIdForSave, expectedVersion, values),
-      `초안을 저장했습니다. 버전 ${expectedVersion + 1}을 사용합니다.`,
-    );
+    // 로컬에 먼저 남기고 서버로 보냅니다. 서버 저장이 실패해도(오프라인·충돌)
+    // 입력한 내용은 이 컴퓨터에 남습니다.
+    await persist(async () => {
+      await saveLocalDraft({
+        tenantId,
+        userId,
+        collectId: collectIdForSave,
+        payload: values,
+        baseVersion: expectedVersion,
+      });
+      setPendingLocal(true);
+      await saveDraft(token, tenantId, collectIdForSave, expectedVersion, values);
+      await deleteLocalDraft(tenantId, userId, collectIdForSave);
+      setPendingLocal(false);
+    }, `초안을 저장했습니다. 버전 ${expectedVersion + 1}을 사용합니다.`);
   }
 
   async function onSubmit() {
@@ -152,8 +182,18 @@ export function AssignmentPage({
       return;
     }
     await persist(async () => {
+      // 로컬에만 있는 초안은 먼저 서버로 보낸 뒤 제출합니다.
+      await saveLocalDraft({
+        tenantId,
+        userId,
+        collectId: collectIdForSave,
+        payload: values,
+        baseVersion: expectedVersion,
+      });
       await saveDraft(token, tenantId, collectIdForSave, expectedVersion, values);
       await sendSubmission(token, tenantId, collectIdForSave);
+      await deleteLocalDraft(tenantId, userId, collectIdForSave);
+      setPendingLocal(false);
     }, "제출했습니다. 이제 내용을 바꿀 수 없습니다.");
   }
 
@@ -201,6 +241,12 @@ export function AssignmentPage({
         {conflict ? (
           <p className="app-form__error" role="alert">
             {conflict}
+          </p>
+        ) : null}
+        {pendingLocal ? (
+          <p className="app-form__notice" role="status">
+            이 컴퓨터에 저장된 초안을 불러왔습니다. 서버로 보내려면 임시 저장이나 제출을
+            누르세요.
           </p>
         ) : null}
         {error ? (
