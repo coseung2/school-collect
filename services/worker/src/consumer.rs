@@ -10,9 +10,8 @@
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use anyhow::Context as _;
-use async_nats::jetstream::consumer::{AckPolicy, DeliverPolicy, pull};
+use async_nats::jetstream::consumer::{AckPolicy, DeliverPolicy, PullConsumer, pull};
 use async_nats::jetstream::{self, Context};
-use async_nats::{Client, StatusCode, Subject};
 use school_collect_db::record_event_processed;
 use serde_json::Value;
 use sqlx::{PgConnection, PgPool};
@@ -25,10 +24,6 @@ use crate::nats::{STREAM_NAME, SUBJECT_PREFIX};
 /// The name is also the identity written to processed events, so the record
 /// that makes a delivery idempotent belongs to the consumer that handled it.
 pub const CONSUMER_NAME: &str = "school_collect_worker";
-
-/// JetStream API prefix of a context without a custom domain, which is how both
-/// the relay and this consumer build their context.
-const API_PREFIX: &str = "$JS.API";
 
 /// How long one pull request waits before the broker reports that it has
 /// nothing to deliver. It bounds an idle round and the shutdown wait on a quiet
@@ -138,26 +133,15 @@ pub async fn consume_one(
     Ok(ConsumeOutcome::Processed)
 }
 
-/// One delivery: the body to handle and the subject that acknowledges it.
-struct Delivery {
-    body: Vec<u8>,
-    ack_subject: Subject,
-}
-
 /// A durable pull consumer over the outbox events stream.
+///
+/// One message is asked for at a time and acknowledged by hand, only after its
+/// effect committed, so the consumer never takes on more work than it can
+/// finish.
 pub struct JetStreamConsumer {
-    client: Client,
+    stream: jetstream::stream::Stream,
     /// Durable name, also the identity written to processed events.
     name: String,
-    /// The pull API's request subject for this consumer.
-    ///
-    /// `Consumer::request_batch` builds the same request, but its reply is a
-    /// `Stream` whose only driver here would be `futures` — a dependency this
-    /// crate has for its tests alone — so the worker asks for one message at a
-    /// time and acknowledges each delivery on the reply subject it carries.
-    subject: String,
-    /// Pull request body: a single message, bounded by [`PULL_EXPIRES`].
-    request: Vec<u8>,
 }
 
 impl JetStreamConsumer {
@@ -190,12 +174,7 @@ impl JetStreamConsumer {
             .context("the durable consumer could not be opened")?;
 
         Ok(Self {
-            client: context.client(),
-            subject: format!("{API_PREFIX}.CONSUMER.MSG.NEXT.{STREAM_NAME}.{name}"),
-            request: serde_json::to_vec(&serde_json::json!({
-                "batch": 1,
-                "expires": PULL_EXPIRES.as_nanos() as u64,
-            }))?,
+            stream,
             name: name.to_owned(),
         })
     }
@@ -215,84 +194,42 @@ impl JetStreamConsumer {
         pool: &PgPool,
         effect: &dyn EventEffect,
     ) -> anyhow::Result<Option<ConsumeOutcome>> {
-        let Some(delivery) = self.pull().await? else {
+        let Some(message) = self.pull().await? else {
             return Ok(None);
         };
-        let outcome = consume_one(pool, &self.name, effect, &delivery.body).await?;
-        self.acknowledge(&delivery).await?;
+        let outcome = consume_one(pool, &self.name, effect, &message.payload).await?;
+        message
+            .ack()
+            .await
+            .map_err(|error| anyhow::anyhow!("the acknowledgement failed: {error}"))?;
         Ok(Some(outcome))
     }
 
-    /// Requests one message from the broker.
+    /// Requests at most one message from the broker.
     ///
-    /// `None` means the broker had nothing to deliver inside the pull window.
-    async fn pull(&self) -> anyhow::Result<Option<Delivery>> {
-        let message = self
-            .client
-            .request(self.subject.clone(), self.request.clone().into())
-            .await?;
-
-        match classify_pull(message.status) {
-            PullReply::Message => delivered(message),
-            PullReply::Empty => Ok(None),
-            PullReply::Refused(status) => {
-                anyhow::bail!("the broker refused the pull request: {status:?}")
-            }
+    /// `None` means the broker delivered nothing inside the pull window. An
+    /// idle round is not an error: the fetch stream just ends, and the caller
+    /// asks again later.
+    async fn pull(&self) -> anyhow::Result<Option<jetstream::Message>> {
+        let consumer: PullConsumer =
+            self.stream
+                .get_consumer(&self.name)
+                .await
+                .map_err(|error| {
+                    anyhow::anyhow!("the durable consumer could not be opened: {error}")
+                })?;
+        let mut messages = consumer
+            .fetch()
+            .max_messages(1)
+            .expires(PULL_EXPIRES)
+            .messages()
+            .await
+            .context("the pull request could not be sent")?;
+        match futures::StreamExt::next(&mut messages).await {
+            None => Ok(None),
+            Some(Ok(message)) => Ok(Some(message)),
+            Some(Err(error)) => anyhow::bail!("the pull reply failed: {error}"),
         }
-    }
-
-    /// Tells the broker the delivery is done.
-    ///
-    /// The delivery carries its acknowledge subject, and an empty payload is
-    /// the protocol's `+ACK`.
-    async fn acknowledge(&self, delivery: &Delivery) -> anyhow::Result<()> {
-        self.client
-            .publish(delivery.ack_subject.clone(), "".into())
-            .await?;
-        Ok(())
-    }
-}
-
-fn delivered(message: async_nats::Message) -> anyhow::Result<Option<Delivery>> {
-    let ack_subject = message
-        .reply
-        .clone()
-        .context("a delivered event carries no acknowledgement subject")?;
-    Ok(Some(Delivery {
-        body: message.payload.to_vec(),
-        ack_subject,
-    }))
-}
-
-/// What a pull reply carries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PullReply {
-    /// A real delivery.
-    Message,
-    /// An empty answer: the broker had nothing for this request.
-    Empty,
-    /// The broker refused the request itself.
-    Refused(StatusCode),
-}
-
-/// Classifies the status a pull reply carries.
-///
-/// A pull that found nothing comes back as a status instead of a message, and
-/// an open request is also kept alive with idle heartbeats. Treating a
-/// heartbeat as a refusal would fail an idle round, so every "nothing yet"
-/// status is read as an empty answer.
-fn classify_pull(status: Option<StatusCode>) -> PullReply {
-    match status {
-        None => PullReply::Message,
-        Some(status) if status == StatusCode::OK => PullReply::Message,
-        Some(status)
-            if status == StatusCode::NOT_FOUND
-                || status == StatusCode::TIMEOUT
-                || status == StatusCode::IDLE_HEARTBEAT =>
-        {
-            PullReply::Empty
-        }
-        Some(status) => PullReply::Refused(status),
     }
 }
 
@@ -365,35 +302,6 @@ pub async fn run_consumer_until_shutdown(
                     );
                 }
             }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{PullReply, classify_pull};
-    use async_nats::StatusCode;
-
-    /// An idle round must never look like a refusal: a pull that found nothing
-    /// comes back as a status, and the broker keeps a waiting request alive
-    /// with idle heartbeats.
-    #[test]
-    fn empty_pull_replies_are_not_refusals() {
-        for status in [
-            StatusCode::NOT_FOUND,
-            StatusCode::TIMEOUT,
-            StatusCode::IDLE_HEARTBEAT,
-        ] {
-            assert_eq!(classify_pull(Some(status)), PullReply::Empty, "{status:?}");
-        }
-        assert_eq!(classify_pull(None), PullReply::Message);
-        assert_eq!(classify_pull(Some(StatusCode::OK)), PullReply::Message);
-        for status in [StatusCode::NO_RESPONDERS, StatusCode::REQUEST_TERMINATED] {
-            assert_eq!(
-                classify_pull(Some(status)),
-                PullReply::Refused(status),
-                "{status:?}"
-            );
         }
     }
 }
