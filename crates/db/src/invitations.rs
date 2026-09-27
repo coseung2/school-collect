@@ -183,6 +183,23 @@ pub async fn accept_invitation(
     .await
     .context("failed to read the resulting membership")?;
 
+    crate::outbox::insert_outbox(
+        &mut transaction,
+        Some(record.tenant_id),
+        crate::outbox::NewOutboxEvent {
+            topic: "school_collect.memberships",
+            event_type: "membership.joined",
+            aggregate_id: Some(user_id),
+            payload: &serde_json::json!({
+                "tenantId": record.tenant_id,
+                "userId": user_id,
+                "role": role,
+            }),
+        },
+    )
+    .await
+    .context("failed to record the membership event")?;
+
     transaction
         .commit()
         .await

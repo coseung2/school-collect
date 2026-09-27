@@ -137,6 +137,8 @@ jobs:
         run: cargo run -p school-collect-migrator --locked
       - name: Tenant isolation across pooled connections
         run: cargo test -p school-collect-db --locked
+      - name: Outbox relay (database side)
+        run: cargo test -p school-collect-worker --locked
       - name: Missing configuration must fail startup instead of degrading
         shell: bash
         env:
@@ -183,6 +185,45 @@ jobs:
           done
           cat /tmp/api.log
           exit 1
+
+  nats-outbox:
+    name: nats-outbox
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: school_collect
+          POSTGRES_USER: school_collect
+          POSTGRES_PASSWORD: school_collect_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U school_collect -d school_collect"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://school_collect:school_collect_ci@127.0.0.1:5432/school_collect
+      NATS_URL: nats://127.0.0.1:4222
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Start NATS with JetStream
+        run: docker run -d --name nats -p 4222:4222 nats:2.10-alpine -js
+      - name: Wait for NATS
+        shell: bash
+        run: |
+          for _ in $(seq 1 30); do
+            if (echo > /dev/tcp/127.0.0.1/4222) 2>/dev/null; then exit 0; fi
+            sleep 1
+          done
+          echo "NATS did not accept connections"
+          exit 1
+      - name: Outbox relay against JetStream
+        run: cargo test -p school-collect-worker --locked
 
   container:
     name: server-image

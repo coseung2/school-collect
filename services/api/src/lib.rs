@@ -482,13 +482,39 @@ async fn health() -> Json<ServiceStatus> {
 ///
 /// Like `/health` and `/ready` this exposes no tenant data: only request,
 /// rejection, and storage-failure counts.
-async fn metrics() -> impl IntoResponse {
+async fn metrics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let mut body = Metrics::global().render();
+    // Delivery backlog is a database fact; a database that is merely down must
+    // not turn the metrics endpoint into an error.
+    if let Ok(stats) = school_collect_db::outbox_stats(&state.pool).await {
+        for (name, help, value) in [
+            (
+                "school_collect_outbox_pending",
+                "Outbox events waiting for delivery",
+                stats.pending,
+            ),
+            (
+                "school_collect_outbox_published_total",
+                "Outbox events the broker acknowledged",
+                stats.published,
+            ),
+            (
+                "school_collect_outbox_dead_lettered",
+                "Outbox events that exhausted their delivery attempts",
+                stats.dead_lettered,
+            ),
+        ] {
+            body.push_str(&format!("# HELP {name} {help}\n"));
+            body.push_str(&format!("# TYPE {name} gauge\n"));
+            body.push_str(&format!("{name} {value}\n"));
+        }
+    }
     (
         [(
             axum::http::header::CONTENT_TYPE,
             "text/plain; version=0.0.4; charset=utf-8",
         )],
-        Metrics::global().render(),
+        body,
     )
 }
 
