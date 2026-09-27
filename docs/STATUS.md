@@ -10,7 +10,7 @@
 - 두 PR 모두 병합 전 CI 6개(`repository-checks`, `rust-and-web`, `lockfiles-verified`, `postgres`, `server-image`, `tauri-windows-smoke`)가 성공했습니다.
 - 병합 후 실제 데스크톱 창에서 로그인 없는 개인 화면 열기, 레시피 등록·열기·삭제·실행 취소·재시작 보존을 확인했고, 학교 화면은 Permission 상태로 표시되는 것을 확인했습니다.
 - S-02 초대는 실제 Supabase 로그인과 실제 PostgreSQL에서 E2E(`membership_invitation_end_to_end`)로 확인했고, 생성한 계정·행은 테스트가 삭제했습니다. PR #28(`9416c6c`)로 develop에 통합했습니다.
-- P-02 로컬 브리지·브라우저 확장은 `feat/personal-bridge-extension` 브랜치에 구현했습니다. 아직 develop 통합 전이므로 아래 상태 표에는 "브랜치"로 표시합니다.
+- P-02 로컬 브리지·브라우저 확장은 PR #30으로 develop에 통합했습니다(`795dc26`). 병합 전 CI 6개가 성공했고, 실제 브라우저(Edge) 검증은 병합 전 브랜치 SHA에서 수행했습니다.
 - 학교 화면의 로그인 이후 흐름과 과거 native/API/DB·브라우저 검증, 외부 운영 설정은 이번에 재실행·재조회하지 않았습니다. CI 성공도 production 배포를 대신하지 않습니다.
 
 ## 학교업무 / 개인기능 상태
@@ -18,7 +18,7 @@
 | 영역 | 통합된 것 | 통합 전 구현 | 남은 우선 작업 |
 | --- | --- | --- | --- |
 | 학교업무 | PR #19·#24 통합(`f573bfb`) + S-02 초대·합류 통합(`9416c6c`) | 없음 | S-03 항목·대상 편집과 권한 규칙 |
-| 개인기능 | PR #25로 로컬 바로가기·로그인 없는 개인 화면 통합(`11a0af0`), 실제 창 검증 완료 | 브랜치: P-02 로컬 브리지(`127.0.0.1:43110`)·확장(`apps/extension`) | P-02 PR 리뷰·develop 통합, P-03 DOM 레시피 엔진 |
+| 개인기능 | PR #25 로컬 바로가기·로그인 없는 개인 화면(`11a0af0`) + PR #30 로컬 브리지·확장(`795dc26`) 통합 | 없음 | P-03 DOM 레시피 엔진 |
 | 공통 기반 | PR #17 DS/AppShell, PR #20 Docker 스택, PR #24 병합에서 학교/개인 화면 경계 정리 | 없음 | C-01 설정·offline 세부, C-02~C-05 보안·운영·배포 |
 
 PR #24/#25는 모두 develop에 병합됐습니다(`f573bfb`, `11a0af0`). 병합 과정에서 학교 화면 구조는 PR #24 방식을 유지하고 개인기능은 `pages/AutomationPage.tsx`와 `#automation` 라우트로 분리했습니다.
@@ -156,14 +156,14 @@ Stage 3 미검증 항목:
 - 실제 데스크톱 창에서 로그인 없이 화면 열기 → 등록(92바이트 기록) → 열기 → 삭제(0바이트) → 실행 취소(92바이트 복원) → 앱 재시작 후 보존까지 확인했고, 검증용 레시피는 삭제했습니다. 상세는 [AUTOMATION_DESIGN.md](AUTOMATION_DESIGN.md)에 있습니다.
 - 남은 범위: 브라우저 확장·현재 화면 등록(P-02), DOM 입력(P-03 이상). 레시피는 아직 OS 사용자 단위입니다.
 
-### 브라우저 확장 브리지 (P-02, 브랜치)
+### 브라우저 확장 브리지 (P-02)
 
-- 브랜치 `feat/personal-bridge-extension`에 데스크톱 앱의 로컬 브리지와 `apps/extension` Chrome/Edge 확장을 구현했습니다. develop 통합 전이므로 이 절의 내용은 브랜치 기준입니다.
+- PR #30(`feat/personal-bridge-extension`)으로 데스크톱 앱의 로컬 브리지와 `apps/extension` Chrome/Edge 확장을 develop에 통합했습니다(`795dc26`).
 - 브리지는 `127.0.0.1:43110`에만 열리고 토큰(`automation-bridge.token`)과 고정 확장 ID origin(`dfobjphjganlegjomdgmaaphbjcgpoea`)을 함께 확인합니다. 제공하는 것은 상태 확인과 바로가기 생성뿐이며 URL 열기·DOM 접근·임의 JavaScript 실행은 없습니다.
 - 확장 권한은 `activeTab`, `storage`, `http://127.0.0.1:43110/*`뿐이고, 등록 값은 현재 탭의 제목과 주소입니다. `scripts/tests/test_extension_contract.py`가 공개 키에서 확장 ID를 다시 계산해 브리지 상수와 대조합니다.
 - 검증: Rust fmt/clippy/테스트(워크스페이스 46개), 앱 typecheck/build, foundation 24개, repository guard, 실제 소켓 스모크(200/201/400/401/403), 실제 Tauri 창에서 연결 카드와 브리지 생성 버튼 표시.
 - 검증(실제 브라우저, Edge 154): 임시 프로필에 확장을 로드해 실제 ID가 `dfobjphjganlegjomdgmaaphbjcgpoea`로 열리는 것, 토큰 저장·연결 확인·현재 화면 등록으로 레시피가 기록되는 것을 확인하고 검증 레시피는 되돌렸습니다.
-- 아직 아님: 도구 모음 아이콘 클릭 팝업과 `activeTab` 부여 경로, 실제 업무 사이트 주소 등록, develop 통합. 상세는 [AUTOMATION_DESIGN.md](AUTOMATION_DESIGN.md)의 2단계 절에 있습니다.
+- 아직 아님: 도구 모음 아이콘 클릭 팝업과 `activeTab` 부여 경로, 실제 업무 사이트 주소 등록. 상세는 [AUTOMATION_DESIGN.md](AUTOMATION_DESIGN.md)의 2단계 절에 있습니다.
 
 ## 배포 기반
 
