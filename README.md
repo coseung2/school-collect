@@ -19,14 +19,14 @@ School Collect는 학교의 반복 행정업무를 수합·검증·자동화하�
 | Rust/Axum API | 실행 기반 CI 검증 완료 |
 | PostgreSQL 18 | migration + readiness CI 검증 완료 |
 | 인증/권한 | Supabase Auth 토큰 검증·membership RBAC 기본 흐름 통합 + 키 회전·장애·역할·요청 ID 부정 테스트와 `/metrics` |
-| 학교업무 | 수합 기본 흐름과 항목·대상·현황·초대·편집·outbox relay·세션·오프라인 초안·CSV 내보내기 통합 |
-| 개인기능 | 로컬 바로가기·개인 화면·브라우저 확장·로컬 브리지·자동입력 레시피 엔진·학생 × 날짜 표 입력·새 항목 감시 통합 |
+| 학교업무 | 수합 기본 흐름과 항목·대상·현황·초대·편집·outbox relay·세션·오프라인 초안·CSV 내보내기와 내보내기 화면 통합 |
+| 개인기능 | 로컬 바로가기·개인 화면·브라우저 확장·로컬 브리지·자동입력 레시피 엔진·학생 × 날짜 표 입력·새 항목 감시·레시피 추천 통합 |
 | 보안 정리 | 추적 파일 정리 완료. Git history 정리는 별도 판단 |
 | Branch protection | main/develop 적용 완료 |
 
 자세한 현재 상태는 [docs/STATUS.md](docs/STATUS.md)를 봅니다.
 
-작업 계획은 [학교업무](docs/SCHOOL_WORK_PLAN.md), [개인기능](docs/PERSONAL_PLAN.md), [공통 기반](docs/TEAM_BACKLOG.md)으로 나눕니다. `내 제출`은 학교업무이며 개인 바로가기·자동입력·감시는 학교 가입 없이 쓰는 개인기능입니다. 구현·통합 범위는 각 계획에 표시합니다.
+작업 계획은 [학교업무](docs/SCHOOL_WORK_PLAN.md), [개인기능](docs/PERSONAL_PLAN.md), [공통 기반](docs/TEAM_BACKLOG.md)으로 나눕니다. `내 제출`은 학교업무이며 개인 바로가기·자동입력·표 입력·감시·레시피 추천은 학교 가입 없이 쓰는 개인기능입니다. 구현·통합 범위는 각 계획에 표시합니다.
 
 ### 기술 방향
 
