@@ -79,6 +79,19 @@ PR #24/#25는 모두 develop에 병합됐습니다(`f573bfb`, `11a0af0`). 병합
 - 설치 수명 주기(PR #73, `6508be1`): CI Windows runner에서 0.2.0 설치 → 0.2.1로 같은 위치 업그레이드 → 제거 후 파일·제거 항목 없음을 확인했습니다.
 - 이 시점 `cargo test --workspace --locked`는 141개, foundation 34개입니다.
 
+### 3차 독립 검토 (2026-09-27, `c526ac3`)
+
+같은 검토자(gpt-6-astra, 매우높음)의 판정은 **REVISE_LOCAL**이었습니다. 2차 지적 F1·F2·F4~F8·F10~F12와 R2 mock·PKCE 흐름은 닫힘으로, F3·F9·첨부 UI·설치 smoke는 부분으로 판단했고, 남은 저장소 안 결함을 PR #75(`60f2bcb`, CI 7개 성공)에서 모두 고쳤습니다.
+
+- 동시 올리기: 슬롯을 한 번의 UPDATE로 차지한 요청만 bytes를 씁니다(migration `0007`). 실제 DB에서 8개 동시 차지 → 1개 성공·7개 거절을 확인했습니다.
+- 실패한 올리기: 어느 단계에서 실패해도 bytes를 지우고 슬롯을 돌려줍니다. 앱은 빈 슬롯을 지우거나, 남으면 목록에서 지울 수 있게 보여 줍니다.
+- 관리자의 자기 제출 화면은 `scope=mine`으로 자기 파일만 받습니다.
+- 다운로드 저장은 `create_new`로 덮어쓰기 없이 한 번에 만듭니다(16개 병렬 저장 → 16개 파일).
+- E2E는 provider 계정을 만든 직후 정리 대상으로 등록합니다.
+- 설치 smoke는 제거 후 설치 폴더 전체가 사라졌는지 확인합니다(CI: `removed the install directory and uninstall entry`).
+- `R2_ENDPOINT`는 `scheme://host[:port]`만 받습니다.
+- 이 시점 `cargo test --workspace --locked` 144개, 실제 provider E2E 5개, 첨부 DB 테스트 7개, 백업 drill은 migration 7개·테이블 13개입니다.
+
 ## 단계 상태
 
 | 단계 | 상태 | 확인된 내용 | 남은 게이트 |
