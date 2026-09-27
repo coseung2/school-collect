@@ -14,6 +14,7 @@
 - P-03 자동입력 레시피 엔진은 1차(저장·요소 선택·미리보기, PR #32, `455dcdc`)와 2차(실행·결과 검증, PR #33, `5318a96`)를 모두 develop에 통합했습니다.
 - P-04 학생 × 날짜 행렬 입력은 PR #35(`09b3f88`)로 develop에 통합했습니다. 병합 전 CI 6개가 성공했고, 실제 Edge에서 등록·미리보기·입력과 중단 경로 5개를, 실제 Tauri 창에서 표시·두 단계 삭제를 확인했습니다.
 - P-06 새 신청·결재 감시는 PR #37(`e5415dc`)로 develop에 통합했습니다. 병합 전 CI 6개가 성공했고, 실제 Edge에서 등록·스캔 3회·중단 2경로를, 실제 Tauri 창에서 새 항목 표시·확인·중지·다시 켜기·삭제와 감시 상태 정리를 확인했습니다.
+- C-02 인증·권한·관측 보강은 PR #39(`7285981`)로 develop에 통합했습니다. 병합 전 CI 6개가 성공했고, `postgres` 작업에서 풀 연결 재사용 시 학교 격리 테스트(`tenant_isolation.rs`)가 실제 PostgreSQL로 통과했습니다.
 - 학교 화면의 로그인 이후 흐름과 과거 native/API/DB·브라우저 검증, 외부 운영 설정은 이번에 재실행·재조회하지 않았습니다. CI 성공도 production 배포를 대신하지 않습니다.
 
 ## 학교업무 / 개인기능 상태
@@ -35,7 +36,7 @@ PR #24/#25는 모두 develop에 병합됐습니다(`f573bfb`, `11a0af0`). 병합
 | 3. 실행 기반 | 조건 충족 | lockfile 커밋 + frozen/locked CI, TS strict, fmt/clippy/test, PostgreSQL 18 migration, /health·/ready 분리 검증, Windows native build, local tauri dev | mobile/Linux/macOS 미검증, client production CSP·환경 분리 후속 |
 | 4. Figma | 시안 승인 | Design System/Product 핵심 UI 승인, Stage 5 기본 token/component mapping | interaction/accessibility detail, Library/Code Connect 후속 |
 | 5. Code DS/AppShell | 완료 (PR #17, `9697363`) | `packages/ui` token/component와 실제 Tauri AppShell, 상태·키보드·wide/narrow 검증 | Figma Library/Code Connect 후속 |
-| 6. Auth/Data/Ops | 구현 중 | Supabase Auth 실로그인 + ES256/JWKS 검증, user/membership provisioning, tenant RBAC, Collect 상태 전이와 version 충돌까지 실제 프로젝트·실제 DB에서 E2E 통과 | R2/NATS/SQLite/backup, 환경 분리, 세션 영속화 |
+| 6. Auth/Data/Ops | 구현 중 | Supabase Auth 실로그인 + ES256/JWKS 검증, user/membership provisioning, tenant RBAC, Collect 상태 전이와 version 충돌까지 실제 프로젝트·실제 DB에서 E2E 통과. C-02로 키 회전·장애·캐시, 네 역할, 요청 ID·redaction, `/metrics`와 풀 재사용 학교 격리를 보강 | R2/NATS/SQLite/backup, 환경 분리, 세션 영속화 |
 | 7. Collect | 구현 중 | PR #19 기본 흐름과 PR #24 항목·대상·제출 현황·내 배정·구성원 화면을 통합 | 구성원 초대(S-02), 항목/대상 편집, 첨부, offline, 결과 export 및 전체 통합 E2E |
 
 ## 확인된 원격 상태
