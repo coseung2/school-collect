@@ -1,8 +1,8 @@
-use std::{env, net::SocketAddr};
+use std::{env, net::SocketAddr, path::PathBuf, sync::Arc};
 
 use anyhow::Context;
 use axum::http::HeaderValue;
-use school_collect_api::{AppState, router};
+use school_collect_api::{AppState, FileStorage, router};
 use school_collect_auth::{AuthMode, OidcConfig};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,12 +68,36 @@ async fn main() -> anyhow::Result<()> {
         .parse()
         .context("APP_BIND_ADDR is not a valid socket address")?;
 
+    // Attachment bytes live outside PostgreSQL. A directory is enough while the
+    // private bucket is not connected, but outside development the deployment
+    // must say where the bytes go instead of starting without a place to put them.
+    let storage: Option<Arc<dyn school_collect_application::storage::ObjectStorage>> =
+        match env::var("APP_ATTACHMENT_DIR") {
+            Ok(value) if !value.trim().is_empty() => {
+                Some(Arc::new(FileStorage::new(PathBuf::from(value))))
+            }
+            _ => {
+                if environment.requires_production_configuration() {
+                    anyhow::bail!(
+                        "APP_ATTACHMENT_DIR is required outside development until private R2 storage is connected"
+                    );
+                }
+                tracing::info!(
+                    "APP_ATTACHMENT_DIR is not set; attachment routes will refuse requests"
+                );
+                None
+            }
+        };
+
     let listener = tokio::net::TcpListener::bind(address).await?;
     tracing::info!(%address, "API listening");
 
-    axum::serve(listener, router(AppState { pool }, cors_origin, auth_state))
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        router(AppState { pool, storage }, cors_origin, auth_state),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
 
     Ok(())
 }

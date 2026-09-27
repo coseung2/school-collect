@@ -137,13 +137,15 @@ R2는 private bucket을 기본으로 합니다. 서버가 tenant/resource 권한
 
 파일 metadata와 access policy는 DB에, object bytes는 R2에 둡니다.
 
-구현된 metadata 계약 (2026-09-27, S-04 1차):
+구현된 계약 (2026-09-27, S-04 1·2차):
 
 - `school_collect.collect_attachments`가 (tenant, collect, 담당자, item key) 단위로 metadata를 보관합니다: 파일 이름·형식·선언 크기·checksum·object key·상태(`pending`/`stored`/`deleted`)·만료 시각.
 - object key는 `tenants/{tenant}/attachments/{attachment_id}`로 서버가 만듭니다. 파일 이름은 표시용이며 경로나 object key가 될 수 없습니다.
 - 정책(domain): 파일 1개 최대 10 MiB, 항목당 5개, 제출당 20개, 허용 형식 목록(HWP/HWPX·Office·PDF·PNG/JPEG·text·zip), 보존 180일. 만료된 행은 retention sweep이 bytes를 지운 뒤 row를 지웁니다.
 - 접근 규칙: 읽기는 소유자 또는 관리자, 삭제는 관리자 또는 제출 전 소유자. 모든 조회·변경은 tenant로 한정됩니다.
-- 아직(2차 이후): storage port와 R2/presigned capability, upload/download API, 화면, worker의 주기 sweep.
+- API: `POST /v1/collects/{id}/attachments`(슬롯 열기) → `PUT /v1/attachments/{id}/content`(bytes, 선언 크기·형식·checksum 검증) → `GET /v1/attachments/{id}`·`/content`, `GET /v1/collects/{id}/attachments`(담당자는 자기 파일, 관리자는 전체), `DELETE /v1/attachments/{id}`.
+- bytes는 `ObjectStorage` port(`crates/application`) 뒤에 있습니다. 개발은 `APP_ATTACHMENT_DIR`의 디렉터리 adapter를 쓰고, 운영은 private R2 adapter로 바꿉니다. 저장소가 설정되지 않으면 첨부 endpoint는 503으로 거절하며, 개발 외 환경에서는 `APP_ATTACHMENT_DIR` 없이 기동하지 않습니다.
+- 아직(3차 이후): R2 adapter와 presigned capability(직접 업로드 URL), 화면(제출 작성·검토), worker의 주기 sweep 연결.
 
 ## Local/offline
 

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use axum::{
     Extension, Json, Router,
+    body::Bytes,
     extract::{DefaultBodyLimit, Path, Request, State},
     http::{HeaderMap, HeaderValue, Method, StatusCode},
     middleware::{self, Next},
@@ -9,22 +10,29 @@ use axum::{
     routing::{get, post, put},
 };
 use chrono::{DateTime, Duration, Utc};
+use school_collect_application::storage::{ObjectStorage, StorageError};
 use school_collect_auth::{AuthMode, OidcVerifier, VerifiedPrincipal};
 use school_collect_contracts::{
     AcceptInvitationRequest, AcceptInvitationResponse, ApiError, AssignmentDto,
-    AssignmentListResponse, CollectDetailResponse, CollectDto, CollectItemDto, CollectListResponse,
-    CollectProgressDto, CollectStatusResponse, CollectStatusRowDto, CreateCollectRequest,
-    CreateInvitationRequest, CreateInvitationResponse, CreateTenantRequest, InvitationDto,
-    InvitationListResponse, MemberDto, MemberListResponse, MembershipDto, PrincipalResponse,
-    SaveSubmissionRequest, ServiceStatus, SessionResponse, SubmissionDto, TenantListResponse,
-    UpdateCollectAssignmentsRequest, UpdateCollectItemsRequest, UserDto, VersionConflictResponse,
+    AssignmentListResponse, AttachmentDto, AttachmentListResponse, AttachmentUploadTarget,
+    CollectDetailResponse, CollectDto, CollectItemDto, CollectListResponse, CollectProgressDto,
+    CollectStatusResponse, CollectStatusRowDto, CreateAttachmentRequest, CreateAttachmentResponse,
+    CreateCollectRequest, CreateInvitationRequest, CreateInvitationResponse, CreateTenantRequest,
+    InvitationDto, InvitationListResponse, MemberDto, MemberListResponse, MembershipDto,
+    PrincipalResponse, SaveSubmissionRequest, ServiceStatus, SessionResponse, SubmissionDto,
+    TenantListResponse, UpdateCollectAssignmentsRequest, UpdateCollectItemsRequest, UserDto,
+    VersionConflictResponse,
 };
 use school_collect_db::{
-    AcceptInvitationOutcome, CollectRecord, CreateInvitationOutcome, InvitationRecord,
-    NewCollectItem, SaveDraftOutcome, SubmitOutcome, TransitionOutcome, UpdateAssignmentsOutcome,
-    UpdateItemsOutcome, UserRecord,
+    AcceptInvitationOutcome, AttachmentRecord, CollectRecord, CompleteAttachmentOutcome,
+    CreateAttachmentOutcome, CreateInvitationOutcome, DeleteAttachmentOutcome, InvitationRecord,
+    NewAttachment, NewCollectItem, SaveDraftOutcome, SubmitOutcome, TransitionOutcome,
+    UpdateAssignmentsOutcome, UpdateItemsOutcome, UserRecord,
 };
-use school_collect_domain::MembershipRole;
+use school_collect_domain::{
+    MembershipRole,
+    attachments::{self, AttachmentRejection, MAX_ATTACHMENT_BYTES},
+};
 use school_collect_observability::Metrics;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
@@ -36,6 +44,9 @@ use tower_http::{
 use utoipa::OpenApi;
 use uuid::Uuid;
 
+pub mod storage;
+pub use storage::FileStorage;
+
 /// Shared request state.
 ///
 /// The pool is created eagerly from configuration but connects lazily, so a
@@ -44,6 +55,9 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct AppState {
     pub pool: PgPool,
+    /// Private object storage for attachments. `None` means the feature is not
+    /// configured and the attachment routes must refuse instead of degrading.
+    pub storage: Option<Arc<dyn ObjectStorage>>,
 }
 
 #[derive(Clone)]
@@ -90,7 +104,11 @@ impl AuthState {
         publish_collect,
         close_collect,
         save_submission,
-        submit_submission
+        submit_submission,
+        create_attachment,
+        list_collect_attachments,
+        attachment_metadata,
+        delete_attachment
     ),
     components(schemas(
         ServiceStatus,
@@ -121,7 +139,12 @@ impl AuthState {
         AssignmentDto,
         AssignmentListResponse,
         SaveSubmissionRequest,
-        VersionConflictResponse
+        VersionConflictResponse,
+        AttachmentDto,
+        AttachmentListResponse,
+        AttachmentUploadTarget,
+        CreateAttachmentRequest,
+        CreateAttachmentResponse
     ))
 )]
 struct ApiDoc;
@@ -144,6 +167,22 @@ pub fn router(state: AppState, cors_origin: HeaderValue, auth_state: AuthState) 
         .route("/v1/collects/{collect_id}", get(collect_detail))
         .route("/v1/collects/{collect_id}/status", get(collect_status))
         .route("/v1/collects/{collect_id}/export", get(export_collect))
+        .route(
+            "/v1/collects/{collect_id}/attachments",
+            get(list_collect_attachments).post(create_attachment),
+        )
+        .route(
+            "/v1/attachments/{attachment_id}",
+            get(attachment_metadata).delete(delete_attachment),
+        )
+        .route(
+            "/v1/attachments/{attachment_id}/content",
+            get(download_attachment)
+                .put(upload_attachment_content)
+                // Bytes are larger than the JSON default, and the slot already
+                // promised a size, so the route raises its own limit.
+                .layer(DefaultBodyLimit::max(MAX_ATTACHMENT_BYTES as usize + 1)),
+        )
         .route("/v1/members", get(list_members))
         .route("/v1/assignments", get(list_assignments))
         .route("/v1/collects/{collect_id}/publish", post(publish_collect))
@@ -425,6 +464,585 @@ enum Capability {
     View,
     Submit,
     Manage,
+}
+
+fn attachment_dto(record: &AttachmentRecord) -> AttachmentDto {
+    AttachmentDto {
+        id: record.id.to_string(),
+        collect_id: record.collect_id.to_string(),
+        user_id: record.user_id.to_string(),
+        item_key: record.item_key.clone(),
+        file_name: record.file_name.clone(),
+        content_type: record.content_type.clone(),
+        byte_size: record.byte_size,
+        status: record.status.clone(),
+        expires_at: timestamp(record.expires_at),
+        stored_at: record.stored_at.map(timestamp),
+        created_at: timestamp(record.created_at),
+        content_url: format!("/v1/attachments/{}/content", record.id),
+    }
+}
+
+/// Storage is configuration, not a runtime mode: without it the feature is
+/// refused and the client is told so.
+fn attachment_storage(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<Arc<dyn ObjectStorage>, Box<Response>> {
+    state.storage.clone().ok_or_else(|| {
+        Box::new(failure(
+            headers,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "attachment_storage_unavailable",
+            "첨부 저장소가 설정되지 않았습니다.",
+        ))
+    })
+}
+
+fn attachment_storage_failure(headers: &HeaderMap, error: StorageError) -> Response {
+    Metrics::global().record_storage_failure();
+    match error {
+        StorageError::Unavailable(message) => {
+            tracing::warn!(reason = %message, "attachment storage is unavailable");
+            failure(
+                headers,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "attachment_storage_unavailable",
+                "첨부 저장소를 사용할 수 없습니다.",
+            )
+        }
+        StorageError::Failed(message) => {
+            tracing::warn!(reason = %message, "attachment storage failed");
+            failure(
+                headers,
+                StatusCode::BAD_GATEWAY,
+                "attachment_storage_failed",
+                "첨부 저장소가 요청을 처리하지 못했습니다.",
+            )
+        }
+    }
+}
+
+fn attachment_rejection(rejection: AttachmentRejection) -> (&'static str, &'static str) {
+    (rejection.code(), rejection.message())
+}
+
+/// `Content-Disposition` for a file name that may be Korean.
+fn content_disposition(file_name: &str) -> HeaderValue {
+    let mut encoded = String::new();
+    for byte in file_name.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                encoded.push(*byte as char);
+            }
+            other => encoded.push_str(&format!("%{other:02X}")),
+        }
+    }
+    HeaderValue::from_str(&format!("attachment; filename*=UTF-8''{encoded}"))
+        .unwrap_or_else(|_| HeaderValue::from_static("attachment"))
+}
+
+/// Finds one attachment of this school and decides what the caller may do.
+async fn attachment_for_call(
+    state: &AppState,
+    headers: &HeaderMap,
+    user: &UserRecord,
+    capability: Capability,
+    attachment_id: &str,
+) -> Result<(Uuid, MembershipRole, AttachmentRecord), Box<Response>> {
+    let (tenant_id, role) = authorize(state, headers, user, capability).await?;
+    let Ok(attachment_id) = Uuid::parse_str(attachment_id) else {
+        return Err(Box::new(failure(
+            headers,
+            StatusCode::BAD_REQUEST,
+            "invalid_id",
+            "the attachment identifier is not valid",
+        )));
+    };
+    let record = school_collect_db::get_attachment(&state.pool, tenant_id, attachment_id)
+        .await
+        .map_err(|_| Box::new(storage_failure(headers)))?
+        .ok_or_else(|| {
+            Box::new(failure(
+                headers,
+                StatusCode::NOT_FOUND,
+                "attachment_not_found",
+                "이 첨부 파일을 찾지 못했습니다.",
+            ))
+        })?;
+    Ok((tenant_id, role, record))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/collects/{collect_id}/attachments",
+    params(("collect_id" = String, Path, description = "Collect identifier")),
+    request_body = CreateAttachmentRequest,
+    responses(
+        (status = 201, description = "Attachment slot opened", body = CreateAttachmentResponse),
+        (status = 400, description = "The file violates the attachment policy", body = ApiError),
+        (status = 503, description = "Attachment storage is not configured", body = ApiError)
+    )
+)]
+async fn create_attachment(
+    State(state): State<Arc<AppState>>,
+    Extension(principal): Extension<VerifiedPrincipal>,
+    Path(collect_id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<CreateAttachmentRequest>,
+) -> Response {
+    // Storage is configuration: without it this endpoint refuses before any
+    // other work, so a misconfigured deployment is obvious and cheap.
+    if let Err(response) = attachment_storage(&state, &headers) {
+        return *response;
+    }
+    let user = match current_user(&state, &principal, &headers).await {
+        Ok(user) => user,
+        Err(response) => return *response,
+    };
+    let (tenant_id, _) = match authorize(&state, &headers, &user, Capability::Submit).await {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let Ok(collect_id) = Uuid::parse_str(&collect_id) else {
+        return failure(
+            &headers,
+            StatusCode::BAD_REQUEST,
+            "invalid_id",
+            "the collect identifier is not valid",
+        );
+    };
+
+    let file_name = match attachments::validate_new_attachment(
+        &body.file_name,
+        &body.content_type,
+        body.byte_size,
+    ) {
+        Ok(file_name) => file_name,
+        Err(rejection) => {
+            let (code, message) = attachment_rejection(rejection);
+            return failure(&headers, StatusCode::BAD_REQUEST, code, message);
+        }
+    };
+    if !is_valid_item_key(&body.item_key) {
+        return failure(
+            &headers,
+            StatusCode::BAD_REQUEST,
+            "invalid_item_key",
+            "the item key is not valid",
+        );
+    }
+
+    let id = Uuid::now_v7();
+    let now = Utc::now();
+    let attachment = NewAttachment {
+        id,
+        item_key: body.item_key.clone(),
+        file_name,
+        content_type: body.content_type.trim().to_ascii_lowercase(),
+        byte_size: body.byte_size,
+        object_key: attachments::object_key(&tenant_id.to_string(), &id.to_string()),
+        expires_at: attachments::expires_at(now),
+    };
+
+    match school_collect_db::create_attachment(
+        &state.pool,
+        tenant_id,
+        collect_id,
+        user.id,
+        attachment,
+    )
+    .await
+    {
+        Ok(CreateAttachmentOutcome::Created(record)) => (
+            StatusCode::CREATED,
+            Json(CreateAttachmentResponse {
+                attachment: attachment_dto(&record),
+                upload: AttachmentUploadTarget {
+                    kind: "api".to_owned(),
+                    url: format!("/v1/attachments/{}/content", record.id),
+                    method: "PUT".to_owned(),
+                },
+            }),
+        )
+            .into_response(),
+        Ok(CreateAttachmentOutcome::CollectNotOpen { status }) => failure(
+            &headers,
+            StatusCode::CONFLICT,
+            "collect_not_open",
+            format!("a collect in state {status} does not accept attachments"),
+        ),
+        Ok(CreateAttachmentOutcome::ItemMissing) => failure(
+            &headers,
+            StatusCode::BAD_REQUEST,
+            "item_missing",
+            "this collect has no such item",
+        ),
+        Ok(CreateAttachmentOutcome::NotAssigned) => failure(
+            &headers,
+            StatusCode::FORBIDDEN,
+            "not_assigned",
+            "this collect does not target you, so there is nothing to attach",
+        ),
+        Ok(CreateAttachmentOutcome::AlreadySubmitted) => failure(
+            &headers,
+            StatusCode::CONFLICT,
+            "already_submitted",
+            "이미 제출한 답변에는 파일을 더할 수 없습니다.",
+        ),
+        Ok(CreateAttachmentOutcome::LimitReached) => failure(
+            &headers,
+            StatusCode::CONFLICT,
+            "attachment_limit_reached",
+            "첨부할 수 있는 파일 수를 넘었습니다.",
+        ),
+        Err(_) => storage_failure(&headers),
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/collects/{collect_id}/attachments",
+    params(("collect_id" = String, Path, description = "Collect identifier")),
+    responses((status = 200, description = "Attachments of one collect", body = AttachmentListResponse))
+)]
+async fn list_collect_attachments(
+    State(state): State<Arc<AppState>>,
+    Extension(principal): Extension<VerifiedPrincipal>,
+    Path(collect_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let user = match current_user(&state, &principal, &headers).await {
+        Ok(user) => user,
+        Err(response) => return *response,
+    };
+    let (tenant_id, role) = match authorize(&state, &headers, &user, Capability::View).await {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let Ok(collect_id) = Uuid::parse_str(&collect_id) else {
+        return failure(
+            &headers,
+            StatusCode::BAD_REQUEST,
+            "invalid_id",
+            "the collect identifier is not valid",
+        );
+    };
+
+    // A manager sees the whole collect; everyone else sees only their own files.
+    let records = if role.can_manage_collects() {
+        school_collect_db::list_collect_attachments(&state.pool, tenant_id, collect_id).await
+    } else {
+        school_collect_db::list_submission_attachments(&state.pool, tenant_id, collect_id, user.id)
+            .await
+    };
+    match records {
+        Ok(records) => (
+            StatusCode::OK,
+            Json(AttachmentListResponse {
+                attachments: records.iter().map(attachment_dto).collect(),
+            }),
+        )
+            .into_response(),
+        Err(_) => storage_failure(&headers),
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/attachments/{attachment_id}",
+    params(("attachment_id" = String, Path, description = "Attachment identifier")),
+    responses((status = 200, description = "Attachment metadata", body = AttachmentDto))
+)]
+async fn attachment_metadata(
+    State(state): State<Arc<AppState>>,
+    Extension(principal): Extension<VerifiedPrincipal>,
+    Path(attachment_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let user = match current_user(&state, &principal, &headers).await {
+        Ok(user) => user,
+        Err(response) => return *response,
+    };
+    let (_, role, record) = match attachment_for_call(
+        &state,
+        &headers,
+        &user,
+        Capability::View,
+        &attachment_id,
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    if !attachments::can_read(role, record.user_id == user.id) {
+        return failure(
+            &headers,
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "your role does not allow this attachment",
+        );
+    }
+    (StatusCode::OK, Json(attachment_dto(&record))).into_response()
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/attachments/{attachment_id}/content",
+    params(("attachment_id" = String, Path, description = "Attachment identifier")),
+    responses((status = 200, description = "Attachment bytes"))
+)]
+async fn download_attachment(
+    State(state): State<Arc<AppState>>,
+    Extension(principal): Extension<VerifiedPrincipal>,
+    Path(attachment_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let storage = match attachment_storage(&state, &headers) {
+        Ok(storage) => storage,
+        Err(response) => return *response,
+    };
+    let user = match current_user(&state, &principal, &headers).await {
+        Ok(user) => user,
+        Err(response) => return *response,
+    };
+    let (_, role, record) = match attachment_for_call(
+        &state,
+        &headers,
+        &user,
+        Capability::View,
+        &attachment_id,
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    if !attachments::can_read(role, record.user_id == user.id) {
+        return failure(
+            &headers,
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "your role does not allow this attachment",
+        );
+    }
+    let bytes = match storage.get(&record.object_key).await {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => {
+            // Metadata outlived the object: report it instead of sending nothing.
+            return failure(
+                &headers,
+                StatusCode::NOT_FOUND,
+                "attachment_content_missing",
+                "첨부 파일의 내용을 찾지 못했습니다.",
+            );
+        }
+        Err(error) => return attachment_storage_failure(&headers, error),
+    };
+
+    (
+        StatusCode::OK,
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                HeaderValue::from_str(&record.content_type)
+                    .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+            ),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                content_disposition(&record.file_name),
+            ),
+            (
+                axum::http::header::CACHE_CONTROL,
+                HeaderValue::from_static("private, no-store"),
+            ),
+        ],
+        bytes,
+    )
+        .into_response()
+}
+
+// The body is raw bytes, which OpenAPI cannot describe as JSON, so this handler
+// stays out of the generated document (the slot endpoint carries the contract).
+async fn upload_attachment_content(
+    State(state): State<Arc<AppState>>,
+    Extension(principal): Extension<VerifiedPrincipal>,
+    Path(attachment_id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let storage = match attachment_storage(&state, &headers) {
+        Ok(storage) => storage,
+        Err(response) => return *response,
+    };
+    let user = match current_user(&state, &principal, &headers).await {
+        Ok(user) => user,
+        Err(response) => return *response,
+    };
+    let (tenant_id, _, record) = match attachment_for_call(
+        &state,
+        &headers,
+        &user,
+        Capability::Submit,
+        &attachment_id,
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    if record.user_id != user.id {
+        return failure(
+            &headers,
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "남의 첨부 파일에는 내용을 올릴 수 없습니다.",
+        );
+    }
+
+    let declared = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| {
+            value
+                .split(';')
+                .next()
+                .unwrap_or(value)
+                .trim()
+                .to_ascii_lowercase()
+        })
+        .unwrap_or_default();
+    if declared != record.content_type {
+        return failure(
+            &headers,
+            StatusCode::BAD_REQUEST,
+            "attachment_type_mismatch",
+            "올리려는 파일 형식이 신고한 형식과 다릅니다.",
+        );
+    }
+
+    let bytes = body.to_vec();
+    let checksum = hex::encode(Sha256::digest(&bytes));
+    if let Err(error) = storage
+        .put(&record.object_key, bytes.clone(), &record.content_type)
+        .await
+    {
+        return attachment_storage_failure(&headers, error);
+    }
+
+    match school_collect_db::complete_attachment(
+        &state.pool,
+        tenant_id,
+        record.id,
+        bytes.len() as i64,
+        &checksum,
+        Utc::now(),
+    )
+    .await
+    {
+        Ok(CompleteAttachmentOutcome::Stored(stored)) => {
+            (StatusCode::OK, Json(attachment_dto(&stored))).into_response()
+        }
+        Ok(CompleteAttachmentOutcome::AlreadyStored(stored)) => {
+            (StatusCode::OK, Json(attachment_dto(&stored))).into_response()
+        }
+        Ok(CompleteAttachmentOutcome::NotFound) => failure(
+            &headers,
+            StatusCode::NOT_FOUND,
+            "attachment_not_found",
+            "이 첨부 파일을 찾지 못했습니다.",
+        ),
+        Ok(CompleteAttachmentOutcome::Expired) => failure(
+            &headers,
+            StatusCode::CONFLICT,
+            "attachment_expired",
+            "보존 기간이 지나 이 첨부 파일은 더 받을 수 없습니다.",
+        ),
+        Ok(CompleteAttachmentOutcome::SizeMismatch { declared, received }) => {
+            // The bytes are not what the slot promised, so drop them again.
+            let _ = storage.delete(&record.object_key).await;
+            failure(
+                &headers,
+                StatusCode::BAD_REQUEST,
+                "attachment_size_mismatch",
+                format!("신고한 크기({declared})와 실제 크기({received})가 다릅니다."),
+            )
+        }
+        Err(_) => storage_failure(&headers),
+    }
+}
+
+#[utoipa::path(
+    delete,
+    path = "/v1/attachments/{attachment_id}",
+    params(("attachment_id" = String, Path, description = "Attachment identifier")),
+    responses((status = 200, description = "Attachment removed", body = ApiError))
+)]
+async fn delete_attachment(
+    State(state): State<Arc<AppState>>,
+    Extension(principal): Extension<VerifiedPrincipal>,
+    Path(attachment_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let storage = match attachment_storage(&state, &headers) {
+        Ok(storage) => storage,
+        Err(response) => return *response,
+    };
+    let user = match current_user(&state, &principal, &headers).await {
+        Ok(user) => user,
+        Err(response) => return *response,
+    };
+    let (tenant_id, role, record) = match attachment_for_call(
+        &state,
+        &headers,
+        &user,
+        Capability::View,
+        &attachment_id,
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+
+    // An answer that was handed in keeps its files unless a manager says otherwise.
+    let submitted = !role.can_manage_collects()
+        && matches!(
+            school_collect_db::get_submission(&state.pool, tenant_id, record.collect_id, record.user_id)
+                .await,
+            Ok(Some(submission)) if submission.status == "submitted"
+        );
+    if !attachments::can_delete(role, record.user_id == user.id, submitted) {
+        return failure(
+            &headers,
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "제출한 답변의 첨부 파일은 관리자만 지울 수 있습니다.",
+        );
+    }
+
+    if let Err(error) = storage.delete(&record.object_key).await {
+        return attachment_storage_failure(&headers, error);
+    }
+    match school_collect_db::delete_attachment(
+        &state.pool,
+        tenant_id,
+        record.id,
+        user.id,
+        Utc::now(),
+    )
+    .await
+    {
+        Ok(DeleteAttachmentOutcome::Deleted { .. }) => StatusCode::NO_CONTENT.into_response(),
+        Ok(DeleteAttachmentOutcome::NotFound) => failure(
+            &headers,
+            StatusCode::NOT_FOUND,
+            "attachment_not_found",
+            "이 첨부 파일을 찾지 못했습니다.",
+        ),
+        Err(_) => storage_failure(&headers),
+    }
 }
 
 fn storage_failure(headers: &HeaderMap) -> Response {
@@ -2013,6 +2631,7 @@ mod tests {
                 "postgres://unused:unused@127.0.0.1:1/school_collect_absent",
             )
             .expect("connection string is valid"),
+            storage: None,
         }
     }
 
@@ -2052,6 +2671,37 @@ mod tests {
         .unwrap();
 
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn attachment_routes_refuse_without_configured_storage() {
+        let response = router(
+            unreachable_state(),
+            HeaderValue::from_static("http://127.0.0.1:1420"),
+            AuthState::development_disabled(),
+        )
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/collects/00000000-0000-7000-8000-000000000000/attachments")
+                .header("content-type", "application/json")
+                .header("x-tenant-id", "00000000-0000-7000-8000-000000000001")
+                .body(Body::from(
+                    r#"{"itemKey":"plan","fileName":"plan.pdf","contentType":"application/pdf","byteSize":10}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        // Missing storage is an operator error, so the feature refuses instead of
+        // pretending the upload worked.
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("body");
+        let body: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        assert_eq!(body["code"], "attachment_storage_unavailable");
     }
 
     #[tokio::test]
