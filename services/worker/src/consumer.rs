@@ -277,31 +277,139 @@ pub async fn consume_batch(
 }
 
 /// Runs the consumer until the shutdown future resolves.
+///
+/// A round asks the broker for a bounded number of messages and returns at once
+/// when the stream is empty, so the wait between rounds is what keeps an idle
+/// consumer from spinning: `idle` after a quiet or successful round, and
+/// `backoff` after a failed one, so a broker or database that just refused is
+/// not hammered while it recovers.
 pub async fn run_consumer_until_shutdown(
     pool: PgPool,
     consumer: Arc<JetStreamConsumer>,
     effect: Arc<dyn EventEffect>,
     batch: usize,
+    idle: Duration,
+    backoff: Duration,
     shutdown: impl Future<Output = ()>,
 ) {
+    let name = consumer.name().to_owned();
+    let round_name = name.clone();
+    run_paced(idle, backoff, shutdown, move || {
+        let pool = pool.clone();
+        let consumer = consumer.clone();
+        let effect = effect.clone();
+        let name = round_name.clone();
+        async move {
+            let report = consume_batch(&pool, consumer.as_ref(), effect.as_ref(), batch).await;
+            if report.handled + report.duplicates + report.failed > 0 {
+                tracing::info!(
+                    consumer = %name,
+                    handled = report.handled,
+                    duplicates = report.duplicates,
+                    failed = report.failed,
+                    "outbox consumer round finished"
+                );
+            }
+            report
+        }
+    })
+    .await;
+    tracing::info!(consumer = %name, "outbox consumer stopping");
+}
+
+/// Runs `round` repeatedly, waiting `idle` after a quiet or successful round and
+/// `backoff` after a failed one, until `shutdown` resolves.
+async fn run_paced<F, Fut>(
+    idle: Duration,
+    backoff: Duration,
+    shutdown: impl Future<Output = ()>,
+    mut round: F,
+) where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = ConsumerReport>,
+{
     tokio::pin!(shutdown);
     loop {
+        let report = tokio::select! {
+            () = &mut shutdown => return,
+            report = round() => report,
+        };
+        let wait = if report.failed > 0 { backoff } else { idle };
         tokio::select! {
-            () = &mut shutdown => {
-                tracing::info!(consumer = consumer.name(), "outbox consumer stopping");
-                return;
-            }
-            report = consume_batch(&pool, consumer.as_ref(), effect.as_ref(), batch) => {
-                if report.handled + report.duplicates + report.failed > 0 {
-                    tracing::info!(
-                        consumer = consumer.name(),
-                        handled = report.handled,
-                        duplicates = report.duplicates,
-                        failed = report.failed,
-                        "outbox consumer round finished"
-                    );
-                }
-            }
+            () = &mut shutdown => return,
+            () = tokio::time::sleep(wait) => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ConsumerReport, run_paced};
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
+
+    /// An idle consumer must wait between rounds and a failed round must back
+    /// off: the pull returns as soon as the stream is empty, so without a wait
+    /// the loop would ask the broker again every round trip.
+    #[tokio::test(start_paused = true)]
+    async fn rounds_wait_and_a_failure_backs_off() {
+        let rounds = Arc::new(AtomicUsize::new(0));
+        let failures = Arc::new(AtomicUsize::new(0));
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let idle = Duration::from_secs(1);
+        let backoff = Duration::from_secs(5);
+        let counter = rounds.clone();
+        let failing = failures.clone();
+        let task = tokio::spawn(run_paced(
+            idle,
+            backoff,
+            async {
+                let _ = stopped.await;
+            },
+            move || {
+                let counter = counter.clone();
+                let failing = failing.clone();
+                async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    let failed = failing.fetch_add(1, Ordering::SeqCst) == 1;
+                    ConsumerReport {
+                        failed: usize::from(failed),
+                        ..ConsumerReport::default()
+                    }
+                }
+            },
+        ));
+
+        // The first round runs at once; an instant round must not start another.
+        tokio::task::yield_now().await;
+        assert_eq!(rounds.load(Ordering::SeqCst), 1);
+        tokio::time::advance(idle - Duration::from_millis(1)).await;
+        assert_eq!(
+            rounds.load(Ordering::SeqCst),
+            1,
+            "an idle round waits before asking again"
+        );
+        tokio::time::advance(Duration::from_millis(1)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(rounds.load(Ordering::SeqCst), 2);
+
+        // The second round failed, so the next wait is the longer backoff.
+        tokio::time::advance(backoff - Duration::from_millis(1)).await;
+        assert_eq!(
+            rounds.load(Ordering::SeqCst),
+            2,
+            "a failed round waits the backoff"
+        );
+        tokio::time::advance(Duration::from_millis(1)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(rounds.load(Ordering::SeqCst), 3);
+
+        stop.send(()).expect("stop");
+        task.await.expect("the consumer loop stops on shutdown");
     }
 }

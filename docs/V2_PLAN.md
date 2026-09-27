@@ -74,7 +74,7 @@ PR #24/#25/#28/#30은 develop에 병합됐습니다. 로컬 `c31b9d9`의 개인�
 ## 유지할 기술·데이터 원칙
 
 - Tauri 2 + React/Vite + strict TypeScript, Rust/Axum, SQLx, 전용 migrator를 유지합니다.
-- 인증 provider는 accepted [ADR-0002](ADR/0002-supabase-identity-and-database.md)의 Supabase Auth입니다. ZITADEL 구축은 현재 목록에서 제외합니다. 외부 브라우저 PKCE와 OS 보안 저장소는 S-05 후속입니다.
+- 인증 provider는 accepted [ADR-0002](ADR/0002-supabase-identity-and-database.md)의 Supabase Auth입니다. ZITADEL 구축은 현재 목록에서 제외합니다. 외부 브라우저 PKCE 로그인의 실제 provider 흐름은 S-05 후속이고, 세션의 OS 보안 저장소는 S-05(PR #45·#46)에서 재시작 복구·로그아웃 정리까지 구현·검증했습니다.
 - 로컬/CI는 PostgreSQL 18이며 기존 외부 DB 검증 기록은 ADR-0002의 PostgreSQL 17 대상입니다. 이를 동일한 환경이나 production 배포 근거로 표시하지 않습니다.
 - 서버가 학교 데이터·권한의 최종 기준입니다. private R2와 transactional outbox -> NATS JetStream -> idempotent worker는 학교업무의 목표 구조입니다.
 - SQLite draft/cache/outbox는 학교업무의 로컬 보조 저장소 계획입니다. 개인 바로가기의 현재 TSV 저장을 SQLite 구현 완료로 표시하지 않습니다.

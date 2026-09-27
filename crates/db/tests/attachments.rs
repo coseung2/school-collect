@@ -7,11 +7,11 @@
 use chrono::{Duration, Utc};
 use school_collect_db::{
     ClaimUploadOutcome, CompleteAttachmentOutcome, CreateAttachmentOutcome,
-    DeleteAttachmentOutcome, NewAttachment, NewCollect, NewCollectItem,
-    UPLOAD_CLAIM_TIMEOUT_SECONDS, claim_attachment_upload, complete_attachment, create_attachment,
-    create_collect, create_tenant, delete_attachment, expired_attachments, get_attachment,
-    list_collect_attachments, list_submission_attachments, purge_attachment,
-    release_attachment_upload, save_draft, transition_collect, upsert_user,
+    DeleteAttachmentOutcome, NewAttachment, NewCollect, NewCollectItem, SlotOwnership,
+    UPLOAD_CLAIM_TIMEOUT_SECONDS, attachment_slot_ownership, claim_attachment_upload,
+    complete_attachment, create_attachment, create_collect, create_tenant, delete_attachment,
+    expired_attachments, get_attachment, list_collect_attachments, list_submission_attachments,
+    purge_attachment, release_attachment_upload, save_draft, transition_collect, upsert_user,
 };
 use school_collect_domain::attachments::{
     MAX_ATTACHMENTS_PER_ITEM, MAX_ATTACHMENTS_PER_SUBMISSION,
@@ -333,6 +333,92 @@ async fn a_target_opens_a_slot_and_the_server_completes_it() {
     .await
     .expect("audit count");
     assert_eq!(audit, 2, "both steps leave an audit event");
+
+    fixture.cleanup().await;
+}
+
+/// A writer asks who owns the slot before it sends anything.
+#[tokio::test]
+async fn a_superseded_writer_learns_before_it_writes() {
+    let Some(url) = database_url() else {
+        eprintln!("DATABASE_URL is not set; skipping the slot ownership check");
+        return;
+    };
+    let pool = school_collect_db::connect(&url).await.expect("connect");
+    school_collect_db::MIGRATOR
+        .run(&pool)
+        .await
+        .expect("migrate");
+    let fixture = fixture(pool).await;
+    let collect = new_collect(&fixture, &[item("plan", "계획서")], &[fixture.contributor]).await;
+    publish(&fixture, collect).await;
+    let CreateAttachmentOutcome::Created(slot_row) = create_attachment(
+        &fixture.pool,
+        fixture.tenant,
+        collect,
+        fixture.contributor,
+        slot(fixture.tenant, "plan", "소유권.pdf", 10),
+    )
+    .await
+    .expect("create") else {
+        panic!("a target must be able to open a slot");
+    };
+
+    let claim = claim_attachment_upload(&fixture.pool, fixture.tenant, slot_row.id, Utc::now())
+        .await
+        .expect("claim");
+    let ClaimUploadOutcome::Claimed { record: first, .. } = claim else {
+        panic!("the slot must be claimable: {claim:?}");
+    };
+    let first_attempt = first.upload_attempt_id.expect("an attempt id");
+    assert_eq!(
+        attachment_slot_ownership(&fixture.pool, fixture.tenant, slot_row.id, first_attempt)
+            .await
+            .expect("ownership"),
+        SlotOwnership::Held
+    );
+
+    // Another writer takes the slot over after the claim timeout.
+    let later = Utc::now() + Duration::seconds(UPLOAD_CLAIM_TIMEOUT_SECONDS + 1);
+    let takeover = claim_attachment_upload(&fixture.pool, fixture.tenant, slot_row.id, later)
+        .await
+        .expect("takeover");
+    let ClaimUploadOutcome::Claimed { record: second, .. } = takeover else {
+        panic!("the abandoned claim must be taken over: {takeover:?}");
+    };
+    let second_attempt = second.upload_attempt_id.expect("an attempt id");
+    assert_eq!(
+        attachment_slot_ownership(&fixture.pool, fixture.tenant, slot_row.id, first_attempt)
+            .await
+            .expect("ownership"),
+        SlotOwnership::Lost,
+        "the superseded writer must be told before it writes"
+    );
+    assert_eq!(
+        attachment_slot_ownership(&fixture.pool, fixture.tenant, slot_row.id, second_attempt)
+            .await
+            .expect("ownership"),
+        SlotOwnership::Held
+    );
+
+    // Once the bytes are stored there is nothing left to write.
+    complete_attachment(
+        &fixture.pool,
+        fixture.tenant,
+        slot_row.id,
+        second_attempt,
+        10,
+        &"e".repeat(64),
+        later,
+    )
+    .await
+    .expect("complete");
+    assert_eq!(
+        attachment_slot_ownership(&fixture.pool, fixture.tenant, slot_row.id, first_attempt)
+            .await
+            .expect("ownership"),
+        SlotOwnership::Gone
+    );
 
     fixture.cleanup().await;
 }

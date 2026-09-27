@@ -123,6 +123,16 @@ PR #24/#25는 모두 develop에 병합됐습니다(`f573bfb`, `11a0af0`). 병합
 - 검증: `cargo test --workspace --locked` 161개, 실제 개발 DB `crates/db/tests/attachments.rs` 10개·worker sweep 1개·소비 worker 2개·relay 6개, 실제 provider + PostgreSQL E2E 5개, foundation 34개, repository guard 0건, `@example.test`·검증 학교·행 잔여 0. 백업 drill은 migration 9개·테이블 15개입니다.
 - PR #79(`f551ab8`)로 develop에 통합했습니다. 병합 전 CI 7개가 성공했습니다. `nats-outbox` 작업이 실제 JetStream으로 소비 worker의 commit 후 ACK·중복 처리를 확인했고, 같은 역할 검사로 runtime 역할 worker가 유지되는 것을, `postgres` 작업이 runtime 역할로 띄운 API의 `/ready` 200과 drill(`migrations=9 tables=15`)을 확인했습니다.
 
+### 6차 독립 검토 (2026-09-28, `ec831cb`)
+
+같은 검토자(gpt-6-astra, 매우높음)의 판정은 **REVISE_LOCAL**이었습니다. 5차 지적 중 N2·N3·N4는 닫힘, N1·N5·N6은 부분으로 보았고, 저장소 안 결함 4개(F1~F4)를 지적했습니다. 모두 이번 PR에서 고쳤습니다.
+
+- F1(P1) 늦은 쓰기 경쟁과 추적되지 않는 객체: 인수·정리 영속성(N1)과 만료 계약(N5)의 남은 부분입니다. 인수 transaction이 밀어낸 시도의 object key를 `attachment_orphans`에 `attachment_id`와 함께 남기고(migration `0010`), orphan sweep은 나이가 아니라 그 첨부가 실제로 사라졌는지(`attachment_missing`, LEFT JOIN)일 때만 기록을 지웁니다. 만료 sweep은 차지 시한(5분) 안의 행을 건너뜁니다. API는 bytes를 쓰기 직전에 소유권을 다시 확인해(`attachment_slot_ownership` → `Held`/`Lost`/`Gone`) `Lost`는 409 `attachment_upload_superseded`, `Gone`은 409 `attachment_not_open`으로 거절하므로, 이전 writer의 늦은 `PUT`은 후처리 전에 저장소를 건드리지 못합니다. worker sweep은 매 회차 기록된 객체를 지우고 객체가 사라진 뒤에만 기록을 지웁니다(`orphans_kept` 보고). `crates/db/tests/attachments.rs::a_superseded_writer_learns_before_it_writes`와 sweep 테스트(살아 있는 차지 유지·나이 든 기록 정리·보관 거부 시 기록 유지)가 이 순서를 고정합니다.
+- F2(P2) 소비 루프 무대기 반복: `fetch`가 `no_wait: true`라 빈 스트림에서도 외부 루프가 곧바로 다음 회차를 시작했습니다. `run_consumer_until_shutdown`이 `idle`·`backoff`를 받아 조용하면 `WORKER_CONSUMER_IDLE_MS`(기본 1000ms), 실패하면 `WORKER_CONSUMER_BACKOFF_MS`(기본 5000ms)만큼 쉬도록 했습니다(`services/worker/src/consumer.rs`의 `run_paced`, 단위 테스트 `rounds_wait_and_a_failure_backs_off`).
+- F3(P2) runtime 역할 처리 대신 생존만 확인: `nats-outbox` 작업이 이제 runtime 역할로 due outbox 이벤트 1건을 넣고, 그것이 `processed_events`(consumer `school_collect_worker`)에 나타나며 `published_at`이 기록되는지 확인합니다(실패 시 로그 출력, trap 정리). relay → JetStream → 소비 commit → ACK가 runtime 역할로 실제 통과해야 합니다.
+- F4(P3) 상태 문구 불일치: `TEAM_BACKLOG.md` 표의 S-06 미구현 문구는 #81에서, `SCHOOL_WORK_PLAN.md`의 S-04 문장과 `V2_PLAN.md`의 OS 보안 저장소 문장은 이번 PR에서 실제 범위로 고쳤습니다. 이제 소비 worker는 구현으로, 제출 작성·검토 화면은 PR #70 완료로, 세션의 OS 보안 저장소는 S-05(PR #45·#46) 구현·검증으로 적힙니다.
+- 검증: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo test --workspace --locked`(163개). 실제 개발 DB `crates/db/tests/attachments.rs` 11개, worker sweep 1개·소비 worker 2개·relay 6개. 실제 provider + PostgreSQL E2E 5개(전체 흐름·초대·결과 내보내기·역할 4종·첨부). 실제 Tauri 창(WebView2 CDP, 가짜 provider)으로 로그인 화면 → native 명령 → loopback 콜백 → code 교환 → OS 자격 증명 저장소가 provider가 발급한 `sub`와 같은 사용자로 저장, 첨부 상태 기계와 목록 실패 복구를 확인했습니다. `@example.test` 계정·검증 학교·사용자 0.
+
 ## 단계 상태
 
 | 단계 | 상태 | 확인된 내용 | 남은 게이트 |

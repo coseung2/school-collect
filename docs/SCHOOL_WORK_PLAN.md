@@ -24,7 +24,7 @@
 | S-06 | 알림·재처리용 outbox/worker / 완료(relay PR #43 `e722bce`, 소비 worker 5차 보강) | S-01 | 완료: 업무 변경+outbox 단일 transaction, relay의 재시도·dead-letter, JetStream 전달과 broker 중복 제거, 만료 첨부 sweep, 전달된 이벤트를 한 transaction에서 멱등 처리하고 commit 뒤에 ACK하는 durable 소비 worker(`processed_events`) / 남음: 그 이벤트로 실제 알림을 보내는 채널은 제품 결정입니다(현재 소비 효과는 처리 기록) |
 | S-07 | 결과 내보내기·전체 흐름 검증 / 완료(PR #48, PR #50, PR #53) | S-02~S-06, 출시 시 C-02~C-05 | 완료: CSV 결과의 권한·누락 검증, 화면 내보내기 버튼, 마감 후·다른 학교 내보내기 경계, 역할 4종 단일 시나리오를 통합 SHA에서 검증 |
 
-공통 ID는 [TEAM_BACKLOG.md](TEAM_BACKLOG.md)를 따릅니다. 첨부·offline·worker는 S-01 계약이 고정된 뒤 독립 범위로 진행해 첨부는 metadata·API·정리 sweep까지 통합했습니다. 실제 운영 저장소(R2 계정·bucket) 연결과 제출 작성·검토 화면은 계정·환경이 확정된 뒤 진행합니다.
+공통 ID는 [TEAM_BACKLOG.md](TEAM_BACKLOG.md)를 따릅니다. 첨부·offline·worker는 S-01 계약이 고정된 뒤 독립 범위로 진행해 첨부는 metadata·API·정리 sweep까지 통합했습니다. 실제 운영 저장소(R2 계정·bucket) 연결과 presigned 직접 업로드 전환 여부는 계정·환경이 확정된 뒤 진행하며, 제출 작성·검토 화면의 첨부 흐름은 PR #70 native 검증에서 완료했습니다(제출 작성 화면 올리기·받기·지우기, 관리자 검토 화면 받기).
 
 ## 구성원 초대 (S-02)
 
@@ -103,7 +103,7 @@ PR #53(`feat/role-sweep-e2e`)으로 한 학교·한 시나리오에서 네 역�
 
 ## 파일 첨부 (S-04 1~3차)
 
-PR #58(`e3a541c`)·PR #59(`2486f8d`)·PR #60(`aaa55c5`)으로 첨부 metadata 계약, 업로드·다운로드 API와 저장소 port, 만료 정리 worker를 develop에 통합했습니다. private R2 adapter와 제출 작성·검토 화면은 소유자 자원이 확정된 뒤 4차로 진행합니다.
+PR #58(`e3a541c`)·PR #59(`2486f8d`)·PR #60(`aaa55c5`)으로 첨부 metadata 계약, 업로드·다운로드 API와 저장소 port, 만료 정리 worker를 develop에 통합했습니다. private R2 adapter는 4차 보강에서, 제출 작성·검토 화면은 PR #70에서 구현·검증했고, 남은 것은 소유자 자원(실제 R2 bucket·credential 연결 확인)과 presigned 직접 업로드 전환 여부입니다.
 
 - 계약·정책(domain): 파일 1개 최대 10 MiB, 항목당 5개, 제출당 20개입니다. 허용 형식은 HWP/HWPX·Office·PDF·PNG/JPEG·text·zip이고 보존은 180일입니다. 파일 이름은 표시용으로만 쓰고 경로 문자·과도한 길이를 거부합니다.
 - metadata(DB): `school_collect.collect_attachments`가 (tenant, collect, 담당자, item key) 단위로 이름·형식·선언 크기·checksum·object key·상태(`pending`/`stored`/`deleted`)·만료 시각을 보관합니다. object key는 서버가 `tenants/{tenant}/attachments/{attachment_id}`로 만들고, 목록·조회·삭제·만료 수집 모두 tenant로 한정합니다.

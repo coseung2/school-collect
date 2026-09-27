@@ -6,11 +6,10 @@
 
 use std::{future::Future, sync::Arc, time::Duration};
 
-use chrono::{Duration as ChronoDuration, Utc};
+use chrono::Utc;
 use school_collect_application::storage::ObjectStorage;
 use school_collect_db::{
-    UPLOAD_CLAIM_TIMEOUT_SECONDS, expired_attachments, orphaned_attachments, purge_attachment,
-    purge_attachment_orphan,
+    expired_attachments, orphaned_attachments, purge_attachment, purge_attachment_orphan,
 };
 use sqlx::PgPool;
 
@@ -22,6 +21,9 @@ pub struct PurgeReport {
     pub purged: usize,
     /// Objects whose owning row was gone and whose bytes are now removed too.
     pub orphans_removed: usize,
+    /// Objects whose record was kept because the attachment they belong to
+    /// still exists, so a writer that resumes late is still covered.
+    pub orphans_kept: usize,
     /// Attachments or objects the storage refused; they stay for the next pass.
     pub failed: usize,
 }
@@ -60,24 +62,26 @@ pub async fn purge_expired_attachments(
         }
     }
 
-    // Bytes whose owning row is gone: a taken-over attempt's object, or one
-    // whose cleanup delete failed. They have no metadata left to age out, so
-    // they are removed here instead of lingering untracked in the bucket. Only
-    // objects recorded before the claim timeout are taken: a younger one may
-    // still belong to a writer that is allowed to send its bytes, and clearing
-    // the record while that is possible would lose it.
-    let claim_cutoff = Utc::now() - ChronoDuration::seconds(UPLOAD_CLAIM_TIMEOUT_SECONDS);
-    let orphans = orphaned_attachments(pool, claim_cutoff, batch).await?;
+    // Bytes an attachment row no longer points at: a taken-over attempt's
+    // object, or one whose cleanup delete failed. Age is not proof that the
+    // writer that owned the key stopped, so the object is deleted again on
+    // every pass and the record is retired only once the slot it came from is
+    // gone: nothing is dropped while a late write could still recreate it.
+    let orphans = orphaned_attachments(pool, batch).await?;
     for orphan in orphans {
         match storage.delete(&orphan.object_key).await {
             Ok(()) => {
-                purge_attachment_orphan(pool, orphan.id).await?;
-                report.orphans_removed += 1;
-                tracing::info!(
-                    orphan.id = %orphan.id,
-                    tenant.id = %orphan.tenant_id,
-                    "untracked attachment bytes removed"
-                );
+                if orphan.attachment_missing {
+                    purge_attachment_orphan(pool, orphan.id).await?;
+                    report.orphans_removed += 1;
+                    tracing::info!(
+                        orphan.id = %orphan.id,
+                        tenant.id = %orphan.tenant_id,
+                        "untracked attachment bytes removed"
+                    );
+                } else {
+                    report.orphans_kept += 1;
+                }
             }
             Err(error) => {
                 report.failed += 1;
@@ -109,6 +113,7 @@ pub async fn run_sweep_until_shutdown(
                     considered = report.considered,
                     purged = report.purged,
                     orphans_removed = report.orphans_removed,
+                    orphans_kept = report.orphans_kept,
                     failed = report.failed,
                     "attachment sweep finished"
                 );

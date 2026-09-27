@@ -268,21 +268,91 @@ jobs:
         run: cargo test -p school-collect-worker --locked
       - name: Runtime role writes rows but cannot run DDL
         run: bash scripts/runtime_role_check.sh
-      - name: Worker relay and sweep run against the runtime role
+      - name: Runtime role worker relays and consumes an outbox event end to end
         shell: bash
         run: |
           APP_ATTACHMENT_DIR="$(mktemp -d)" \
-          DATABASE_URL="$RUNTIME_DATABASE_URL" APP_ENV=development \
+          DATABASE_URL="$RUNTIME_DATABASE_URL" APP_ENV=development WORKER_POLL_MS=500 \
             cargo run -p school-collect-worker --locked > /tmp/worker-runtime.log 2>&1 &
           worker_pid=$!
-          sleep 10
-          if ! kill -0 "$worker_pid" 2>/dev/null; then
-            echo "the worker exited when it ran as the runtime role"
+          trap 'kill "$worker_pid" 2>/dev/null || true' EXIT
+
+          # Staying alive is not working. The worker must have connected with the
+          # runtime role and entered its relay and consumer loops; a process that
+          # is still compiling is alive without having done anything yet, so a
+          # liveness check alone would pass without proving anything.
+          started=0
+          for _ in $(seq 1 60); do
+            if ! kill -0 "$worker_pid" 2>/dev/null; then
+              echo "the worker exited before it started relaying"
+              cat /tmp/worker-runtime.log
+              exit 1
+            fi
+            sessions="$(psql "$RUNTIME_DATABASE_URL" -tAc "SELECT count(*) FROM pg_stat_activity WHERE usename = current_user AND pid <> pg_backend_pid()" 2>/dev/null || echo 0)"
+            if [ "${sessions:-0}" -ge 1 ] \
+              && grep -q "outbox relay started" /tmp/worker-runtime.log 2>/dev/null \
+              && grep -q "outbox consumer started" /tmp/worker-runtime.log 2>/dev/null; then
+              started=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$started" != "1" ]; then
+            echo "the worker never started relaying and consuming as the runtime role"
             cat /tmp/worker-runtime.log
             exit 1
           fi
-          kill "$worker_pid" 2>/dev/null || true
-          echo "the worker stayed up with the runtime role"
+
+          # One due event, inserted as the runtime role: it has to travel
+          # relay -> JetStream -> consumer -> commit to prove the runtime role can
+          # do more than hold a connection open.
+          #
+          # The outer statement has to be a SELECT: psql appends the command tag
+          # ("INSERT 0 1") to an INSERT ... RETURNING result, which would leak
+          # into the captured id and break the correlation query below.
+          event_id="$(psql "$RUNTIME_DATABASE_URL" -v ON_ERROR_STOP=1 -tAc "WITH inserted AS (INSERT INTO school_collect.outbox_events (id, tenant_id, topic, event_type, payload) VALUES (gen_random_uuid(), NULL, 'test.runtime-worker', 'test.runtime_worker', '{}'::jsonb) RETURNING id) SELECT id FROM inserted")"
+          if ! printf '%s' "$event_id" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'; then
+            echo "the inserted event id was not captured as one uuid: $event_id"
+            exit 1
+          fi
+          echo "inserted outbox event ${event_id} as the runtime role"
+
+          consumed=0
+          for _ in $(seq 1 60); do
+            consumed="$(psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -tAc "SELECT count(*) FROM school_collect.processed_events WHERE consumer = 'school_collect_worker' AND event_id = '${event_id}'")"
+            if [ "${consumed:-0}" -ge 1 ]; then
+              break
+            fi
+            if ! kill -0 "$worker_pid" 2>/dev/null; then
+              echo "the worker exited before it consumed the inserted event"
+              cat /tmp/worker-runtime.log
+              exit 1
+            fi
+            sleep 1
+          done
+          if [ "${consumed:-0}" -lt 1 ]; then
+            echo "the runtime role never consumed the inserted event"
+            cat /tmp/worker-runtime.log
+            exit 1
+          fi
+
+          # The relay records published_at only after JetStream acknowledged the
+          # event, so a consumed event without it means the relay lied or stalled.
+          published=0
+          for _ in $(seq 1 30); do
+            published="$(psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -tAc "SELECT count(*) FROM school_collect.outbox_events WHERE id = '${event_id}' AND published_at IS NOT NULL")"
+            if [ "${published:-0}" -ge 1 ]; then
+              break
+            fi
+            sleep 1
+          done
+          if [ "${published:-0}" -lt 1 ]; then
+            echo "the relay consumed the event but never recorded it as published"
+            cat /tmp/worker-runtime.log
+            exit 1
+          fi
+
+          echo "runtime role relayed and consumed an event end to end: relay -> JetStream -> consumer -> commit (published_at recorded, processed_events row written)"
 
   container:
     name: server-image

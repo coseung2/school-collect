@@ -307,6 +307,53 @@ async fn the_durable_consumer_acknowledges_a_delivery_after_committing_it() {
             return Err(format!("the delivery was not acknowledged: {pending}"));
         }
 
+        // A failed effect must not acknowledge: the delivery stays pending so
+        // the broker redelivers it, and nothing is recorded for it.
+        insert_test_event(&pool, "test.consumer.retry").await?;
+        let relayed = run_once(&pool, &publisher, RelayConfig::default())
+            .await
+            .map_err(|error| format!("the relay round failed: {error}"))?;
+        if relayed.published == 0 {
+            return Err("the relay must publish the retry event".to_owned());
+        }
+        let before = processed_event_count(&pool, &consumer_name)
+            .await
+            .map_err(|error| format!("counting for the consumer failed: {error}"))?;
+        let mut failure = None;
+        for _ in 0..8 {
+            match broker.consume_next(&pool, &FailingEffect).await {
+                Ok(None) => tokio::time::sleep(Duration::from_millis(200)).await,
+                Ok(Some(outcome)) => {
+                    return Err(format!("a failing effect reported {outcome:?}"));
+                }
+                Err(error) => {
+                    failure = Some(format!("{error:#}"));
+                    break;
+                }
+            }
+        }
+        if failure.is_none() {
+            return Err("the broker never delivered the retry event".to_owned());
+        }
+        if processed_event_count(&pool, &consumer_name)
+            .await
+            .map_err(|error| format!("counting for the consumer failed: {error}"))?
+            != before
+        {
+            return Err("a failed delivery must record nothing".to_owned());
+        }
+        let mut unacked = 0;
+        for _ in 0..50 {
+            unacked = unacknowledged(publisher.context(), &consumer_name).await?;
+            if unacked >= 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        if unacked < 1 {
+            return Err("a failed delivery must stay unacknowledged for redelivery".to_owned());
+        }
+
         Ok(())
     }
     .await;

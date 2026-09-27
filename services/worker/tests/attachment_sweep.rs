@@ -265,107 +265,180 @@ async fn the_sweep_removes_expired_attachments_and_keeps_the_rest() {
             return Err("a storage failure keeps the row for a retry".to_owned());
         }
 
-        // Bytes whose owning row is gone are removed too, so no object outlives
-        // the row that would have tracked it. A record younger than the claim
-        // window is kept first: the writer that lost the slot may still be
-        // sending its bytes, so clearing the record now would lose them.
-        let orphan_key = format!(
-            "tenants/{}/attachments/{}/orphan",
+        // A record for a slot that still exists is kept: age cannot prove the
+        // writer that lost the slot stopped, so the object is deleted again on
+        // every pass and the record is retired only once the slot is gone.
+        let kept_key = format!(
+            "tenants/{}/attachments/{}/kept",
             fixture.tenant,
             Uuid::now_v7()
         );
         storage
-            .put(&orphan_key, b"orphan".to_vec(), "application/pdf")
+            .put(&kept_key, b"kept".to_vec(), "application/pdf")
             .await
             .map_err(|error| format!("orphan put failed: {error}"))?;
-        record_attachment_orphan(&fixture.pool, fixture.tenant, &orphan_key)
+        record_attachment_orphan(&fixture.pool, fixture.tenant, live_id, &kept_key)
             .await
             .map_err(|error| format!("orphan record failed: {error}"))?;
         let report = purge_expired_attachments(&fixture.pool, &storage, 100)
             .await
             .map_err(|error| format!("sweep failed: {error}"))?;
-        if report.orphans_removed != 0 || report.failed != 0 {
-            return Err(format!(
-                "a fresh record must wait for the claim window: {report:?}"
-            ));
+        if report.failed != 0 {
+            return Err(format!("the sweep failed: {report:?}"));
         }
-        if storage
-            .get(&orphan_key)
-            .await
-            .map_err(|error| format!("get failed: {error}"))?
-            .is_none()
-        {
-            return Err("a fresh record must keep its bytes".to_owned());
+        if report.orphans_kept < 1 {
+            return Err(format!("a record for a live slot must be kept: {report:?}"));
         }
-
-        // Once the window passed, the same record is removed with its bytes.
-        sqlx::query(
-            "UPDATE school_collect.attachment_orphans
-             SET created_at = now() - interval '1 hour'
-             WHERE tenant_id = $1",
+        let kept: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM school_collect.attachment_orphans WHERE object_key = $1",
         )
-        .bind(fixture.tenant)
-        .execute(&fixture.pool)
+        .bind(&kept_key)
+        .fetch_one(&fixture.pool)
         .await
-        .map_err(|error| format!("age failed: {error}"))?;
-        let report = purge_expired_attachments(&fixture.pool, &storage, 100)
-            .await
-            .map_err(|error| format!("sweep failed: {error}"))?;
-        if report.orphans_removed < 1 || report.failed != 0 {
-            return Err(format!("the untracked bytes were not removed: {report:?}"));
+        .map_err(|error| format!("count failed: {error}"))?;
+        if kept != 1 {
+            return Err("the record must outlive the first cleanup pass".to_owned());
         }
         if storage
-            .get(&orphan_key)
+            .get(&kept_key)
             .await
             .map_err(|error| format!("get failed: {error}"))?
             .is_some()
         {
-            return Err("the untracked bytes must be gone".to_owned());
+            return Err("the object must be removed on the pass that keeps the record".to_owned());
         }
-        let orphans: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM school_collect.attachment_orphans WHERE tenant_id = $1",
+
+        // Once the slot is gone, the next pass removes the record as well, so a
+        // late write to that key is still deleted before the record is retired.
+        sqlx::query("DELETE FROM school_collect.collect_attachments WHERE id = $1")
+            .bind(live_id)
+            .execute(&fixture.pool)
+            .await
+            .map_err(|error| format!("slot delete failed: {error}"))?;
+        let report = purge_expired_attachments(&fixture.pool, &storage, 100)
+            .await
+            .map_err(|error| format!("sweep failed: {error}"))?;
+        if report.orphans_removed < 1 || report.failed != 0 {
+            return Err(format!("the retired record was not removed: {report:?}"));
+        }
+        let kept: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM school_collect.attachment_orphans WHERE object_key = $1",
         )
-        .bind(fixture.tenant)
+        .bind(&kept_key)
         .fetch_one(&fixture.pool)
         .await
         .map_err(|error| format!("count failed: {error}"))?;
-        if orphans != 0 {
-            return Err(format!("the orphan row must be gone: {orphans}"));
+        if kept != 0 {
+            return Err(format!("the record must be gone: {kept}"));
         }
 
-        // A storage failure keeps the orphan for the next pass.
+        // A storage failure keeps the record for the next pass.
+        let (stubborn_attachment, _) =
+            collect_with_slot(&fixture, &storage, Duration::hours(1)).await?;
         let stubborn_key = format!(
             "tenants/{}/attachments/{}/stubborn",
             fixture.tenant,
             Uuid::now_v7()
         );
-        record_attachment_orphan(&fixture.pool, fixture.tenant, &stubborn_key)
-            .await
-            .map_err(|error| format!("orphan record failed: {error}"))?;
-        sqlx::query(
-            "UPDATE school_collect.attachment_orphans
-             SET created_at = now() - interval '1 hour'
-             WHERE tenant_id = $1",
+        record_attachment_orphan(
+            &fixture.pool,
+            fixture.tenant,
+            stubborn_attachment,
+            &stubborn_key,
         )
-        .bind(fixture.tenant)
-        .execute(&fixture.pool)
         .await
-        .map_err(|error| format!("age failed: {error}"))?;
+        .map_err(|error| format!("orphan record failed: {error}"))?;
         let report = purge_expired_attachments(&fixture.pool, &RefusingStorage, 100)
             .await
             .map_err(|error| format!("sweep with a refusing store failed: {error}"))?;
         if report.failed < 1 {
             return Err(format!("a refusing store must be reported: {report:?}"));
         }
-        let orphans: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM school_collect.attachment_orphans WHERE tenant_id = $1",
+        let stubborn: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM school_collect.attachment_orphans WHERE object_key = $1",
         )
-        .bind(fixture.tenant)
+        .bind(&stubborn_key)
         .fetch_one(&fixture.pool)
         .await
         .map_err(|error| format!("count failed: {error}"))?;
-        if orphans != 1 {
-            return Err(format!("a refusing store keeps the orphan: {orphans}"));
+        if stubborn != 1 {
+            return Err(format!("a refusing store keeps the record: {stubborn}"));
+        }
+
+        // A slot whose claim is still live is not swept, even after its
+        // deadline passed: a writer that is actually running must not have its
+        // object deleted underneath it.
+        let (claimed_id, claimed_key) =
+            collect_with_slot(&fixture, &storage, Duration::hours(1)).await?;
+        sqlx::query(
+            "UPDATE school_collect.collect_attachments
+             SET status = 'uploading', upload_claimed_at = now(), upload_attempt_id = $2,
+                 expires_at = now() - interval '1 hour'
+             WHERE id = $1",
+        )
+        .bind(claimed_id)
+        .bind(Uuid::now_v7())
+        .execute(&fixture.pool)
+        .await
+        .map_err(|error| format!("claim failed: {error}"))?;
+        let report = purge_expired_attachments(&fixture.pool, &storage, 100)
+            .await
+            .map_err(|error| format!("sweep failed: {error}"))?;
+        if report.failed != 0 {
+            return Err(format!("the sweep failed: {report:?}"));
+        }
+        let alive: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM school_collect.collect_attachments WHERE id = $1",
+        )
+        .bind(claimed_id)
+        .fetch_one(&fixture.pool)
+        .await
+        .map_err(|error| format!("count failed: {error}"))?;
+        if alive != 1 {
+            return Err("a live claim must keep its row".to_owned());
+        }
+        if storage
+            .get(&claimed_key)
+            .await
+            .map_err(|error| format!("get failed: {error}"))?
+            .is_none()
+        {
+            return Err("a live claim must keep its bytes".to_owned());
+        }
+
+        // Once the claim ages out, the same slot is taken.
+        sqlx::query(
+            "UPDATE school_collect.collect_attachments
+             SET upload_claimed_at = now() - interval '1 hour'
+             WHERE id = $1",
+        )
+        .bind(claimed_id)
+        .execute(&fixture.pool)
+        .await
+        .map_err(|error| format!("age failed: {error}"))?;
+        let report = purge_expired_attachments(&fixture.pool, &storage, 100)
+            .await
+            .map_err(|error| format!("sweep failed: {error}"))?;
+        if report.failed != 0 {
+            return Err(format!("the sweep failed: {report:?}"));
+        }
+        let alive: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM school_collect.collect_attachments WHERE id = $1",
+        )
+        .bind(claimed_id)
+        .fetch_one(&fixture.pool)
+        .await
+        .map_err(|error| format!("count failed: {error}"))?;
+        if alive != 0 {
+            return Err("an abandoned claim must not block the sweep".to_owned());
+        }
+        if storage
+            .get(&claimed_key)
+            .await
+            .map_err(|error| format!("get failed: {error}"))?
+            .is_some()
+        {
+            return Err("the abandoned slot's bytes must be gone".to_owned());
         }
 
         // The long-running loop stops when the shutdown future resolves.
