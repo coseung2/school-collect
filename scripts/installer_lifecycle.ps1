@@ -50,10 +50,11 @@ function Assert-Installed([string] $expectedVersion) {
     if ($entry.DisplayVersion -ne $expectedVersion) {
         Fail "uninstall entry reports $($entry.DisplayVersion), expected $expectedVersion"
     }
-    $location = $entry.InstallLocation
+    # NSIS stores these registry values quoted (`"C:\...\School Collect"`).
+    $location = ($entry.InstallLocation -as [string]).Trim().Trim('"')
     if (-not $location) {
         # Some NSIS templates leave InstallLocation empty; derive it from the uninstaller.
-        $location = Split-Path ($entry.UninstallString -replace '"', '')
+        $location = Split-Path (($entry.UninstallString -replace '"', '').Trim())
     }
     $exe = Join-Path $location $ExeName
     if (-not (Test-Path -LiteralPath $exe)) { Fail "app executable missing at $exe" }
@@ -61,7 +62,17 @@ function Assert-Installed([string] $expectedVersion) {
     if (-not $fileVersion.StartsWith($expectedVersion)) {
         Fail "installed executable reports $fileVersion, expected $expectedVersion"
     }
-    [pscustomobject]@{ Location = $location; Exe = $exe; Uninstaller = ($entry.UninstallString -replace '"', '') }
+    # UninstallString may carry arguments after the quoted path; keep the path.
+    $uninstaller = ($entry.UninstallString -as [string]).Trim()
+    if ($uninstaller.StartsWith('"')) {
+        $uninstaller = $uninstaller.Substring(1, $uninstaller.IndexOf('"', 1) - 1)
+    }
+    if (-not (Test-Path -LiteralPath $uninstaller)) { Fail "uninstaller missing at $uninstaller" }
+    [pscustomobject]@{
+        Location    = [System.IO.Path]::GetFullPath($location).TrimEnd('\')
+        Exe         = $exe
+        Uninstaller = $uninstaller
+    }
 }
 
 if (@(Get-UninstallEntries).Count -ne 0) { Fail 'the runner already has the app installed' }
