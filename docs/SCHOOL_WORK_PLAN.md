@@ -22,7 +22,7 @@
 | S-04 | 파일 첨부 / 계획 | S-01, C-03 승인된 저장소 설정 | 권한 확인 후 private R2 업로드/다운로드, 크기·유형·만료·보존 정책, 실패/재시도·학교 간 접근 차단 |
 | S-05 | 세션 유지·offline 초안 / 진행 중(PR #45, PR #46) | S-01, C-01/C-02 | 완료: OS 보안 저장소 세션(재시작 복구·갱신·로그아웃 정리)과 사용자/학교별 SQLite 초안(재시작 복구·재전송·충돌·로그아웃 정리) / 남음: 외부 브라우저 PKCE |
 | S-06 | 알림·재처리용 outbox/worker / 완료(PR #43, `e722bce`) | S-01 | 업무 변경+outbox 단일 transaction, relay/JetStream/idempotent 처리, commit 후 ACK, retry/dead-letter·중복 전달 복구 |
-| S-07 | 결과 내보내기·전체 흐름 검증 / 완료(PR #48, PR #50) | S-02~S-06, 출시 시 C-02~C-05 | 완료: CSV 결과의 권한·누락 검증, 화면 내보내기 버튼, 마감 후·다른 학교 내보내기 경계 / 남음: 역할 4종을 한 시나리오에서 도는 통합 SHA 검증 |
+| S-07 | 결과 내보내기·전체 흐름 검증 / 완료(PR #48, PR #50, PR #53) | S-02~S-06, 출시 시 C-02~C-05 | 완료: CSV 결과의 권한·누락 검증, 화면 내보내기 버튼, 마감 후·다른 학교 내보내기 경계, 역할 4종 단일 시나리오를 통합 SHA에서 검증 |
 
 공통 ID는 [TEAM_BACKLOG.md](TEAM_BACKLOG.md)를 따릅니다. 첨부·offline·worker는 S-01 계약이 고정되면 독립 범위로 진행할 수 있습니다. 실제 운영 자원 연결은 계정·환경이 확정된 뒤 진행합니다.
 
@@ -78,7 +78,7 @@ PR #48(`feat/result-export`)로 수합 결과 CSV 내보내기를 develop에 통
 - 배정된 구성원은 제출하지 않았어도 행이 나오고 항목 칸이 비어 있어 누락이 파일에서 드러납니다. 값은 쉼표·따옴표·줄바꿈이 있을 때만 인용하고 내부 따옴표를 두 번 반복하며, Excel용 UTF-8 BOM을 붙입니다.
 - contributor·viewer는 403이고, 내보내기는 `collect.exported` 감사 이벤트로 남습니다.
 
-검증 (2026-09-27): `cargo fmt/clippy/test`(98개), foundation 25개, repository guard, CSV 인용·누락 단위 테스트 2개, 실제 프로젝트 E2E `result_export_end_to_end`(담당자 200·두 구성원 행·쉼표 값 인용·감사 1건, 교사 403). 남은 것: 학교 A/B·역할별 전체 흐름을 통합 SHA에서 검증하는 시나리오와 화면의 내보내기 버튼.
+검증 (2026-09-27): `cargo fmt/clippy/test`(98개), foundation 25개, repository guard, CSV 인용·누락 단위 테스트 2개, 실제 프로젝트 E2E `result_export_end_to_end`(담당자 200·두 구성원 행·쉼표 값 인용·감사 1건, 교사 403). 이 시점의 남은 것은 통합 시나리오와 화면 버튼이었고, 아래 2차·3차에서 채웠습니다.
 
 ## 결과 내보내기 화면과 전체 흐름 검증 (S-07 2차)
 
@@ -89,6 +89,17 @@ PR #50(`feat/export-ui`)으로 화면 내보내기와 전체 흐름 검증을 de
 - 전체 흐름 E2E에 마감된 수합의 내보내기(제출 값이 CSV에 남는지)와 다른 학교 관리자의 내보내기 403을 추가했습니다. 제출 payload를 실제 항목 키(`plan`)로 바꿔 내보내기 열 매핑까지 검증합니다.
 
 검증 (2026-09-27): `cargo fmt/clippy/test`(100개), 앱 typecheck/build, foundation 25개, repository guard, 실제 Tauri 창에서 내보내기 저장·안내 표시와 파일 내용(UTF-8 BOM + 항목 머리글 + 제출 값), 실제 프로젝트 E2E 3개(전체 흐름·초대·내보내기). 검증용 계정·행·CSV 파일은 정리했습니다.
+
+## 역할 4종 통합 검증 (S-07 3차)
+
+PR #53(`feat/role-sweep-e2e`)으로 한 학교·한 시나리오에서 네 역할을 도는 E2E를 develop에 통합했습니다.
+
+- 역할마다 별도 계정을 만들고, admin이 학교를 만든 뒤 coordinator·contributor·viewer를 역할을 지정해 초대하고 각자 수락합니다. `GET /v1/members`에 네 역할이 모두 나와야 합니다.
+- admin이 수합을 발행한 뒤: viewer는 목록·상세·배정 조회 200, 제출 저장·내보내기·진행 현황·항목 편집 403. contributor는 저장·제출 200, 내보내기·항목 편집 403. coordinator는 항목 편집 200, 진행 현황 200, 내보내기 200. admin도 같은 현황·내보내기를 확인합니다.
+- viewer는 담당자가 될 수 없습니다(`target_not_assignable` 409). 그래서 내보내기 파일은 머리글 + 3행이고 viewer 이름은 나오지 않습니다.
+- 테스트는 정리 후 남은 행이 0인지 스스로 확인합니다.
+
+검증 (2026-09-27, Windows): `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo test --workspace --locked`(101개). 실제 provider + 실제 PostgreSQL에서 통합 SHA `9b63abf` 기준으로 `collect_flow_e2e` 4개(전체 흐름·초대·내보내기·역할 4종)를 함께 통과시켰고, 남은 행 0과 provider 사용자 목록에 `@example.test` 계정이 없음을 확인했습니다.
 
 ## 세션 유지와 offline 초안 (S-05)
 
