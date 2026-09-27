@@ -18,6 +18,9 @@ School Collect는 서버(API·migrator·worker)와 데스크톱 앱으로 나뉩
   설치, 한국어·영어)을 만들고, `tauri dev`로 개발 실행합니다. CI
   `tauri-windows-smoke` 작업이 매번 설치 파일을 만들고 버전·크기와 서명 상태를
   기록합니다. 현재 설치 파일은 서명되지 않아 Windows SmartScreen 경고가 뜹니다.
+  같은 작업이 버전만 하나 올린 두 번째 설치 파일을 CI 안에서만 만들고,
+  `scripts/installer_lifecycle.ps1`로 설치(조용히) → 제거 항목·실행 파일·버전 확인 →
+  같은 위치에 업그레이드 → 제거(조용히) → 파일·제거 항목이 모두 없어졌는지를 확인합니다.
 - 로컬 개발 스택: `infra/compose.dev.yml`이 개발자별 `postgres`(18), `nats`,
   일회성 `migrator`, `api`, `worker`를 정의합니다.
 - 백업/복구 drill: `scripts/backup_restore_drill.sh`가 `pg_dump` → 빈 DB
