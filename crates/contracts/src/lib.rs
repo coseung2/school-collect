@@ -208,6 +208,27 @@ pub struct SaveSubmissionRequest {
     pub payload: serde_json::Value,
 }
 
+/// Replaces the item list of a collect. Drafts may be reshaped freely; a
+/// published collect may add items and relabel them, but an item that already
+/// holds an answer cannot be removed.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateCollectItemsRequest {
+    /// Collect version the client last observed.
+    pub expected_version: i64,
+    pub items: Vec<CollectItemInput>,
+}
+
+/// Replaces who owes a submission. Removing a target that already saved work is
+/// rejected so an answer cannot be orphaned by accident.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateCollectAssignmentsRequest {
+    pub expected_version: i64,
+    #[serde(default)]
+    pub assignee_user_ids: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct VersionConflictResponse {

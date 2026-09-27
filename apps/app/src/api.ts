@@ -266,6 +266,36 @@ export const fetchCollectStatus = (
 export const listMembers = (token: string, tenantId: string) =>
   request<{ members: Member[] }>("/v1/members", { token, tenantId });
 
+/** Replaces the item list. A published collect may add items; answered items cannot be removed. */
+export const updateCollectItems = (
+  token: string,
+  tenantId: string,
+  id: string,
+  expectedVersion: number,
+  items: CollectItemInput[],
+) =>
+  request<CollectDetail>(`/v1/collects/${id}/items`, {
+    method: "PUT",
+    token,
+    tenantId,
+    body: { expectedVersion, items },
+  });
+
+/** Replaces who owes a submission. Targets that already saved work cannot be removed. */
+export const updateCollectAssignments = (
+  token: string,
+  tenantId: string,
+  id: string,
+  expectedVersion: number,
+  assigneeUserIds: string[],
+) =>
+  request<CollectDetail>(`/v1/collects/${id}/assignments`, {
+    method: "PUT",
+    token,
+    tenantId,
+    body: { expectedVersion, assigneeUserIds },
+  });
+
 export const listInvitations = (token: string, tenantId: string) =>
   request<{ invitations: Invitation[] }>("/v1/invitations", {
     token,
